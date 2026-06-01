@@ -21,6 +21,7 @@ const SAFE_TOOLS = new Set(["FileRead", "Glob", "Grep", "WebSearch", "WebFetch"]
 
 export function createPermissionEngine(mode: PermissionMode, prompt: ApprovalCallback): PermissionEngine {
   const denied = new Set<string>();
+  const allowedTools = new Set<string>();
 
   const key = (r: ApprovalRequest) => `${r.tool}::${r.argsSummary}`;
 
@@ -29,12 +30,15 @@ export function createPermissionEngine(mode: PermissionMode, prompt: ApprovalCal
     async decide(req, cb) {
       if (mode === "bypass") return "allow";
       if (denied.has(key(req))) return "deny";
-      if (mode === "auto") {
-        if (SAFE_TOOLS.has(req.tool)) return "allow";
-        return await cb(req);
+      if (allowedTools.has(req.tool)) return "allow";
+      if (mode === "auto" && SAFE_TOOLS.has(req.tool)) return "allow";
+      // manual mode, or auto mode with a non-safe tool: ask the user.
+      const decision = await cb(req);
+      if (decision === "allow-always") {
+        allowedTools.add(req.tool);
+        return "allow";
       }
-      // manual
-      return await cb(req);
+      return decision;
     },
     rememberDenied(req) {
       denied.add(key(req));

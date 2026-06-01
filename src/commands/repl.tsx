@@ -1,10 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { JSX } from "react";
-import { Box, Text, useApp, useInput } from "ink";
+import { Box, Static, Text, useApp, useInput } from "ink";
 import { loadConfig, type CliFlags } from "../config/loader";
 import { buildProvider } from "../providers/registry";
 import { buildToolRegistry } from "../tools/registry";
-import { createPermissionEngine, type ApprovalCallback, type ApprovalDecision } from "../permissions/modes";
+import { createPermissionEngine, type ApprovalCallback, type ApprovalDecision, type ApprovalRequest } from "../permissions/modes";
 import { runAgentLoop } from "../agent/loop";
 import { ContextTracker } from "../agent/context";
 import { newSession, appendEvent, listSessions, resumeSession, readSession, type Session } from "../session/manager";
@@ -27,13 +27,107 @@ interface UiMessage {
 
 const SLASH_COMMANDS = ["/model", "/new", "/resume", "/context", "/provider", "/help", "/compact"];
 
+// 5-row block font for the startup banner.
+const FONT: Record<string, string[]> = {
+  F: ["█████", "█    ", "████ ", "█    ", "█    "],
+  R: ["████ ", "█   █", "████ ", "█  █ ", "█   █"],
+  E: ["█████", "█    ", "████ ", "█    ", "█████"],
+  C: [" ████", "█    ", "█    ", "█    ", " ████"],
+  O: [" ███ ", "█   █", "█   █", "█   █", " ███ "],
+  D: ["████ ", "█   █", "█   █", "█   █", "████ "],
+  " ": ["     ", "     ", "     ", "     ", "     "],
+};
+
+function bannerRows(word: string): string[] {
+  const rows = ["", "", "", "", ""];
+  for (const ch of word.toUpperCase()) {
+    const glyph = FONT[ch] ?? FONT[" "]!;
+    for (let i = 0; i < 5; i++) rows[i] += glyph[i] + "  ";
+  }
+  return rows;
+}
+
+// Interpolate an orange→red gradient across the banner rows.
+function gradientHex(t: number): string {
+  const top = { r: 245, g: 166, b: 90 };
+  const bot = { r: 171, g: 43, b: 63 };
+  const lerp = (a: number, b: number) => Math.round(a + (b - a) * t);
+  const c = [lerp(top.r, bot.r), lerp(top.g, bot.g), lerp(top.b, bot.b)];
+  return `#${c.map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+}
+
+function defaultEndpoint(provider: string, baseUrl?: string): string {
+  if (baseUrl) return baseUrl;
+  switch (provider) {
+    case "openai": return "https://api.openai.com/v1";
+    case "github-models": return "https://models.inference.ai.azure.com";
+    case "gemini": return "https://generativelanguage.googleapis.com";
+    case "anthropic": return "https://api.anthropic.com";
+    case "ollama": return "http://localhost:11434/v1";
+    case "lmstudio": return "http://127.0.0.1:1234/v1";
+    case "nim": return "https://integrate.api.nvidia.com/v1";
+    default: return "(default)";
+  }
+}
+
+function Banner(): JSX.Element {
+  const rows = [...bannerRows("FREE"), ...bannerRows("CODE")];
+  return (
+    <Box flexDirection="column" marginLeft={1}>
+      {rows.map((row, i) => (
+        <Text key={i} color={gradientHex(i / (rows.length - 1))} bold>
+          {row}
+        </Text>
+      ))}
+    </Box>
+  );
+}
+
+interface IntroProps {
+  provider: string;
+  model: string;
+  endpoint: string;
+  isLocal: boolean;
+  theme: ReturnType<typeof makeTheme>;
+}
+
+function Intro({ provider, model, endpoint, isLocal, theme }: IntroProps): JSX.Element {
+  const label = (s: string) => <Text color={theme.dim}>{s.padEnd(10)}</Text>;
+  return (
+    <Box flexDirection="column" marginBottom={1}>
+      <Banner />
+      <Box marginLeft={1} marginTop={1}>
+        <Text color={theme.hex.assistant}>✦ </Text>
+        <Text>Any model. Every tool. Zero limits.</Text>
+        <Text color={theme.hex.assistant}> ✦</Text>
+      </Box>
+      <Box marginLeft={1} marginTop={1} flexDirection="column" borderStyle="round" borderColor={theme.border} paddingX={1}>
+        <Text>{label("Provider")}<Text color={theme.hex.assistant}>{provider}</Text></Text>
+        <Text>{label("Model")}<Text bold>{model}</Text></Text>
+        <Text>{label("Endpoint")}<Text color={theme.user}>{endpoint}</Text></Text>
+      </Box>
+      <Box marginLeft={1}>
+        <Text color={theme.hex.success}>● </Text>
+        <Text color={theme.dim}>{(isLocal ? "local" : "remote").padEnd(8)}</Text>
+        <Text color={theme.dim}>Ready — type </Text>
+        <Text color={theme.hex.assistant}>/help</Text>
+        <Text color={theme.dim}> to begin</Text>
+      </Box>
+      <Box marginLeft={1} marginTop={1}>
+        <Text color={theme.dim}>freecode </Text>
+        <Text color={theme.hex.assistant}>v0.1.0</Text>
+      </Box>
+    </Box>
+  );
+}
+
 export async function startRepl(opts: ReplOptions = {}): Promise<void> {
   const { render } = await import("ink");
   const instance = render(<Repl flags={opts.flags ?? {}} resumeId={opts.resumeId} initialPrompt={opts.initialPrompt} />);
   await instance.waitUntilExit();
 }
 
-function Repl({ flags, resumeId, initialPrompt }: ReplOptions): JSX.Element {
+export function Repl({ flags, resumeId, initialPrompt }: ReplOptions): JSX.Element {
   const { exit } = useApp();
   const config = useMemo(() => loadConfig({ flags: flags ?? {} }), [flags]);
   const theme = useMemo(() => makeTheme(config.theme), [config.theme]);
@@ -63,6 +157,18 @@ function Repl({ flags, resumeId, initialPrompt }: ReplOptions): JSX.Element {
   const [showTasks, setShowTasks] = useState(false);
   const [errorLine, setErrorLine] = useState<string | null>(null);
   const [costUsd, setCostUsd] = useState(0);
+  const [pending, setPending] = useState<ApprovalRequest | null>(null);
+  const approvalResolver = useRef<((d: ApprovalDecision) => void) | null>(null);
+
+  const promptUser: ApprovalCallback = (req) =>
+    new Promise<ApprovalDecision>((resolve) => {
+      setPending(req);
+      approvalResolver.current = (decision) => {
+        approvalResolver.current = null;
+        setPending(null);
+        resolve(decision);
+      };
+    });
 
   useEffect(() => {
     const cwd = process.cwd();
@@ -110,7 +216,7 @@ function Repl({ flags, resumeId, initialPrompt }: ReplOptions): JSX.Element {
         maxTurns: config.maxTurns,
         prompt,
         permission,
-        promptUser: (async () => "allow") as ApprovalCallback,
+        promptUser,
         onEvent: (e) => {
           if (e.type === "text_delta" && e.text) {
             buffer += e.text;
@@ -217,6 +323,14 @@ function Repl({ flags, resumeId, initialPrompt }: ReplOptions): JSX.Element {
       exit();
       return;
     }
+    // While a tool-approval prompt is open, keys select a decision and nothing else.
+    if (pending) {
+      const lower = input2?.toLowerCase();
+      if (lower === "a") approvalResolver.current?.("allow");
+      else if (lower === "y") approvalResolver.current?.("allow-always");
+      else if (lower === "d" || key.escape) approvalResolver.current?.("deny");
+      return;
+    }
     if (key.ctrl && input2 === "u") {
       setInput("");
       return;
@@ -252,34 +366,31 @@ function Repl({ flags, resumeId, initialPrompt }: ReplOptions): JSX.Element {
     }
   });
 
-  return (
-    <Box flexDirection="column" height="100%">
-      <Box borderStyle="round" borderColor={theme.border} paddingX={1} flexDirection="row" justifyContent="space-between">
-        <Text>
-          <Text color={theme.hex.assistant}>● </Text>
-          <Text bold>{config.model}</Text>
-          <Text dimColor>  {config.provider}</Text>
-        </Text>
-        <Text>
-          <Text dimColor>cost </Text>
-          <Text color={theme.hex.success}>${costUsd.toFixed(4)}</Text>
-        </Text>
-      </Box>
+  const endpoint = defaultEndpoint(config.provider, config.baseUrl);
+  const isLocal = config.provider === "ollama" || config.provider === "lmstudio";
 
-      <Box flexDirection="row" flexGrow={1}>
-        <Box flexDirection="column" flexGrow={1} paddingX={1} borderStyle="single" borderColor={theme.border}>
-          {messages.slice(-200).filter((m) => m.id).map((m) => (
-            <Box key={m.id} flexDirection="column" marginBottom={0}>
+  return (
+    <Box flexDirection="column">
+      <Static items={[{ provider: config.provider, model: config.model, endpoint, isLocal }]}>
+        {(item, i) => (
+          <Intro key={`intro-${i}`} provider={item.provider} model={item.model} endpoint={item.endpoint} isLocal={item.isLocal} theme={theme} />
+        )}
+      </Static>
+
+      <Box flexDirection="row">
+        <Box flexDirection="column" flexGrow={1} paddingX={1}>
+          {messages.slice(-200).filter((m) => m.id).map((m, i) => (
+            <Box key={`${m.id}:${i}`} flexDirection="column" marginBottom={0}>
               <Text>
                 {m.role === "user" && <Text color={theme.user}>› </Text>}
-                {m.role === "assistant" && <Text color={theme.hex.assistant}>◀ </Text>}
+                {m.role === "assistant" && <Text color={theme.hex.assistant}>● </Text>}
                 {m.role === "tool" && <Text color={theme.tool}>⚙ </Text>}
                 {m.role === "system" && <Text color={theme.dim}>· </Text>}
                 <Text color={m.role === "assistant" ? theme.hex.assistant : undefined}>{m.text}</Text>
               </Text>
             </Box>
           ))}
-          {busy && <Text color={theme.hex.warning}>… thinking</Text>}
+          {busy && <Text color={theme.hex.warning}>· Combobulating…</Text>}
           {errorLine && <Text color={theme.hex.error}>! {errorLine}</Text>}
         </Box>
         {showTasks && (
@@ -290,15 +401,33 @@ function Repl({ flags, resumeId, initialPrompt }: ReplOptions): JSX.Element {
         )}
       </Box>
 
-      <Box borderStyle="round" borderColor={theme.border} paddingX={1}>
-        <Text>
-          <Text color={theme.user}>›</Text> <Text>{input || " "}</Text>
-          <Text dimColor>{busy ? " (busy)" : ""}</Text>
-        </Text>
-      </Box>
-      <Box paddingX={1}>
+      {pending ? (
+        <Box flexDirection="column" borderStyle="round" borderColor={theme.hex.warning} paddingX={1} marginTop={1}>
+          <Text>
+            <Text color={theme.hex.warning}>⚠ Approve tool </Text>
+            <Text bold color={theme.hex.warning}>{pending.tool}</Text>
+            <Text dimColor>?</Text>
+          </Text>
+          <Text dimColor>{pending.argsSummary}</Text>
+        </Box>
+      ) : (
+        <Box borderStyle="round" borderColor={theme.border} paddingX={1} marginTop={1}>
+          <Text>
+            <Text color={theme.user}>› </Text><Text>{input || " "}</Text>
+          </Text>
+        </Box>
+      )}
+      <Box paddingX={1} flexDirection="row" justifyContent="space-between">
         <Text dimColor>
-          Ctrl+C exit · Ctrl+U clear · Ctrl+T tasks · Tab complete · Enter send
+          {pending
+            ? "[a] allow once · [y] allow always · [d] deny (esc)"
+            : busy
+              ? "esc to interrupt"
+              : "Ctrl+C exit · Ctrl+U clear · Ctrl+T tasks · Tab complete · Enter send"}
+        </Text>
+        <Text>
+          <Text dimColor>cost </Text>
+          <Text color={theme.hex.success}>${costUsd.toFixed(4)}</Text>
         </Text>
       </Box>
     </Box>
