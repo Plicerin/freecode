@@ -1,0 +1,75 @@
+import { existsSync, mkdirSync, readdirSync, readFileSync, appendFileSync, statSync } from "node:fs";
+import { projectDir, sessionPath, PROJECTS_DIR } from "../utils/paths";
+import { newId, nowIso } from "../utils/ids";
+import { debug } from "../utils/debug";
+
+export type SessionEvent =
+  | { kind: "user"; text: string; ts: string }
+  | { kind: "assistant"; text: string; ts: string; usage?: Record<string, number> }
+  | { kind: "tool_call"; id: string; name: string; args: Record<string, unknown>; ts: string }
+  | { kind: "tool_result"; id: string; output: string; ok: boolean; ts: string; durationMs: number }
+  | { kind: "thinking"; text: string; ts: string }
+  | { kind: "system"; text: string; ts: string };
+
+export interface Session {
+  id: string;
+  cwd: string;
+  path: string;
+}
+
+function ensureDir(dir: string): void {
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+}
+
+export function newSession(cwd: string): Session {
+  ensureDir(PROJECTS_DIR);
+  ensureDir(projectDir(cwd));
+  const id = newId();
+  const path = sessionPath(cwd, id);
+  if (!existsSync(path)) {
+    appendFileSync(path, JSON.stringify({ kind: "system", text: `session start cwd=${cwd}`, ts: nowIso() }) + "\n");
+  }
+  debug.log("new session", { id, path });
+  return { id, cwd, path };
+}
+
+export function appendEvent(session: Session, event: SessionEvent): void {
+  ensureDir(projectDir(session.cwd));
+  appendFileSync(session.path, JSON.stringify(event) + "\n");
+}
+
+export function listSessions(cwd: string): Session[] {
+  const dir = projectDir(cwd);
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((f) => f.endsWith(".jsonl"))
+    .map((f) => {
+      const id = f.replace(/\.jsonl$/, "");
+      const path = sessionPath(cwd, id);
+      const mtime = statSync(path).mtimeMs;
+      return { id, cwd, path, mtime } as Session & { mtime: number };
+    })
+    .sort((a, b) => (b.mtime ?? 0) - (a.mtime ?? 0))
+    .map(({ mtime: _m, ...rest }) => rest as Session);
+}
+
+export function readSession(session: Session): SessionEvent[] {
+  if (!existsSync(session.path)) return [];
+  const raw = readFileSync(session.path, "utf8");
+  const events: SessionEvent[] = [];
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      events.push(JSON.parse(line));
+    } catch (err) {
+      debug.warn(`corrupt line in ${session.path}`, String(err));
+    }
+  }
+  return events;
+}
+
+export function resumeSession(cwd: string, id: string): Session | undefined {
+  const path = sessionPath(cwd, id);
+  if (!existsSync(path)) return undefined;
+  return { id, cwd, path };
+}

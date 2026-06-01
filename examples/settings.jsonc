@@ -1,0 +1,12 @@
+{
+  // Example OpenClaude settings — JSONC supports // and /* */ comments
+  // and trailing commas. Saved as ~/.claude/settings.json
+  "model": "claude-sonnet-4-5",
+  "permissionMode": "manual",
+  "webSearchProvider": "duckduckgo",
+  "theme": "dark",
+  "maxTurns": 50,
+  "contextThreshold": 0.8,
+  "enablePromptCache": true,
+  "enableExtendedThinking": false,
+}
