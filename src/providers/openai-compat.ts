@@ -1,4 +1,4 @@
-import type { ChatRequest, Provider, StreamEvent, TokenUsage } from "./types";
+import type { ChatMessage, ChatRequest, Provider, StreamEvent, TokenUsage } from "./types";
 import { friendlyError, makeError } from "./friendly-errors";
 import { debug } from "../utils/debug";
 
@@ -74,7 +74,7 @@ export class OpenAICompatProvider implements Provider {
       model: req.model,
       messages: [
         ...(req.system ? [{ role: "system", content: req.system }] : []),
-        ...req.messages.map((m) => ({ role: m.role, content: m.content })),
+        ...req.messages.map(toOpenAIMessage),
       ],
       stream: true,
       max_tokens: req.maxTokens ?? 4096,
@@ -168,23 +168,49 @@ export class OpenAICompatProvider implements Provider {
   }
 }
 
+function toOpenAIMessage(m: ChatMessage): Record<string, unknown> {
+  if (m.role === "tool") {
+    return { role: "tool", tool_call_id: m.toolCallId, content: m.content };
+  }
+  if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
+    return {
+      role: "assistant",
+      content: m.content || null,
+      tool_calls: m.toolCalls.map((tc) => ({
+        id: tc.id,
+        type: "function",
+        function: { name: tc.name, arguments: JSON.stringify(tc.arguments ?? {}) },
+      })),
+    };
+  }
+  return { role: m.role, content: m.content };
+}
+
 function zodToJsonShape(schema: unknown): Record<string, unknown> {
   if (schema && typeof schema === "object" && "_def" in (schema as object)) {
-    const def = (schema as { _def?: { typeName?: string; shape?: () => Record<string, unknown> } })._def;
-    if (def && def.shape) {
-      const out: Record<string, unknown> = {};
+    const def = (schema as { _def?: { shape?: () => Record<string, unknown> } })._def;
+    if (def && typeof def.shape === "function") {
+      const properties: Record<string, unknown> = {};
+      const required: string[] = [];
       const shape = def.shape();
       for (const [k, v] of Object.entries(shape)) {
-        out[k] = describeZod(v as ZodLike);
+        const field = v as ZodLike;
+        properties[k] = describeZod(field);
+        if (field._def?.typeName !== "ZodOptional") required.push(k);
       }
-      return out;
+      return {
+        type: "object",
+        properties,
+        ...(required.length ? { required } : {}),
+        additionalProperties: false,
+      };
     }
   }
-  return {};
+  return { type: "object", properties: {} };
 }
 
 interface ZodLike {
-  _def?: { typeName?: string; innerType?: ZodLike; values?: unknown[]; description?: string; shape?: () => Record<string, unknown> };
+  _def?: { typeName?: string; innerType?: ZodLike; valueType?: ZodLike; values?: unknown[]; description?: string; shape?: () => Record<string, unknown> };
   description?: string;
 }
 
@@ -207,6 +233,7 @@ function describeZod(z: ZodLike): Record<string, unknown> {
       return { type: "object" };
     }
     case "ZodEnum": return { type: "string", enum: def.values ?? [] };
+    case "ZodRecord": return { type: "object", additionalProperties: describeZod(def.valueType ?? {}) };
     case "ZodOptional": return describeZod(def.innerType ?? {});
     default: return { type: "string" };
   }
