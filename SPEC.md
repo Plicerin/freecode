@@ -1,4 +1,4 @@
-# OpenClaude — SPEC
+# freecode — SPEC
 
 ## §G Goal
 
@@ -13,8 +13,8 @@ Provider-agnostic coding agent CLI. REPL + headless. Multi-LLM, multi-tool. Drop
 - **Tests**: `bun test`.
 - **Providers (9)**: Anthropic, OpenAI + OpenAI-compat, Google Gemini, GitHub Models, AWS Bedrock, Google Vertex AI, Ollama, LM Studio, NVIDIA NIM.
 - **Provider selection**: env vars `CLAUDE_CODE_USE_<PROVIDER>=1`. Each provider has matching `<PROVIDER>_API_KEY` (or AWS_*, GOOGLE_*, `OLLAMA_HOST`, `LMSTUDIO_HOST`, `NVIDIA_API_KEY`). Optional `<PROVIDER>_BASE_URL`.
-- **Per-project profile**: `.openclaude-profile.json` at cwd root → `{provider, baseUrl, apiKey, model}`.
-- **Settings priority**: CLI flags > `.openclaude-profile.json` > env vars > `~/.claude/settings.json`.
+- **Per-project profile**: `.freecode-profile.json` at cwd root → `{provider, baseUrl, apiKey, model}`.
+- **Settings priority**: CLI flags > `.freecode-profile.json` > env vars > `~/.freecode/settings.json`.
 - **Settings file**: JSONC (comments + trailing commas OK). Hot-reload via file watcher.
 - **Sessions**: append-only JSONL at `~/.claude/projects/<cwd-encoded>/<session-id>.jsonl`. One line per message or tool event. `/new` starts fresh, `/resume` picks existing.
 - **Tools** (`!` = required, `?` = optional): Bash, FileRead, FileWrite, FileEdit, Glob, Grep, WebSearch, WebFetch.
@@ -26,17 +26,17 @@ Provider-agnostic coding agent CLI. REPL + headless. Multi-LLM, multi-tool. Drop
 - **Retries**: 10 default on rate limit, exp backoff. `CLAUDE_CODE_UNATTENDED_RETRY=1` → ∞ for CI.
 - **Debug**: `CLAUDE_DEBUG=1` → verbose stderr.
 - **Headless**: `--print` flag for one-shot script/CI use.
-- **gRPC server**: `openclaude serve` — bidirectional `Chat` stream. Session id reconnect. Approval prompts as events.
-- **Stubs**: every real-key provider ships a working mock so `openclaude` runs with zero config.
+- **gRPC server**: `freecode serve` — bidirectional `Chat` stream. Session id reconnect. Approval prompts as events.
+- **Stubs**: every real-key provider ships a working mock so `freecode` runs with zero config.
 
 ## §I Interfaces
 
 ```yaml
 # CLI
-cmd: openclaude [prompt...]            → REPL
-cmd: openclaude --print [prompt...]     → headless one-shot, stdout text
-cmd: openclaude serve [--port N]        → gRPC server
-cmd: openclaude resume <session-id>     → /resume from CLI
+cmd: freecode [prompt...]            → REPL
+cmd: freecode --print [prompt...]     → headless one-shot, stdout text
+cmd: freecode serve [--port N]        → gRPC server
+cmd: freecode resume <session-id>     → /resume from CLI
 
 # Env (selection)
 env: CLAUDE_CODE_USE_ANTHROPIC=1
@@ -68,9 +68,9 @@ env: EXA_API_KEY
 env: FIRECRAWL_API_KEY
 
 # Files
-file: .openclaude-profile.json    { provider, baseUrl?, apiKey?, model }
-file: ~/.claude/settings.json     JSONC: { model, permissionMode, webSearchProvider, theme, ... }
-file: ~/.claude/projects/<cwd>/<session-id>.jsonl   append-only
+file: .freecode-profile.json    { provider, baseUrl?, apiKey?, model }
+file: ~/.freecode/settings.json     JSONC: { model, permissionMode, webSearchProvider, theme, ... }
+file: ~/.freecode/projects/<cwd>/<session-id>.jsonl   append-only
 
 # Provider interface (TS)
 api: stream(req: ChatRequest, ctx: Ctx) → AsyncIterable<StreamEvent>
@@ -127,7 +127,7 @@ V1:  ∀ provider call → AsyncIterable<StreamEvent> | graceful friendly error
 V2:  ∀ turn → token usage recorded (input, output, cache_read, cache_write, thinking)
 V3:  ∀ tool call denied once/session → same call ! re-prompt on retry
 V4:  ∀ bash tool exec → cmd ! match denylist (rm -rf /, :(){ :|:&};:, etc.)
-V5:  settings load order: CLI flags > .openclaude-profile.json > env > ~/.claude/settings.json
+V5:  settings load order: CLI flags > .freecode-profile.json > env > ~/.freecode/settings.json
 V6:  session file append-only — one JSON object per line, never mutate past rows
 V7:  prompt cache markers applied where provider API supports
 V8:  rate-limit response → exp backoff, max 10 retries (∞ if CLAUDE_CODE_UNATTENDED_RETRY=1)
@@ -179,7 +179,7 @@ T27|.|CLI: Commander.js, subcommands, flags|I.cmd
 T28|.|retry w/ exp backoff + jitter|V8
 T29|.|error → friendly message map (V1 friendly errors)|I.err
 T30|.|tests: settings, providers, session, tools, permissions, agent loop|V5,V6,V12
-T31|.|README, .openclaude-profile.json schema, slash command docs|I.cmd
+T31|.|README, .freecode-profile.json schema, slash command docs|I.cmd
 ```
 
 ## §B Bug Log

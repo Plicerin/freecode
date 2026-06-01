@@ -27,7 +27,7 @@ interface ParsedArgs {
 
 const program = new Command();
 program
-  .name("openclaude")
+  .name("freecode")
   .description("Provider-agnostic coding agent CLI (REPL + headless)")
   .version("0.1.0")
   .option("-p, --print", "Headless: print response to stdout and exit", false)
@@ -130,6 +130,6 @@ function opts_or_new(resumeId: string | undefined, cwd: string): Session {
 
 main().catch((err) => {
   debug.error("fatal", String(err));
-  console.error(`[openclaude] ${err instanceof Error ? err.message : String(err)}`);
+  console.error(`[freecode] ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 });

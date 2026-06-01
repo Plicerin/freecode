@@ -3,8 +3,8 @@ const enabled = process.env.CLAUDE_DEBUG === "1";
 function emit(level: string, msg: string, extra?: unknown): void {
   if (!enabled) return;
   const line = extra === undefined
-    ? `[openclaude][${level}] ${msg}`
-    : `[openclaude][${level}] ${msg} ${JSON.stringify(extra)}`;
+    ? `[freecode][${level}] ${msg}`
+    : `[freecode][${level}] ${msg} ${JSON.stringify(extra)}`;
   process.stderr.write(line + "\n");
 }
 

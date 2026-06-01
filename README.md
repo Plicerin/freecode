@@ -1,4 +1,4 @@
-# OpenClaude
+# freecode
 
 Provider-agnostic coding agent CLI. REPL + headless. Multi-LLM, multi-tool. Drop-in Claude Code with the Anthropic lock-in removed. Bun runtime.
 
@@ -6,11 +6,11 @@ Provider-agnostic coding agent CLI. REPL + headless. Multi-LLM, multi-tool. Drop
 
 ```bash
 bun install
-bun test                  # 16 unit tests
+bun test                  # 17 unit tests
 bun run src/cli.tsx       # launch REPL (mock provider — no API key needed)
 ```
 
-First run uses the **Mock provider** so the app works with zero config. Wire a real provider by setting env vars or `.openclaude-profile.json` (see below).
+First run uses the **Mock provider** so the app works with zero config. Wire a real provider by setting env vars or `.freecode-profile.json` (see below).
 
 ## Providers
 
@@ -28,11 +28,11 @@ Set the active provider with an env flag, then supply the matching key:
 | LM Studio       | `CLAUDE_CODE_USE_LMSTUDIO=1`            | `LMSTUDIO_HOST` (default `http://127.0.0.1:1234`) |
 | NVIDIA NIM      | `CLAUDE_CODE_USE_NIM=1`                 | `NVIDIA_API_KEY` (`nvapi-...`); base `https://integrate.api.nvidia.com/v1` |
 
-Without a flag, OpenClaude auto-detects whichever key is set.
+Without a flag, freecode auto-detects whichever key is set.
 
 ## Per-project profile
 
-`.openclaude-profile.json` in your project root overrides env settings for that project only:
+`.freecode-profile.json` in your project root overrides env settings for that project only:
 
 ```json
 {
@@ -45,12 +45,12 @@ Without a flag, OpenClaude auto-detects whichever key is set.
 
 ## Settings priority
 
-`CLI flags > .openclaude-profile.json > env vars > ~/.claude/settings.json`
+`CLI flags > .freecode-profile.json > env vars > ~/.freecode/settings.json`
 
 `settings.json` is JSONC (comments and trailing commas allowed) and hot-reloads on save:
 
 ```jsonc
-// ~/.claude/settings.json
+// ~/.freecode/settings.json
 {
   "model": "claude-sonnet-4-5",
   "permissionMode": "manual",         // manual | auto | bypass
@@ -66,13 +66,13 @@ Without a flag, OpenClaude auto-detects whichever key is set.
 ## CLI flags
 
 ```text
-openclaude                                  # REPL
-openclaude --prompt "..."                   # REPL with initial prompt
-openclaude --print --prompt "..."           # headless one-shot
-openclaude --resume <session-id>            # resume a session in REPL
-openclaude --serve --port 50051             # gRPC server (placeholder)
-openclaude --provider openai --model gpt-4o # override provider
-openclaude --permission-mode bypass         # skip all prompts
+freecode                                    # REPL
+freecode --prompt "..."                     # REPL with initial prompt
+freecode --print --prompt "..."             # headless one-shot
+freecode --resume <session-id>              # resume a session in REPL
+freecode --serve --port 50051               # gRPC server (placeholder)
+freecode --provider openai --model gpt-4o   # override provider
+freecode --permission-mode bypass           # skip all prompts
 ```
 
 ## Slash commands (REPL)
@@ -119,7 +119,7 @@ CLAUDE_CODE_UNATTENDED_RETRY=1 \
 JSONL append-only, one line per event:
 
 ```
-~/.claude/projects/<encoded-cwd>/<session-id>.jsonl
+~/.freecode/projects/<encoded-cwd>/<session-id>.jsonl
 ```
 
 `/resume` (no id) lists recent sessions; `/resume <id>` reconnects. Messages, tool calls, tool results, thinking, and system notes are all captured.
@@ -132,6 +132,7 @@ Provider errors are mapped to friendly messages:
 - `Local provider not running — please start LM Studio`
 - `Model not found — use /model to switch`
 - `Invalid API key — check the key for <provider>`
+- `Invalid NVIDIA API key — get one at build.nvidia.com (free tier available)`
 - `Rate limited by <provider> — retrying with backoff`
 - `Context window exceeded — auto-compacting`
 
@@ -141,6 +142,6 @@ Retries use exponential backoff with jitter. `CLAUDE_DEBUG=1` writes verbose log
 
 This is a working v0.1. See `SPEC.md` for the full design.
 
-**Working:** providers (Anthropic, OpenAI-compat covers OpenAI/GitHub Models/LM Studio, Gemini, mock), settings priority + JSONC + hot-reload, sessions + /new + /resume, 8 tools, permission engine, denylist, REPL with status bar + input + footer + slash commands + keybinds, dark/light theme with fixed RGB constants, agent loop with streaming + tool exec + retry, friendly error mapping, --print headless mode, 16 unit tests.
+**Working:** 9 providers (Anthropic, OpenAI-compat covers OpenAI/GitHub Models/LM Studio/NVIDIA NIM, Gemini, mock; Bedrock/Vertex/Ollama fall through to mock), settings priority + JSONC + hot-reload, sessions + /new + /resume, 8 tools, permission engine, denylist, REPL with status bar + input + footer + slash commands + keybinds, dark/light theme with fixed RGB constants, agent loop with streaming + tool exec + retry, friendly error mapping, --print headless mode, 17 unit tests.
 
 **Deferred:** gRPC proto + bidirectional stream (current `serve` is a port-binding placeholder), Bedrock + Vertex + Ollama real providers (mock fallback for now), spinner shimmer component (TUI shows static indicator), auto-compact invocation wired to provider, prompt cache markers in provider requests.

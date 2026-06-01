@@ -18,7 +18,7 @@ export const WebFetchTool: Tool<z.infer<typeof ArgsSchema>> = {
     const cap = args.maxBytes ?? 1_000_000;
     let resp: Response;
     try {
-      resp = await fetch(args.url, { headers: { "user-agent": "openclaude/0.1" } });
+      resp = await fetch(args.url, { headers: { "user-agent": "freecode/0.1" } });
     } catch (err) {
       return { ok: false, output: "", error: `Fetch failed: ${String(err)}` };
     }

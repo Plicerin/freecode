@@ -24,7 +24,7 @@ export const FileWriteTool: Tool<z.infer<typeof ArgsSchema>> = {
       }
     }
     const existed = existsSync(abs);
-    const tmp = `${abs}.openclaude-tmp`;
+    const tmp = `${abs}.freecode-tmp`;
     try {
       writeFileSync(tmp, args.content, "utf8");
       renameSync(tmp, abs);

@@ -61,7 +61,7 @@ interface SearchHit { title: string; url: string; snippet: string; }
 
 async function duckduckgo(query: string, max: number): Promise<SearchResult> {
   const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-  const resp = await fetch(url, { headers: { "user-agent": "openclaude/0.1 (+https://example.invalid)" } });
+  const resp = await fetch(url, { headers: { "user-agent": "freecode/0.1 (+https://example.invalid)" } });
   if (!resp.ok) return { ok: false, output: "", error: `DuckDuckGo HTTP ${resp.status}` };
   const html = await resp.text();
   const hits = extractDDG(html).slice(0, max);
