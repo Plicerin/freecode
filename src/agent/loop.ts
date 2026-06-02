@@ -157,6 +157,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
     if (turnToolCalls.length === 0) break;
 
     // Execute tools sequentially; could parallelize later
+    const pendingImages: ImagePart[] = [];
     for (const call of turnToolCalls) {
       if (opts.signal?.aborted) { aborted = true; break; }
       const tool = tools.find((t) => t.name === call.name);
@@ -192,11 +193,15 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
       const payload = result.ok ? result.output : `Error: ${result.error ?? "unknown"}\n${result.output}`;
       messages.push({ role: "tool", toolCallId: call.id, content: payload });
       opts.onEvent({ type: "tool_result", result: { id: call.id, output: payload, ok: result.ok, durationMs } });
-      // A tool (e.g. ViewImage) can return images; surface them to the model as
-      // a follow-up user message so it can actually see them next turn.
-      if (result.images && result.images.length > 0) {
-        messages.push({ role: "user", content: `[${result.images.length} image(s) loaded via ${tool.name}]`, images: result.images });
-      }
+      // Collect any images the tool returned (e.g. ViewImage); they're surfaced
+      // AFTER all tool results so the tool-response block stays contiguous
+      // (providers reject a user message interleaved between tool results).
+      if (result.images && result.images.length > 0) pendingImages.push(...result.images);
+    }
+
+    // Feed collected tool images back as a single user message so the model sees them.
+    if (pendingImages.length > 0) {
+      messages.push({ role: "user", content: `[${pendingImages.length} image(s) loaded and now visible]`, images: pendingImages });
     }
 
     if (aborted) break;

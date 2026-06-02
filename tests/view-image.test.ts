@@ -26,7 +26,7 @@ describe("ViewImage tool", () => {
 });
 
 describe("agent loop feeds tool images back to the model", () => {
-  it("injects a ViewImage result image into the next request", async () => {
+  it("feeds multiple tool images back without interleaving tool results", async () => {
     const seen: ChatMessage[][] = [];
     let turn = 0;
     const provider: Provider = {
@@ -34,7 +34,9 @@ describe("agent loop feeds tool images back to the model", () => {
       async *stream(req: ChatRequest): AsyncIterable<StreamEvent> {
         seen.push(req.messages);
         if (turn++ === 0) {
+          // Two tool calls in one turn — the case that 400'd against OpenAI.
           yield { type: "tool_call", call: { id: "c1", name: "FakeView", arguments: {} } };
+          yield { type: "tool_call", call: { id: "c2", name: "FakeView", arguments: {} } };
           yield { type: "end", reason: "tool_use" };
         } else {
           yield { type: "text_delta", delta: "seen" };
@@ -48,7 +50,14 @@ describe("agent loop feeds tool images back to the model", () => {
     };
     const perm = createPermissionEngine("bypass", (async () => "allow") as ApprovalCallback);
     await runAgentLoop({ provider, tools: [fakeView], model: "m", maxTurns: 3, prompt: "look", permission: perm, promptUser: (async () => "allow") as ApprovalCallback, onEvent: () => {} });
-    const secondReq = seen[1]!;
-    expect(secondReq.some((m) => m.role === "user" && m.images?.length)).toBe(true);
+
+    const req = seen[1]!;
+    const roles = req.map((m) => m.role);
+    // No user message wedged between two tool results (the OpenAI 400 cause).
+    for (let i = 1; i < roles.length - 1; i++) {
+      if (roles[i] === "user") expect(!(roles[i - 1] === "tool" && roles[i + 1] === "tool")).toBe(true);
+    }
+    expect(req.filter((m) => m.role === "tool").length).toBe(2);
+    expect(req.filter((m) => m.role === "user" && m.images?.length).length).toBe(1);
   });
 });
