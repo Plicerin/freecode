@@ -192,6 +192,11 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
       const payload = result.ok ? result.output : `Error: ${result.error ?? "unknown"}\n${result.output}`;
       messages.push({ role: "tool", toolCallId: call.id, content: payload });
       opts.onEvent({ type: "tool_result", result: { id: call.id, output: payload, ok: result.ok, durationMs } });
+      // A tool (e.g. ViewImage) can return images; surface them to the model as
+      // a follow-up user message so it can actually see them next turn.
+      if (result.images && result.images.length > 0) {
+        messages.push({ role: "user", content: `[${result.images.length} image(s) loaded via ${tool.name}]`, images: result.images });
+      }
     }
 
     if (aborted) break;

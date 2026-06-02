@@ -1,5 +1,5 @@
 import type { z } from "zod";
-import type { ToolDefinition } from "../providers/types";
+import type { ToolDefinition, ImagePart } from "../providers/types";
 
 export type { ToolDefinition } from "../providers/types";
 
@@ -14,6 +14,9 @@ export interface ToolResult {
   output: string;
   error?: string;
   metadata?: Record<string, unknown>;
+  /** Images produced by the tool (e.g. ViewImage); the agent loop feeds these
+   * back into the conversation so the model can see them. */
+  images?: ImagePart[];
 }
 
 export interface Tool<TArgs = unknown> {
