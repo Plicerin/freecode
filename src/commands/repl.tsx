@@ -16,6 +16,7 @@ import { closest } from "../utils/fuzzy";
 import { resolveVerify, resolveQuickVerify, runVerify } from "../agent/verify";
 import { newSession, appendEvent, listSessions, resumeSession, readSession, type Session } from "../session/manager";
 import { makeTheme } from "../tui/theme";
+import { Mascot } from "../tui/mascot";
 import { debug } from "../utils/debug";
 import type { Tool } from "../tools/types";
 import type { ChatMessage } from "../providers/types";
@@ -137,11 +138,16 @@ function Intro({ provider, model, endpoint, isLocal, theme }: IntroProps): JSX.E
   const label = (s: string) => <Text color={theme.dim}>{s.padEnd(10)}</Text>;
   return (
     <Box flexDirection="column" marginBottom={1}>
-      <Banner />
-      <Box marginLeft={1} marginTop={1}>
-        <Text color={theme.hex.assistant}>✦ </Text>
-        <Text>Total freedom. No guesswork.</Text>
-        <Text color={theme.hex.assistant}> ✦</Text>
+      <Box flexDirection="row" marginLeft={1}>
+        <Mascot theme={theme} />
+        <Box flexDirection="column" justifyContent="center" marginLeft={3}>
+          <Banner />
+          <Box marginTop={1}>
+            <Text color={theme.hex.assistant}>✦ </Text>
+            <Text>Total freedom. No guesswork.</Text>
+            <Text color={theme.hex.assistant}> ✦</Text>
+          </Box>
+        </Box>
       </Box>
       <Box marginLeft={1} marginTop={1} flexDirection="column" borderStyle="round" borderColor={theme.border} paddingX={1}>
         <Text>{label("Provider")}<Text color={theme.hex.assistant}>{provider}</Text></Text>
