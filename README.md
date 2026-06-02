@@ -131,6 +131,7 @@ freecode --thinking                          # enable extended thinking / reason
 | `/context` | Show token usage + cost                       |
 | `/provider`| Show or switch provider                       |
 | `/mcp`     | List connected MCP servers and their tools    |
+| `/plan`    | Toggle read-only plan mode (propose, don't change) |
 | `/help`    | List commands                                 |
 | `/compact` | Force context compaction                      |
 

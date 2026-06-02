@@ -3,7 +3,7 @@ import type { JSX } from "react";
 import { Box, Static, Text, useApp, useInput } from "ink";
 import { loadConfig, type CliFlags } from "../config/loader";
 import { buildProvider } from "../providers/registry";
-import { buildToolRegistry } from "../tools/registry";
+import { buildToolRegistry, toolListToSystemPrompt } from "../tools/registry";
 import { createPermissionEngine, type ApprovalCallback, type ApprovalDecision, type ApprovalRequest } from "../permissions/modes";
 import { runAgentLoop } from "../agent/loop";
 import { ContextTracker } from "../agent/context";
@@ -34,7 +34,10 @@ interface UiMessage {
   ok?: boolean;
 }
 
-const SLASH_COMMANDS = ["/model", "/new", "/resume", "/context", "/provider", "/mcp", "/help", "/compact"];
+const SLASH_COMMANDS = ["/model", "/new", "/resume", "/context", "/provider", "/mcp", "/plan", "/help", "/compact"];
+
+const PLAN_MODE_NOTE =
+  "\n\nPLAN MODE: You are in read-only planning mode. Do NOT modify anything — no file writes or edits, no state-changing commands. Investigate the request using the available read-only tools, then present a concise, numbered implementation plan and STOP. The user will review it and exit plan mode to have you carry it out.";
 
 // 5-row block font for the startup banner.
 const FONT: Record<string, string[]> = {
@@ -210,6 +213,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
 
   const [messages, setMessages] = useState<UiMessage[]>([]);
   const [model, setModel] = useState(config.model);
+  const [planMode, setPlanMode] = useState(false);
   // Text + caret kept in ONE state so fast input (e.g. paste) updates them
   // atomically — separate states race and garble characters.
   const [editor, setEditor] = useState<{ text: string; cursor: number }>({ text: "", cursor: 0 });
@@ -297,9 +301,13 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     abortRef.current = controller;
     streamIdRef.current = null;
     try {
+      // Plan mode: read-only tools (permission=safe) + a plan-only system prompt.
+      const activeTools = planMode ? tools.filter((t) => t.permission === "safe") : tools;
+      const systemPrompt = planMode ? toolListToSystemPrompt(activeTools) + PLAN_MODE_NOTE : undefined;
       const result = await runAgentLoop({
         provider,
-        tools,
+        tools: activeTools,
+        systemPrompt,
         model,
         maxTurns: config.maxTurns,
         prompt: effectivePrompt,
@@ -434,6 +442,14 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         } else {
           setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Provider: ${config.provider}\nBase URL: ${config.baseUrl ?? "(default)"}\nModel: ${model}` }]);
         }
+        break;
+      }
+      case "/plan": {
+        const on = !planMode;
+        setPlanMode(on);
+        setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: on
+          ? "Plan mode ON — I'll investigate (read-only) and propose a plan without making changes. Run /plan again to exit and let me implement."
+          : "Plan mode OFF — I can make changes again." }]);
         break;
       }
       case "/mcp": {
@@ -641,6 +657,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
               : "Ctrl+C exit · Ctrl+U clear · Ctrl+T tasks · Tab complete · Enter send"}
         </Text>
         <Text>
+          {planMode && <Text color={theme.hex.warning}>PLAN  </Text>}
           <Text color={theme.hex.assistant}>{model}</Text>
           <Text dimColor>  cost </Text>
           <Text color={theme.hex.success}>${costUsd.toFixed(4)}</Text>
