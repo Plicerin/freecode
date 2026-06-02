@@ -9,6 +9,7 @@ import { runAgentLoop } from "../agent/loop";
 import { ContextTracker } from "../agent/context";
 import { priceFor } from "../agent/pricing";
 import { extractAttachments } from "../agent/attachments";
+import { summarizeConversation } from "../agent/summarize";
 import { newSession, appendEvent, listSessions, resumeSession, readSession, type Session } from "../session/manager";
 import { makeTheme } from "../tui/theme";
 import { debug } from "../utils/debug";
@@ -433,7 +434,27 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         break;
       }
       case "/compact": {
-        setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "Context compaction requested — will run when utilization ≥ threshold" }]);
+        const msgs = conversationRef.current;
+        if (msgs.length <= 3) {
+          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "Nothing to compact yet." }]);
+          break;
+        }
+        setBusy(true);
+        setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "· Compacting context…" }]);
+        try {
+          const tracker = new ContextTracker({});
+          const result = await tracker.compact(msgs, (m) => summarizeConversation(provider, model, m));
+          if (result.removedCount > 0) {
+            conversationRef.current = result.messages;
+            setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Compacted ${result.removedCount} older messages into a summary (~${result.summaryTokens} tokens); ${result.messages.length} messages kept.` }]);
+          } else {
+            setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "Not enough history to compact." }]);
+          }
+        } catch (err) {
+          setErrorLine(err instanceof Error ? err.message : String(err));
+        } finally {
+          setBusy(false);
+        }
         break;
       }
       default:

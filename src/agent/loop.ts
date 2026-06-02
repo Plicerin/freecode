@@ -1,10 +1,11 @@
-import type { Provider, ChatRequest, ChatMessage, ToolCall, StreamEvent, TokenUsage, ImagePart } from "../providers/types";
+import type { Provider, ChatRequest, ChatMessage, ToolCall, TokenUsage, ImagePart } from "../providers/types";
 import type { Tool } from "../tools/types";
 import type { PermissionEngine, ApprovalCallback } from "../permissions/modes";
 import { withRetry, isRateLimitError } from "../utils/retry";
 import { debug } from "../utils/debug";
 import { toolListToSystemPrompt } from "../tools/registry";
 import { ContextTracker } from "./context";
+import { summarizeConversation } from "./summarize";
 
 export interface AgentEvent {
   type: "text_delta" | "tool_call" | "tool_result" | "thinking_delta" | "usage" | "done" | "error" | "approval_needed" | "compacted";
@@ -51,22 +52,8 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
   });
 
   // Summarize older messages by asking the provider for a concise recap.
-  const summarize = async (msgs: ChatMessage[]): Promise<string> => {
-    const summaryReq: ChatRequest = {
-      model: opts.model,
-      system: "You compress conversations. Produce a concise summary of the conversation below, preserving key facts, decisions, file paths, command results, and any unfinished tasks. Output only the summary text.",
-      messages: [...msgs, { role: "user", content: "Summarize everything above concisely." }],
-      stream: true,
-      maxTokens: 1024,
-      signal: opts.signal,
-    };
-    const evs = await collectStream(opts.provider.stream(summaryReq));
-    return evs
-      .filter((e): e is Extract<StreamEvent, { type: "text_delta" }> => e.type === "text_delta")
-      .map((e) => e.delta)
-      .join("")
-      .trim();
-  };
+  const summarize = (msgs: ChatMessage[]): Promise<string> =>
+    summarizeConversation(opts.provider, opts.model, msgs, opts.signal);
 
   const windowSize = opts.contextWindow ?? 200_000;
   const threshold = opts.contextThreshold ?? 0.8;
@@ -229,10 +216,4 @@ function sumUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
     cacheWrite: a.cacheWrite + b.cacheWrite,
     thinking: a.thinking + b.thinking,
   };
-}
-
-async function collectStream(s: AsyncIterable<StreamEvent>): Promise<StreamEvent[]> {
-  const out: StreamEvent[] = [];
-  for await (const e of s) out.push(e);
-  return out;
 }
