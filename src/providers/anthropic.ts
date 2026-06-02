@@ -36,6 +36,9 @@ export function toAnthropicMessages(messages: ChatMessage[]): Array<{ role: "use
       // user or system (folded in as user text)
       role = "user";
       if (m.content) blocks.push({ type: "text", text: m.content });
+      for (const img of m.images ?? []) {
+        blocks.push({ type: "image", source: { type: "base64", media_type: img.mediaType, data: img.data } });
+      }
     }
     if (blocks.length === 0) continue; // Anthropic rejects empty content
     const last = out[out.length - 1];

@@ -1,4 +1,4 @@
-import type { Provider, ChatRequest, ChatMessage, ToolCall, StreamEvent, TokenUsage } from "../providers/types";
+import type { Provider, ChatRequest, ChatMessage, ToolCall, StreamEvent, TokenUsage, ImagePart } from "../providers/types";
 import type { Tool } from "../tools/types";
 import type { PermissionEngine, ApprovalCallback } from "../permissions/modes";
 import { withRetry } from "../utils/retry";
@@ -25,6 +25,8 @@ export interface AgentLoopOptions {
   maxTurns: number;
   systemPrompt?: string;
   prompt: string;
+  /** Images to attach to the initial user message (multimodal input). */
+  images?: ImagePart[];
   /** Prior conversation (provider-format) to continue, enabling multi-turn memory. */
   history?: ChatMessage[];
   permission: PermissionEngine;
@@ -37,7 +39,10 @@ export interface AgentLoopOptions {
 
 export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: number; usage: TokenUsage; aborted: boolean; messages: ChatMessage[] }> {
   const tools = opts.tools;
-  const messages: ChatMessage[] = [...(opts.history ?? []), { role: "user", content: opts.prompt }];
+  const messages: ChatMessage[] = [
+    ...(opts.history ?? []),
+    { role: "user", content: opts.prompt, ...(opts.images?.length ? { images: opts.images } : {}) },
+  ];
   const sys = opts.systemPrompt ?? toolListToSystemPrompt(tools);
 
   const tracker = new ContextTracker({

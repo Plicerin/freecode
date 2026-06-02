@@ -3,7 +3,7 @@ import { friendlyError, makeError } from "./friendly-errors";
 import { zodToJsonSchema } from "./schema-util";
 import { debug } from "../utils/debug";
 
-interface GeminiPart { text?: string; functionCall?: { name: string; args?: Record<string, unknown> }; functionResponse?: unknown }
+interface GeminiPart { text?: string; functionCall?: { name: string; args?: Record<string, unknown> }; functionResponse?: unknown; inlineData?: { mimeType: string; data: string } }
 interface GeminiContent { role: "user" | "model"; parts: GeminiPart[] }
 
 /** Gemini rejects JSON-Schema keywords like additionalProperties/$schema; strip them. */
@@ -53,6 +53,7 @@ export function toGeminiContents(messages: ChatMessage[]): GeminiContent[] {
     } else {
       role = "user";
       if (m.content) parts.push({ text: m.content });
+      for (const img of m.images ?? []) parts.push({ inlineData: { mimeType: img.mediaType, data: img.data } });
     }
     if (parts.length === 0) continue;
     const last = out[out.length - 1];

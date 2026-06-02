@@ -8,6 +8,7 @@ import { createPermissionEngine, type ApprovalCallback, type ApprovalDecision, t
 import { runAgentLoop } from "../agent/loop";
 import { ContextTracker } from "../agent/context";
 import { priceFor } from "../agent/pricing";
+import { extractAttachments } from "../agent/attachments";
 import { newSession, appendEvent, listSessions, resumeSession, readSession, type Session } from "../session/manager";
 import { makeTheme } from "../tui/theme";
 import { debug } from "../utils/debug";
@@ -259,8 +260,11 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     if (!prompt.trim() || busy) return;
     setBusy(true);
     setErrorLine(null);
+    const { images, notes } = extractAttachments(prompt, process.cwd());
+    const failed = notes.filter((n) => !n.startsWith("attached "));
     const id = `m-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-    setMessages((prev) => [...prev, { id, role: "user", text: prompt }]);
+    setMessages((prev) => [...prev, { id, role: "user", text: prompt + (images.length ? `  [${images.length} image(s) attached]` : "") }]);
+    if (failed.length) setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: failed.join("\n") }]);
     appendEvent(sessionRef.current, { kind: "user", text: prompt, ts: new Date().toISOString() });
     let buffer = "";
     const t0 = Date.now();
@@ -273,6 +277,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         model,
         maxTurns: config.maxTurns,
         prompt,
+        images,
         history: conversationRef.current,
         permission,
         promptUser,

@@ -2,11 +2,20 @@ import type { z } from "zod";
 
 export type Role = "system" | "user" | "assistant" | "tool";
 
+export interface ImagePart {
+  /** base64-encoded image bytes (no data: prefix). */
+  data: string;
+  /** MIME type, e.g. "image/png". */
+  mediaType: string;
+}
+
 export interface ChatMessage {
   role: Role;
   content: string;
   toolCallId?: string;
   toolCalls?: ToolCall[];
+  /** Images attached to a user message (multimodal input). */
+  images?: ImagePart[];
   name?: string;
 }
 

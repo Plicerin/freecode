@@ -100,6 +100,10 @@ async function runPrint({ prompt, flags }: { prompt: string; flags: CliFlags }):
   if (summary) process.stderr.write(`[${summary}]\n`);
   tools.push(...mcp.tools);
 
+  const { extractAttachments } = await import("./agent/attachments");
+  const { images, notes } = extractAttachments(prompt, process.cwd());
+  for (const n of notes) process.stderr.write(`[attachment] ${n}\n`);
+
   const cwd = process.cwd();
   const session: Session = opts_or_new(flags.resume, cwd);
   appendEvent(session, { kind: "user", text: prompt, ts: new Date().toISOString() });
@@ -112,6 +116,7 @@ async function runPrint({ prompt, flags }: { prompt: string; flags: CliFlags }):
       model: config.model,
       maxTurns: config.maxTurns,
       prompt,
+      images,
       permission,
       promptUser: (async () => "allow") as ApprovalCallback,
       onEvent: (e) => {
