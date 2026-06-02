@@ -126,7 +126,7 @@ freecode --permission-mode bypass           # skip all prompts
 
 `Bash` · `FileRead` · `FileWrite` · `FileEdit` · `Glob` · `Grep` (ripgrep) · `WebSearch` · `WebFetch`
 
-Bash has a denylist for `rm -rf /`, fork bombs, sudo, `mkfs`, `dd if=`, piped shell, `chmod -R 777 /`. Grep wraps `rg` and ignores `.git/`, `node_modules/`, `dist/`.
+Bash has a denylist for `rm -rf /`, fork bombs, sudo, `mkfs`, `dd if=`, piped shell, `chmod -R 777 /`. Grep uses `rg` (ripgrep) when it's on PATH and falls back to a built-in search otherwise; both ignore `.git/`, `node_modules/`, `dist/`.
 
 ## Permissions
 
