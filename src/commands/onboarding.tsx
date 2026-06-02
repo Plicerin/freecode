@@ -1,7 +1,6 @@
 import React, { useState } from "react";
 import type { JSX } from "react";
 import { Box, Text, useInput } from "ink";
-import TextInput from "ink-text-input";
 import { Vault } from "../config/vault";
 import { makeTheme } from "../tui/theme";
 
@@ -21,13 +20,33 @@ const PROVIDERS: ProviderOption[] = [
 
 const theme = makeTheme("dark");
 
+/** A masked single-line input: shows '*' per character + a live count, so you
+ * can see the key landed (and that paste worked) without revealing it. */
+function MaskedKeyInput({ onSubmit }: { onSubmit: (value: string) => void }): JSX.Element {
+  const [val, setVal] = useState("");
+  useInput((input, key) => {
+    if (key.return) { onSubmit(val); return; }
+    if (key.backspace || key.delete) { setVal((v) => v.slice(0, -1)); return; }
+    if (key.ctrl || key.meta) return;
+    const clean = (input || "").replace(/[\x00-\x1F\x7F]/g, ""); // paste-safe; drop control bytes
+    if (clean) setVal((v) => v + clean);
+  });
+  return (
+    <Text>
+      <Text color={theme.user}>› </Text>
+      <Text>{"*".repeat(val.length)}</Text>
+      <Text inverse> </Text>
+      {val.length > 0 && <Text dimColor>  ({val.length} chars)</Text>}
+    </Text>
+  );
+}
+
 export function Onboarding({ onComplete }: { onComplete: () => void }): JSX.Element {
   const [step, setStep] = useState<"select" | "enter" | "done">("select");
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [cursor, setCursor] = useState(0);
   const [queue, setQueue] = useState<string[]>([]);
   const [qIdx, setQIdx] = useState(0);
-  const [draft, setDraft] = useState("");
   const [savedCount, setSavedCount] = useState(0);
   const storedRef = useState<Record<string, string>>({})[0];
 
@@ -66,7 +85,6 @@ export function Onboarding({ onComplete }: { onComplete: () => void }): JSX.Elem
   function submitKey(value: string): void {
     const id = queue[qIdx]!;
     if (value.trim()) storedRef[id] = value.trim();
-    setDraft("");
     if (qIdx + 1 < queue.length) setQIdx((i) => i + 1);
     else finish(storedRef);
   }
@@ -102,8 +120,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void }): JSX.Elem
             <Text dimColor> (enter to skip):</Text>
           </Text>
           <Box marginTop={1}>
-            <Text color={theme.user}>› </Text>
-            <TextInput value={draft} onChange={setDraft} onSubmit={submitKey} mask="•" />
+            <MaskedKeyInput key={qIdx} onSubmit={submitKey} />
           </Box>
         </Box>
       )}
