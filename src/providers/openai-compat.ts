@@ -77,9 +77,16 @@ export class OpenAICompatProvider implements Provider {
         ...req.messages.map(toOpenAIMessage),
       ],
       stream: true,
-      max_tokens: req.maxTokens ?? 4096,
-      temperature: req.temperature ?? 0.7,
     };
+    const maxTokens = req.maxTokens ?? 4096;
+    if (usesMaxCompletionTokens(req.model)) {
+      // GPT-5 family and o-series reasoning models renamed the cap to
+      // max_completion_tokens and only accept the default temperature.
+      body.max_completion_tokens = maxTokens;
+    } else {
+      body.max_tokens = maxTokens;
+      body.temperature = req.temperature ?? 0.7;
+    }
     if (req.tools && req.tools.length > 0 && this.opts.supportsTools) {
       body.tools = req.tools.map((t) => ({
         type: "function",
@@ -168,6 +175,15 @@ export class OpenAICompatProvider implements Provider {
     }
     yield { type: "end", reason: "end_turn" };
   }
+}
+
+/**
+ * GPT-5 family and o-series reasoning models (o1/o3/o4...) use
+ * `max_completion_tokens` instead of `max_tokens` and reject a custom
+ * temperature. Match on the model name so it works on any OpenAI-style endpoint.
+ */
+function usesMaxCompletionTokens(model: string): boolean {
+  return /gpt-5/i.test(model) || /^o[1-9]/i.test(model);
 }
 
 function toOpenAIMessage(m: ChatMessage): Record<string, unknown> {
