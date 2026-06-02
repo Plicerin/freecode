@@ -10,39 +10,56 @@ const MEDIA: Record<string, string> = {
   ".webp": "image/webp",
 };
 
-const MAX_BYTES = 10 * 1024 * 1024; // 10 MB per image
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10 MB per image
+const MAX_TEXT_BYTES = 256 * 1024; // 256 KB per inlined text file
+
+export interface FileAttachment {
+  path: string;
+  content: string;
+}
 
 /**
- * Find @path tokens in the user's text that point to image files, read and
- * base64-encode them into ImageParts. Supports @path and @"quoted path".
- * The original text is returned unchanged (the reference stays as context).
+ * Find @path tokens that point to real files. Images become base64 ImageParts;
+ * other existing files have their text contents inlined (FileAttachment).
+ * Non-image @tokens that don't resolve to a file are ignored (so "@mention"
+ * in prose isn't treated as an attachment). The text is returned unchanged.
  */
-export function extractAttachments(text: string, cwd: string): { text: string; images: ImagePart[]; notes: string[] } {
+export function extractAttachments(
+  text: string,
+  cwd: string,
+): { text: string; images: ImagePart[]; files: FileAttachment[]; notes: string[] } {
   const images: ImagePart[] = [];
+  const files: FileAttachment[] = [];
   const notes: string[] = [];
   const tokenRe = /@(?:"([^"]+)"|([^\s"]+))/g;
   let m: RegExpExecArray | null;
   while ((m = tokenRe.exec(text)) !== null) {
     const p = m[1] ?? m[2];
     if (!p) continue;
+    const abs = isAbsolute(p) ? p : resolve(cwd, p);
     const ext = extname(p).toLowerCase();
     const mediaType = MEDIA[ext];
-    if (!mediaType) continue; // only image attachments
-    const abs = isAbsolute(p) ? p : resolve(cwd, p);
-    if (!existsSync(abs) || !statSync(abs).isFile()) {
-      notes.push(`attachment not found: ${p}`);
-      continue;
+    const isFile = existsSync(abs) && statSync(abs).isFile();
+
+    if (mediaType) {
+      // image attachment
+      if (!isFile) { notes.push(`attachment not found: ${p}`); continue; }
+      if (statSync(abs).size > MAX_IMAGE_BYTES) { notes.push(`image too large (>10MB): ${p}`); continue; }
+      try {
+        images.push({ data: readFileSync(abs).toString("base64"), mediaType });
+        notes.push(`attached ${p}`);
+      } catch { notes.push(`failed to read: ${p}`); }
+    } else if (isFile) {
+      // text-file inclusion
+      if (statSync(abs).size > MAX_TEXT_BYTES) { notes.push(`file too large to inline (>256KB): ${p}`); continue; }
+      try {
+        const buf = readFileSync(abs);
+        if (buf.subarray(0, 8192).includes(0)) { notes.push(`skipped binary file: ${p}`); continue; }
+        files.push({ path: p, content: buf.toString("utf8") });
+        notes.push(`included ${p}`);
+      } catch { notes.push(`failed to read: ${p}`); }
     }
-    if (statSync(abs).size > MAX_BYTES) {
-      notes.push(`attachment too large (>10MB): ${p}`);
-      continue;
-    }
-    try {
-      images.push({ data: readFileSync(abs).toString("base64"), mediaType });
-      notes.push(`attached ${p}`);
-    } catch {
-      notes.push(`failed to read: ${p}`);
-    }
+    // non-image token that isn't a file → ignore (likely an @mention in prose)
   }
-  return { text, images, notes };
+  return { text, images, files, notes };
 }

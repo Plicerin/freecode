@@ -52,6 +52,23 @@ export function priceFor(model: string, provider?: string): ModelPrice {
  * Estimate USD cost for accumulated usage. Cached reads/writes are billed at
  * their own rates when the provider reports them separately from `input`.
  */
+const WINDOWS: Array<{ match: RegExp; window: number }> = [
+  { match: /gpt-4\.1/i, window: 1_000_000 },
+  { match: /gpt-5/i, window: 400_000 },
+  { match: /gpt-4o/i, window: 128_000 },
+  { match: /(^|[^a-z])o[1-9]/i, window: 200_000 }, // o-series reasoning
+  { match: /gemini/i, window: 1_000_000 },
+  { match: /claude/i, window: 200_000 },
+];
+
+/** Approximate context window (tokens) for a model; used to size compaction. */
+export function contextWindowFor(model: string): number {
+  for (const w of WINDOWS) {
+    if (w.match.test(model)) return w.window;
+  }
+  return 128_000;
+}
+
 export function estimateCost(usage: TokenUsage, price: ModelPrice): number {
   const m = 1_000_000;
   const cacheRead = price.cacheRead ?? price.input;

@@ -4,6 +4,7 @@ import { buildProvider } from "./providers/registry";
 import { buildToolRegistry } from "./tools/registry";
 import { createPermissionEngine } from "./permissions/modes";
 import { runAgentLoop } from "./agent/loop";
+import { contextWindowFor } from "./agent/pricing";
 import { newSession, appendEvent, listSessions, resumeSession, type Session } from "./session/manager";
 import { type ApprovalCallback } from "./permissions/modes";
 import { debug } from "./utils/debug";
@@ -101,8 +102,11 @@ async function runPrint({ prompt, flags }: { prompt: string; flags: CliFlags }):
   tools.push(...mcp.tools);
 
   const { extractAttachments } = await import("./agent/attachments");
-  const { images, notes } = extractAttachments(prompt, process.cwd());
+  const { images, files, notes } = extractAttachments(prompt, process.cwd());
   for (const n of notes) process.stderr.write(`[attachment] ${n}\n`);
+  const effectivePrompt = files.length
+    ? prompt + "\n\n" + files.map((f) => `Contents of ${f.path}:\n\`\`\`\n${f.content}\n\`\`\``).join("\n\n")
+    : prompt;
 
   const cwd = process.cwd();
   const session: Session = opts_or_new(flags.resume, cwd);
@@ -115,8 +119,10 @@ async function runPrint({ prompt, flags }: { prompt: string; flags: CliFlags }):
       tools,
       model: config.model,
       maxTurns: config.maxTurns,
-      prompt,
+      prompt: effectivePrompt,
       images,
+      contextWindow: contextWindowFor(config.model),
+      contextThreshold: config.contextThreshold,
       permission,
       promptUser: (async () => "allow") as ApprovalCallback,
       onEvent: (e) => {

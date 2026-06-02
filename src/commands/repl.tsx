@@ -7,7 +7,7 @@ import { buildToolRegistry } from "../tools/registry";
 import { createPermissionEngine, type ApprovalCallback, type ApprovalDecision, type ApprovalRequest } from "../permissions/modes";
 import { runAgentLoop } from "../agent/loop";
 import { ContextTracker } from "../agent/context";
-import { priceFor } from "../agent/pricing";
+import { priceFor, contextWindowFor } from "../agent/pricing";
 import { extractAttachments } from "../agent/attachments";
 import { summarizeConversation } from "../agent/summarize";
 import { newSession, appendEvent, listSessions, resumeSession, readSession, type Session } from "../session/manager";
@@ -269,10 +269,15 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     if (!prompt.trim() || busy) return;
     setBusy(true);
     setErrorLine(null);
-    const { images, notes } = extractAttachments(prompt, process.cwd());
-    const failed = notes.filter((n) => !n.startsWith("attached "));
+    const { images, files, notes } = extractAttachments(prompt, process.cwd());
+    const failed = notes.filter((n) => !n.startsWith("attached ") && !n.startsWith("included "));
+    // Inline attached text files into the prompt the model receives (display stays clean).
+    const effectivePrompt = files.length
+      ? prompt + "\n\n" + files.map((f) => `Contents of ${f.path}:\n\`\`\`\n${f.content}\n\`\`\``).join("\n\n")
+      : prompt;
+    const attachSuffix = [images.length ? `${images.length} image(s)` : "", files.length ? `${files.length} file(s)` : ""].filter(Boolean).join(", ");
     const id = `m-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-    setMessages((prev) => [...prev, { id, role: "user", text: prompt + (images.length ? `  [${images.length} image(s) attached]` : "") }]);
+    setMessages((prev) => [...prev, { id, role: "user", text: prompt + (attachSuffix ? `  [${attachSuffix} attached]` : "") }]);
     if (failed.length) setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: failed.join("\n") }]);
     appendEvent(sessionRef.current, { kind: "user", text: prompt, ts: new Date().toISOString() });
     let buffer = "";
@@ -287,9 +292,11 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         tools,
         model,
         maxTurns: config.maxTurns,
-        prompt,
+        prompt: effectivePrompt,
         images,
         history: conversationRef.current,
+        contextWindow: contextWindowFor(model),
+        contextThreshold: config.contextThreshold,
         permission,
         promptUser,
         signal: controller.signal,

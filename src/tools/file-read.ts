@@ -30,7 +30,12 @@ export const FileReadTool: Tool<z.infer<typeof ArgsSchema>> = {
     }
     let text: string;
     try {
-      text = readFileSync(abs, "utf8");
+      const buf = readFileSync(abs);
+      // Binary heuristic: a NUL byte in the first 8KB means it isn't UTF-8 text.
+      if (buf.subarray(0, 8192).includes(0)) {
+        return { ok: false, output: "", error: `Binary file (not UTF-8 text): ${args.path}` };
+      }
+      text = buf.toString("utf8");
     } catch (err) {
       return { ok: false, output: "", error: `Failed to read: ${String(err)}` };
     }
