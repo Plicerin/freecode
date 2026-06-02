@@ -5,6 +5,7 @@ export const HOME = homedir();
 export const APP_DIR = join(HOME, ".freecode");
 export const PROJECTS_DIR = join(APP_DIR, "projects");
 export const SETTINGS_PATH = join(APP_DIR, "settings.json");
+export const VAULT_PATH = join(APP_DIR, "vault.json");
 export const PROFILE_PATH = resolve(process.cwd(), ".freecode-profile.json");
 
 export function encodeProjectPath(cwd: string): string {

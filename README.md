@@ -45,6 +45,18 @@ Without a flag, freecode auto-detects whichever key is set.
 }
 ```
 
+## API key vault
+
+Store provider keys encrypted instead of in plaintext env vars or profiles. Keys live in `~/.freecode/vault.json`, encrypted with AES-256-GCM under a key derived (scrypt) from a master passphrase — no plaintext key ever touches disk.
+
+```bash
+freecode auth set anthropic     # prompts (hidden) for passphrase + key
+freecode auth list              # show which providers have a stored key
+freecode auth remove anthropic
+```
+
+At runtime, set `FREECODE_VAULT_PASSPHRASE` to unlock the vault — that one secret replaces every provider's plaintext key. Key precedence: `CLI --api-key > .freecode-profile.json > vault > env var`. A wrong/absent passphrase just falls through to env vars.
+
 ## Settings priority
 
 `CLI flags > .freecode-profile.json > env vars > ~/.freecode/settings.json`

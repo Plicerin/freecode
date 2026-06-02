@@ -46,6 +46,12 @@ program
   .option("--web-search <provider>", "duckduckgo|tavily|exa|firecrawl");
 
 async function main(): Promise<void> {
+  // `freecode auth …` manages the encrypted key vault (handled before commander).
+  if (process.argv[2] === "auth") {
+    const { runAuth } = await import("./commands/auth");
+    await runAuth(process.argv.slice(3));
+    return;
+  }
   await program.parseAsync(process.argv);
   const opts = program.opts<ParsedArgs>();
   const flags: CliFlags = {

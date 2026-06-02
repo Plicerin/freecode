@@ -4,6 +4,7 @@ import { ProfileSchema, type Profile } from "./schema";
 import { loadJsoncSettings } from "./settings-jsonc";
 import { loadProfile } from "./profile";
 import { detectProviderFromEnv, getEnv } from "../utils/env";
+import { Vault } from "./vault";
 import {
   type ProviderId,
   type ResolvedConfig,
@@ -55,8 +56,22 @@ function profileProvider(profile: Profile, envProvider: ProviderId | undefined):
   return profile.provider ?? envProvider;
 }
 
+/** Read a provider key from the encrypted vault, if it's unlocked via env. */
+function vaultApiKey(provider: ProviderId): string | undefined {
+  const pass = getEnv("FREECODE_VAULT_PASSPHRASE");
+  if (!pass || !Vault.exists()) return undefined;
+  try {
+    return Vault.open(pass).get(provider);
+  } catch {
+    return undefined; // wrong passphrase — fall through to other sources
+  }
+}
+
+// Key precedence: per-project profile key > vault > provider env var.
 function profileApiKey(profile: Profile, provider: ProviderId): string | undefined {
   if (profile.apiKey) return profile.apiKey;
+  const fromVault = vaultApiKey(provider);
+  if (fromVault) return fromVault;
   const envKey = providerEnvKey(provider);
   return envKey ? getEnv(envKey) : undefined;
 }

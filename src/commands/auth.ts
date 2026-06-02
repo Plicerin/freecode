@@ -1,0 +1,86 @@
+import { Vault } from "../config/vault";
+
+function fail(msg: string): never {
+  process.stderr.write(msg + "\n");
+  process.exit(1);
+}
+
+/** Read a line from stdin without echoing it (for passphrases / keys). */
+function promptHidden(question: string): Promise<string> {
+  return new Promise((resolve) => {
+    process.stdout.write(question);
+    const stdin = process.stdin as NodeJS.ReadStream & { setRawMode?: (m: boolean) => void };
+    stdin.setRawMode?.(true);
+    stdin.resume();
+    let buf = "";
+    const onData = (chunk: Buffer): void => {
+      for (const ch of chunk.toString("utf8")) {
+        if (ch === "\r" || ch === "\n") {
+          stdin.setRawMode?.(false);
+          stdin.pause();
+          stdin.off("data", onData);
+          process.stdout.write("\n");
+          resolve(buf);
+          return;
+        } else if (ch === "\x7f" || ch === "\x08") {
+          buf = buf.slice(0, -1);
+        } else if (ch === "\x03") {
+          process.stdout.write("\n");
+          process.exit(130); // Ctrl-C
+        } else if (ch >= " ") {
+          buf += ch;
+        }
+      }
+    };
+    stdin.on("data", onData);
+  });
+}
+
+async function passphrase(): Promise<string> {
+  const env = process.env.FREECODE_VAULT_PASSPHRASE;
+  if (env) return env;
+  const p = await promptHidden(Vault.exists() ? "Vault passphrase: " : "Create a vault passphrase: ");
+  if (!p) fail("A passphrase is required.");
+  return p;
+}
+
+function open(pass: string): Vault {
+  try {
+    return Vault.open(pass);
+  } catch (err) {
+    fail(err instanceof Error ? err.message : String(err));
+  }
+}
+
+/** `freecode auth <set|list|remove> [provider]` */
+export async function runAuth(args: string[]): Promise<void> {
+  const [action, provider] = args;
+  switch (action) {
+    case "set":
+    case "add": {
+      if (!provider) fail("Usage: freecode auth set <provider>");
+      const vault = open(await passphrase());
+      const key = await promptHidden(`API key for ${provider}: `);
+      if (!key.trim()) fail("No key entered.");
+      vault.set(provider, key.trim());
+      process.stdout.write(`✓ Stored ${provider} key in the vault.\n`);
+      break;
+    }
+    case "list":
+    case "ls": {
+      const vault = open(await passphrase());
+      const list = vault.list();
+      process.stdout.write(list.length ? `Stored providers:\n${list.map((p) => `  ${p}`).join("\n")}\n` : "Vault is empty.\n");
+      break;
+    }
+    case "remove":
+    case "rm": {
+      if (!provider) fail("Usage: freecode auth remove <provider>");
+      const vault = open(await passphrase());
+      process.stdout.write(vault.remove(provider) ? `✓ Removed ${provider}.\n` : `No ${provider} key stored.\n`);
+      break;
+    }
+    default:
+      process.stdout.write("Usage: freecode auth <set|list|remove> [provider]\nKeys are stored encrypted in ~/.freecode/vault.json. Set FREECODE_VAULT_PASSPHRASE to unlock at runtime.\n");
+  }
+}
