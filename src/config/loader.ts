@@ -232,6 +232,7 @@ export function loadConfig(opts: LoadOptions): ResolvedConfig {
     enablePromptCache: settings.enablePromptCache ?? DEFAULTS.enablePromptCache,
     enableExtendedThinking: opts.flags.enableExtendedThinking ?? settings.enableExtendedThinking ?? DEFAULTS.enableExtendedThinking,
     mcpServers: settings.mcpServers,
+    hooks: settings.hooks,
     source: {
       provider: provider.source as Source,
       model: modelPick.source as Source,

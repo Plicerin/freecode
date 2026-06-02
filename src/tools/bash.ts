@@ -44,7 +44,7 @@ export function bashShellName(): string {
  * explicitly (shell:true would use cmd.exe, which rejects PowerShell syntax);
  * on Unix we let the default shell interpret the command string.
  */
-function spawnArgs(command: string, shellPath: string | undefined): { file: string; args: string[]; useShell: boolean } {
+export function spawnArgs(command: string, shellPath?: string): { file: string; args: string[]; useShell: boolean } {
   if (IS_WINDOWS) {
     return { file: shellPath ?? "powershell.exe", args: ["-NoProfile", "-NonInteractive", "-Command", command], useShell: false };
   }

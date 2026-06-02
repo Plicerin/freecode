@@ -6,6 +6,8 @@ import { debug } from "../utils/debug";
 import { toolListToSystemPrompt } from "../tools/registry";
 import { ContextTracker } from "./context";
 import { summarizeConversation } from "./summarize";
+import { runHooks } from "./hooks";
+import type { HooksConfig } from "../config/schema";
 
 export interface AgentEvent {
   type: "text_delta" | "tool_call" | "tool_result" | "thinking_delta" | "usage" | "done" | "error" | "approval_needed" | "compacted";
@@ -38,6 +40,7 @@ export interface AgentLoopOptions {
   contextThreshold?: number;
   enablePromptCache?: boolean;
   enableExtendedThinking?: boolean;
+  hooks?: HooksConfig;
 }
 
 export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: number; usage: TokenUsage; aborted: boolean; messages: ChatMessage[] }> {
@@ -188,12 +191,22 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
         debug.warn(`${tool.name} args rejected`, { err: errMsg, raw: call.arguments });
         continue;
       }
+      // PreToolUse hook — can veto the call (non-zero exit blocks it).
+      const pre = await runHooks("PreToolUse", opts.hooks, { event: "PreToolUse", tool: tool.name, arguments: parsed.data, cwd: process.cwd() }, tool.name, opts.signal);
+      if (pre.blocked) {
+        const msg = `Blocked by PreToolUse hook: ${pre.reason}`;
+        messages.push({ role: "tool", toolCallId: call.id, content: msg });
+        opts.onEvent({ type: "tool_result", result: { id: call.id, output: msg, ok: false, durationMs: 0 } });
+        continue;
+      }
       const t0 = Date.now();
       const result = await tool.run(parsed.data, { cwd: process.cwd(), signal: opts.signal });
       const durationMs = Date.now() - t0;
       const payload = result.ok ? result.output : `Error: ${result.error ?? "unknown"}\n${result.output}`;
       messages.push({ role: "tool", toolCallId: call.id, content: payload });
       opts.onEvent({ type: "tool_result", result: { id: call.id, output: payload, ok: result.ok, durationMs } });
+      // PostToolUse hook — observe the result (side effects only; can't block).
+      await runHooks("PostToolUse", opts.hooks, { event: "PostToolUse", tool: tool.name, arguments: parsed.data, result: { ok: result.ok, output: result.output.slice(0, 4000) }, cwd: process.cwd() }, tool.name, opts.signal);
       // Collect any images the tool returned (e.g. ViewImage); they're surfaced
       // AFTER all tool results so the tool-response block stays contiguous
       // (providers reject a user message interleaved between tool results).
@@ -208,6 +221,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
     if (aborted) break;
   }
 
+  await runHooks("Stop", opts.hooks, { event: "Stop", turns, aborted, cwd: process.cwd() }, undefined, opts.signal);
   opts.onEvent({ type: "done", reason: aborted ? "aborted" : turns >= opts.maxTurns ? "max_turns" : "end_turn" });
   return { turns, usage: total, aborted, messages };
 }

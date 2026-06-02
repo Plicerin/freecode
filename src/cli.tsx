@@ -134,6 +134,7 @@ async function runPrint({ prompt, flags }: { prompt: string; flags: CliFlags }):
       contextThreshold: config.contextThreshold,
       enablePromptCache: config.enablePromptCache,
       enableExtendedThinking: config.enableExtendedThinking,
+      hooks: config.hooks,
       permission,
       promptUser: (async () => "allow") as ApprovalCallback,
       onEvent: (e) => {

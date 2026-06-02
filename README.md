@@ -167,6 +167,28 @@ Bash has a denylist for `rm -rf /`, fork bombs, sudo, `mkfs`, `dd if=`, piped sh
 
 Denials are remembered per session, so the same call is not re-prompted on retry.
 
+## Hooks
+
+Run shell commands on lifecycle events via `hooks` in `~/.freecode/settings.json`. Each hook receives the event as JSON on stdin.
+
+```jsonc
+{
+  "hooks": {
+    // veto writes outside the project; non-zero exit blocks the tool
+    "PreToolUse": [{ "matcher": "FileWrite|FileEdit", "command": "node guard.js" }],
+    // auto-format after edits
+    "PostToolUse": [{ "matcher": "FileEdit", "command": "prettier --write ." }],
+    // notify when a turn finishes
+    "Stop": [{ "command": "echo done" }]
+  }
+}
+```
+
+- **PreToolUse** runs before a tool; a **non-zero exit blocks** it (stderr/stdout becomes the reason shown to the model).
+- **PostToolUse** runs after a tool (side effects only — can't block).
+- **Stop** runs when a turn finishes.
+- `matcher` is a regex tested against the tool name; omit it to match every tool.
+
 ## Headless / CI
 
 ```bash

@@ -325,6 +325,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         contextThreshold: config.contextThreshold,
         enablePromptCache: config.enablePromptCache,
         enableExtendedThinking: config.enableExtendedThinking,
+        hooks: config.hooks,
         permission,
         promptUser,
         signal: controller.signal,

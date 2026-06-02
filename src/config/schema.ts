@@ -46,6 +46,15 @@ export const McpServerSchema = z.object({
 });
 export type McpServerConfig = z.infer<typeof McpServerSchema>;
 
+/** A lifecycle hook: a shell command, optionally filtered by tool name. */
+export const HookSchema = z.object({
+  matcher: z.string().optional(), // regex tested against the tool name (default: all)
+  command: z.string().min(1),
+});
+export type HookConfig = z.infer<typeof HookSchema>;
+export const HooksSchema = z.record(z.array(HookSchema)); // keyed by event name
+export type HooksConfig = z.infer<typeof HooksSchema>;
+
 export const SettingsSchema = z.object({
   model: z.string().min(1).optional(),
   permissionMode: PermissionModeSchema.optional(),
@@ -57,6 +66,7 @@ export const SettingsSchema = z.object({
   enableExtendedThinking: z.boolean().optional(),
   extraEnv: z.record(z.string()).optional(),
   mcpServers: z.record(McpServerSchema).optional(),
+  hooks: HooksSchema.optional(),
 });
 export type Settings = z.infer<typeof SettingsSchema>;
 
@@ -73,6 +83,7 @@ export const ResolvedConfigSchema = z.object({
   enablePromptCache: z.boolean().default(true),
   enableExtendedThinking: z.boolean().default(false),
   mcpServers: z.record(McpServerSchema).optional(),
+  hooks: HooksSchema.optional(),
   source: z.object({
     provider: z.enum(["cli", "profile", "env", "settings", "default"]),
     model: z.enum(["cli", "profile", "env", "settings", "default"]),
