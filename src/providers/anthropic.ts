@@ -1,6 +1,49 @@
-import type { ChatRequest, Provider, StreamEvent, TokenUsage } from "./types";
+import type { ChatMessage, ChatRequest, Provider, StreamEvent, TokenUsage, ToolDefinition } from "./types";
 import { friendlyError, makeError } from "./friendly-errors";
+import { zodToJsonSchema } from "./schema-util";
 import { debug } from "../utils/debug";
+
+interface AnthropicBlock { type: string; [k: string]: unknown }
+
+/** Convert tool definitions to Anthropic's tool format. */
+export function toAnthropicTools(tools: ToolDefinition[]): Array<Record<string, unknown>> {
+  return tools.map((t) => ({
+    name: t.name,
+    description: t.description,
+    input_schema: t.parameters ?? zodToJsonSchema(t.schema),
+  }));
+}
+
+/**
+ * Convert freecode messages into Anthropic's content-block format: assistant
+ * tool_use blocks and user tool_result blocks, coalescing consecutive
+ * same-role messages (Anthropic requires alternating roles). Mid-stream system
+ * messages (e.g. a compaction summary) are folded in as user text.
+ */
+export function toAnthropicMessages(messages: ChatMessage[]): Array<{ role: "user" | "assistant"; content: AnthropicBlock[] }> {
+  const out: Array<{ role: "user" | "assistant"; content: AnthropicBlock[] }> = [];
+  for (const m of messages) {
+    let role: "user" | "assistant";
+    const blocks: AnthropicBlock[] = [];
+    if (m.role === "tool") {
+      role = "user";
+      blocks.push({ type: "tool_result", tool_use_id: m.toolCallId ?? "", content: m.content });
+    } else if (m.role === "assistant") {
+      role = "assistant";
+      if (m.content) blocks.push({ type: "text", text: m.content });
+      for (const tc of m.toolCalls ?? []) blocks.push({ type: "tool_use", id: tc.id, name: tc.name, input: tc.arguments });
+    } else {
+      // user or system (folded in as user text)
+      role = "user";
+      if (m.content) blocks.push({ type: "text", text: m.content });
+    }
+    if (blocks.length === 0) continue; // Anthropic rejects empty content
+    const last = out[out.length - 1];
+    if (last && last.role === role) last.content.push(...blocks);
+    else out.push({ role, content: blocks });
+  }
+  return out;
+}
 
 interface AnthropicOptions {
   apiKey?: string;
@@ -41,18 +84,16 @@ export class AnthropicProvider implements Provider {
       return;
     }
     const url = `${this.baseUrl}/v1/messages`;
-    const body = {
+    const body: Record<string, unknown> = {
       model: req.model,
       max_tokens: req.maxTokens ?? 8192,
       system: req.system,
-      messages: req.messages
-        .filter((m) => m.role !== "system")
-        .map((m) => ({
-          role: m.role,
-          content: m.content,
-        })),
+      messages: toAnthropicMessages(req.messages),
       stream: true,
     };
+    if (req.tools && req.tools.length > 0) {
+      body.tools = toAnthropicTools(req.tools);
+    }
     debug.log("anthropic request", { url, model: req.model });
     let resp: Response;
     try {
