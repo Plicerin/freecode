@@ -31,7 +31,7 @@ export interface ReplOptions {
 
 interface UiMessage {
   id: string;
-  role: "user" | "assistant" | "tool" | "system";
+  role: "user" | "assistant" | "tool" | "system" | "ledger";
   text: string;
   toolName?: string;
   ok?: boolean;
@@ -374,6 +374,13 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
             setMessages((prev) => [...prev, { id: `c-${Date.now()}`, role: "system", text: e.text! }]);
           } else if (e.type === "verify" && e.text) {
             setMessages((prev) => [...prev, { id: `vfy-${Date.now()}-${prev.length}`, role: "system", text: e.text! }]);
+          } else if (e.type === "ledger" && e.ledger) {
+            const L = e.ledger;
+            const lines: string[] = [];
+            if (L.verified.length) lines.push(`✓ verified  ${L.verified.join("; ")}`);
+            if (L.observed.length) lines.push(`· observed  ${L.observed.join("; ")}`);
+            if (L.believed.length) lines.push(`~ believed  ${L.believed.join("; ")}`);
+            if (lines.length) setMessages((prev) => [...prev, { id: `led-${Date.now()}-${prev.length}`, role: "ledger", text: lines.join("\n") }]);
           } else if (e.type === "error" && e.error) {
             setErrorLine(e.error);
           }
@@ -663,7 +670,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
                 {m.role === "assistant" && <Text color={theme.hex.assistant}>● </Text>}
                 {m.role === "tool" && <Text color={theme.tool}>⚙ </Text>}
                 {m.role === "system" && <Text color={theme.dim}>· </Text>}
-                <Text color={m.role === "assistant" ? theme.hex.assistant : undefined}>{m.text}</Text>
+                <Text color={m.role === "assistant" ? theme.hex.assistant : m.role === "ledger" ? theme.dim : undefined} dimColor={m.role === "ledger"}>{m.text}</Text>
               </Text>
             </Box>
           ))}

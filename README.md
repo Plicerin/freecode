@@ -203,6 +203,16 @@ freecode tries not to tell you something works until it has watched it work. Aft
 
 The point: the slow part (full tests) stays manual or `strict`; the default gate is fast and legible, so verification never feels like a hung model.
 
+**Provenance ledger.** After a turn that did something, freecode prints a short, machine-derived summary of *what it actually did vs. what it's only assuming* — never parsed from the model's prose:
+
+```
+✓ verified  bun run typecheck passed
+· observed  wrote note.txt; ran `git status`
+~ believed  changed 2 file(s) without running checks — unverified
+```
+
+`verified` = checks that passed · `observed` = tools that actually ran · `believed` = changes asserted but not confirmed. The `believed` line is the honest one — it's where a polished "done" can hide an unchecked guess.
+
 ## Headless / CI
 
 ```bash

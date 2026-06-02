@@ -154,6 +154,12 @@ async function runPrint({ prompt, flags }: { prompt: string; flags: CliFlags }):
           process.stderr.write(`\n[${e.text}]\n`);
         } else if (e.type === "verify" && e.text) {
           process.stderr.write(`\n${e.text}\n`);
+        } else if (e.type === "ledger" && e.ledger) {
+          const L = e.ledger;
+          if (L.verified.length) process.stderr.write(`\n✓ verified  ${L.verified.join("; ")}`);
+          if (L.observed.length) process.stderr.write(`\n· observed  ${L.observed.join("; ")}`);
+          if (L.believed.length) process.stderr.write(`\n~ believed  ${L.believed.join("; ")}`);
+          process.stderr.write("\n");
         } else if (e.type === "error" && e.error) {
           process.stderr.write(`\n[error] ${e.error}\n`);
         }

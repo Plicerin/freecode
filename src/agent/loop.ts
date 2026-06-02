@@ -10,8 +10,14 @@ import { runHooks } from "./hooks";
 import { runVerify, type VerifyPlan } from "./verify";
 import type { HooksConfig } from "../config/schema";
 
+export interface TurnLedger {
+  verified: string[];
+  observed: string[];
+  believed: string[];
+}
+
 export interface AgentEvent {
-  type: "text_delta" | "tool_call" | "tool_result" | "thinking_delta" | "usage" | "done" | "error" | "approval_needed" | "compacted" | "verify";
+  type: "text_delta" | "tool_call" | "tool_result" | "thinking_delta" | "usage" | "done" | "error" | "approval_needed" | "compacted" | "verify" | "ledger";
   text?: string;
   call?: ToolCall;
   result?: { id: string; output: string; ok: boolean; durationMs: number };
@@ -20,6 +26,7 @@ export interface AgentEvent {
   reason?: string;
   tool?: string;
   argsSummary?: string;
+  ledger?: TurnLedger;
 }
 
 export interface AgentLoopOptions {
@@ -81,6 +88,10 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
   let changed = false; // a file-mutating tool succeeded this task
   let verifyAttempts = 0;
   let verifyFailed = false;
+  let verifiedCommands: string[] = []; // checks that actually passed
+
+  // Provenance ledger — machine-derived facts about what the agent really did.
+  const led = { wrote: [] as string[], edited: [] as string[], read: 0, ran: [] as string[], searched: 0, viewed: 0, other: [] as string[] };
 
   while (turns < opts.maxTurns) {
     turns += 1;
@@ -182,6 +193,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
         if (res.ok) {
           opts.onEvent({ type: "verify", text: `✓ Verified — ${res.ranCommands.join(" && ")} passed.` });
           verifyFailed = false;
+          verifiedCommands = res.ranCommands;
           break;
         }
         opts.onEvent({ type: "verify", text: `✗ Verification failed (${res.failedCommand}) — fixing…` });
@@ -237,6 +249,15 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
       const durationMs = Date.now() - t0;
       const payload = result.ok ? result.output : `Error: ${result.error ?? "unknown"}\n${result.output}`;
       if (result.ok && (tool.name === "FileWrite" || tool.name === "FileEdit")) changed = true;
+      // Record the action for the provenance ledger (facts, not the model's prose).
+      const a = parsed.data as { path?: string; command?: string };
+      if (tool.name === "FileWrite" && result.ok) led.wrote.push(a.path ?? "?");
+      else if (tool.name === "FileEdit" && result.ok) led.edited.push(a.path ?? "?");
+      else if (tool.name === "FileRead") led.read += 1;
+      else if (tool.name === "Bash") led.ran.push(String(a.command ?? "").slice(0, 40));
+      else if (tool.name === "Glob" || tool.name === "Grep") led.searched += 1;
+      else if (tool.name === "ViewImage") led.viewed += 1;
+      else led.other.push(tool.name);
       messages.push({ role: "tool", toolCallId: call.id, content: payload });
       opts.onEvent({ type: "tool_result", result: { id: call.id, output: payload, ok: result.ok, durationMs } });
       // PostToolUse hook — observe the result (side effects only; can't block).
@@ -258,6 +279,33 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
   if (verifyFailed && !aborted) {
     opts.onEvent({ type: "verify", text: `⚠ Checks still failing after ${verifyAttempts} attempt(s) — left as-is for you to review.` });
   }
+
+  // Provenance ledger: what was Verified (checks passed) / Observed (tools that
+  // actually ran) / Believed (asserted but unchecked). Derived from real events.
+  {
+    const names = (arr: string[]): string => (arr.length <= 2 ? arr.join(", ") : `${arr.length} files`);
+    const observed: string[] = [];
+    if (led.wrote.length) observed.push(`wrote ${names(led.wrote)}`);
+    if (led.edited.length) observed.push(`edited ${names(led.edited)}`);
+    if (led.read) observed.push(`read ${led.read} file(s)`);
+    if (led.ran.length) observed.push(`ran ${led.ran.length <= 2 ? led.ran.map((c) => `\`${c}\``).join(", ") : `${led.ran.length} commands`}`);
+    if (led.searched) observed.push(`searched ${led.searched}×`);
+    if (led.viewed) observed.push(`viewed ${led.viewed} image(s)`);
+    if (led.other.length) observed.push(`used ${[...new Set(led.other)].join(", ")}`);
+
+    const verified = verifiedCommands.map((c) => `${c} passed`);
+    const believed: string[] = [];
+    const changedCount = led.wrote.length + led.edited.length;
+    if (changedCount > 0 && verifiedCommands.length === 0 && !verifyFailed) {
+      believed.push(`changed ${changedCount} file(s) without running checks — unverified`);
+    }
+    if (verifyFailed) believed.push("checks failing — changes unconfirmed");
+
+    if (observed.length || verified.length || believed.length) {
+      opts.onEvent({ type: "ledger", ledger: { verified, observed, believed } });
+    }
+  }
+
   await runHooks("Stop", opts.hooks, { event: "Stop", turns, aborted, cwd: process.cwd() }, undefined, opts.signal);
   opts.onEvent({ type: "done", reason: aborted ? "aborted" : turns >= opts.maxTurns ? "max_turns" : "end_turn" });
   return { turns, usage: total, aborted, messages };
