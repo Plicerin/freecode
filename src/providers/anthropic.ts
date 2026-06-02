@@ -57,7 +57,7 @@ const DEFAULT_BASE = "https://api.anthropic.com";
 
 interface ApiEvent {
   type: string;
-  delta?: { type?: string; text?: string; thinking?: string; stop_reason?: string };
+  delta?: { type?: string; text?: string; thinking?: string; partial_json?: string; stop_reason?: string };
   content_block?: { type: string; text?: string; thinking?: string; id?: string; name?: string; input?: unknown };
   index?: number;
   message?: {
@@ -153,8 +153,9 @@ export class AnthropicProvider implements Provider {
           } else if (evt.delta.type === "thinking_delta" && evt.delta.thinking) {
             yield { type: "thinking_delta", delta: evt.delta.thinking };
           } else if (evt.delta.type === "input_json_delta" && typeof evt.index === "number") {
+            // Anthropic carries tool-call args here in `partial_json`, not `text`.
             const tc = toolCalls.get(evt.index);
-            if (tc) tc.inputJson += evt.delta.text ?? "";
+            if (tc) tc.inputJson += evt.delta.partial_json ?? "";
           }
         } else if (evt.type === "content_block_stop" && typeof evt.index === "number") {
           const tc = toolCalls.get(evt.index);
