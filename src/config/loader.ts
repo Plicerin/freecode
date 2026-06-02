@@ -95,10 +95,10 @@ function defaultModelFor(p: ProviderId): string {
   switch (p) {
     case "anthropic": return "claude-sonnet-4-5";
     case "openai": return "gpt-4o";
-    case "gemini": return "gemini-2.0-flash";
+    case "gemini": return "gemini-2.5-flash";
     case "github-models": return "gpt-4o";
     case "bedrock": return "anthropic.claude-sonnet-4-5-20250929";
-    case "vertex": return "gemini-2.0-flash";
+    case "vertex": return "gemini-2.5-flash";
     case "ollama": return "llama3.2";
     case "lmstudio": return "local-model";
     case "nim": return "meta/llama-3.1-70b-instruct";
