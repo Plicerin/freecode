@@ -11,6 +11,7 @@ import { priceFor, contextWindowFor } from "../agent/pricing";
 import { extractAttachments } from "../agent/attachments";
 import { summarizeConversation } from "../agent/summarize";
 import { Vault } from "../config/vault";
+import { loadCustomCommands, expandCommand } from "./custom-commands";
 import { newSession, appendEvent, listSessions, resumeSession, readSession, type Session } from "../session/manager";
 import { makeTheme } from "../tui/theme";
 import { debug } from "../utils/debug";
@@ -210,6 +211,12 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   );
   const sessionRef = useRef<Session>(undefined as unknown as Session);
   const conversationRef = useRef<ChatMessage[]>([]); // running provider-format history
+
+  const customCommands = useMemo(() => loadCustomCommands(process.cwd()), []);
+  const slashNames = useMemo(
+    () => [...SLASH_COMMANDS, ...[...customCommands.keys()].map((n) => `/${n}`)],
+    [customCommands],
+  );
 
   const [messages, setMessages] = useState<UiMessage[]>([]);
   const [model, setModel] = useState(config.model);
@@ -465,7 +472,9 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         break;
       }
       case "/help": {
-        setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: SLASH_COMMANDS.join("\n") }]);
+        const custom = [...customCommands.values()].map((c) => `${`/${c.name}`}${c.description ? ` — ${c.description}` : ""} (${c.source})`);
+        const text = SLASH_COMMANDS.join("\n") + (custom.length ? `\n\nCustom commands:\n${custom.join("\n")}` : "");
+        setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text }]);
         break;
       }
       case "/compact": {
@@ -492,8 +501,14 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         }
         break;
       }
-      default:
-        setErrorLine(`Unknown command: ${name}`);
+      default: {
+        const custom = customCommands.get((name ?? "").replace(/^\//, ""));
+        if (custom) {
+          void submit(expandCommand(custom.body, arg));
+        } else {
+          setErrorLine(`Unknown command: ${name}`);
+        }
+      }
     }
   }
 
@@ -551,9 +566,9 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     if (key.leftArrow) { setEditor((e) => ({ ...e, cursor: Math.max(0, e.cursor - 1) })); return; }
     if (key.rightArrow) { setEditor((e) => ({ ...e, cursor: Math.min(e.text.length, e.cursor + 1) })); return; }
     if (key.tab) {
-      // autocomplete slash command
+      // autocomplete slash command (built-in + custom)
       if (input.startsWith("/")) {
-        const match = SLASH_COMMANDS.find((c) => c.startsWith(input));
+        const match = slashNames.find((c) => c.startsWith(input));
         if (match) setEditor({ text: match + " ", cursor: match.length + 1 });
       }
       return;

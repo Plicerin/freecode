@@ -135,6 +135,20 @@ freecode --thinking                          # enable extended thinking / reason
 | `/help`    | List commands                                 |
 | `/compact` | Force context compaction                      |
 
+### Custom slash commands
+
+Drop Markdown files in `./.freecode/commands/` (project) or `~/.freecode/commands/` (user) to define your own commands — the filename becomes the command name. Invoking `/<name> [args]` expands the file and sends it as a prompt.
+
+```markdown
+<!-- .freecode/commands/review.md -->
+---
+description: Review a file for bugs
+---
+Review $ARGUMENTS for correctness bugs and suggest fixes.
+```
+
+`$ARGUMENTS` is replaced with everything after the command; `$1`, `$2`, … with positional args. Project commands override same-named user ones, and they show up in `/help` and Tab-completion.
+
 ## Keyboard
 
 `Ctrl+C` exit · `Ctrl+U` clear input · `Ctrl+T` toggle tasks sidebar · `Tab` autocomplete slash · `Enter` submit
