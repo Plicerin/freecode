@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { TokenUsage, ChatMessage } from "../providers/types";
+import { estimateCost, type ModelPrice } from "./pricing";
 import { debug } from "../utils/debug";
 
 export interface CompactionResult {
@@ -17,11 +18,13 @@ export class ContextTracker extends EventEmitter {
   private usage: TokenUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, thinking: 0 };
   private threshold: number;
   private windowSize: number;
+  private pricing: ModelPrice;
 
-  constructor(opts: { windowSize?: number; threshold?: number } = {}) {
+  constructor(opts: { windowSize?: number; threshold?: number; pricing?: ModelPrice } = {}) {
     super();
     this.windowSize = opts.windowSize ?? 200_000;
     this.threshold = opts.threshold ?? 0.8;
+    this.pricing = opts.pricing ?? { input: 3, output: 15 };
   }
 
   record(u: TokenUsage): void {
@@ -58,8 +61,15 @@ export class ContextTracker extends EventEmitter {
     }
     const head = messages[0];
     const tailCount = Math.max(2, Math.floor(messages.length * 0.3));
-    const tail = messages.slice(-tailCount);
-    const toSummarize = messages.slice(1, -tailCount);
+    let tailStart = messages.length - tailCount;
+    // Don't let the kept tail begin with an orphaned tool result (a `tool`
+    // message whose preceding assistant tool_calls would be summarized away) —
+    // providers reject that. Advance to the next clean boundary.
+    while (tailStart < messages.length && messages[tailStart]?.role === "tool") {
+      tailStart += 1;
+    }
+    const tail = messages.slice(tailStart);
+    const toSummarize = messages.slice(1, tailStart);
     if (toSummarize.length === 0) {
       return { messages, removedCount: 0, summaryTokens: 0 };
     }
@@ -77,9 +87,6 @@ export class ContextTracker extends EventEmitter {
   }
 
   costUsd(): number {
-    // Rough blended estimate — caller should refine per-model pricing.
-    const inputCost = (this.usage.input / 1_000_000) * 3;
-    const outputCost = (this.usage.output / 1_000_000) * 15;
-    return inputCost + outputCost;
+    return estimateCost(this.usage, this.pricing);
   }
 }

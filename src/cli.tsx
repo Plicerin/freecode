@@ -112,6 +112,8 @@ async function runPrint({ prompt, flags }: { prompt: string; flags: CliFlags }):
         process.stderr.write(`\n[tool] ${e.call.name}(${JSON.stringify(e.call.arguments).slice(0, 120)})\n`);
       } else if (e.type === "tool_result" && e.result) {
         process.stderr.write(`[result] ok=${e.result.ok} bytes=${e.result.output.length}\n`);
+      } else if (e.type === "compacted" && e.text) {
+        process.stderr.write(`\n[${e.text}]\n`);
       } else if (e.type === "error" && e.error) {
         process.stderr.write(`\n[error] ${e.error}\n`);
       }

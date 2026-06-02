@@ -7,6 +7,7 @@ import { buildToolRegistry } from "../tools/registry";
 import { createPermissionEngine, type ApprovalCallback, type ApprovalDecision, type ApprovalRequest } from "../permissions/modes";
 import { runAgentLoop } from "../agent/loop";
 import { ContextTracker } from "../agent/context";
+import { priceFor } from "../agent/pricing";
 import { newSession, appendEvent, listSessions, resumeSession, readSession, type Session } from "../session/manager";
 import { makeTheme } from "../tui/theme";
 import { debug } from "../utils/debug";
@@ -148,7 +149,12 @@ export function Repl({ flags, resumeId, initialPrompt }: ReplOptions): JSX.Eleme
     () => createPermissionEngine(config.permissionMode, (async () => "allow") as ApprovalCallback),
     [config.permissionMode],
   );
-  const trackerRef = useRef(new ContextTracker({ threshold: config.contextThreshold }));
+  const trackerRef = useRef(
+    new ContextTracker({
+      threshold: config.contextThreshold,
+      pricing: priceFor(config.model, config.provider),
+    }),
+  );
   const sessionRef = useRef<Session>(undefined as unknown as Session);
 
   const [messages, setMessages] = useState<UiMessage[]>([]);
@@ -238,6 +244,8 @@ export function Repl({ flags, resumeId, initialPrompt }: ReplOptions): JSX.Eleme
           } else if (e.type === "usage" && e.usage) {
             trackerRef.current.record(e.usage);
             setCostUsd(trackerRef.current.costUsd());
+          } else if (e.type === "compacted" && e.text) {
+            setMessages((prev) => [...prev, { id: `c-${Date.now()}`, role: "system", text: e.text! }]);
           } else if (e.type === "error" && e.error) {
             setErrorLine(e.error);
           }

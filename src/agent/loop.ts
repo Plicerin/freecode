@@ -4,9 +4,10 @@ import type { PermissionEngine, ApprovalCallback } from "../permissions/modes";
 import { withRetry } from "../utils/retry";
 import { debug } from "../utils/debug";
 import { toolListToSystemPrompt } from "../tools/registry";
+import { ContextTracker } from "./context";
 
 export interface AgentEvent {
-  type: "text_delta" | "tool_call" | "tool_result" | "thinking_delta" | "usage" | "done" | "error" | "approval_needed";
+  type: "text_delta" | "tool_call" | "tool_result" | "thinking_delta" | "usage" | "done" | "error" | "approval_needed" | "compacted";
   text?: string;
   call?: ToolCall;
   result?: { id: string; output: string; ok: boolean; durationMs: number };
@@ -37,6 +38,35 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
   const messages: ChatMessage[] = [{ role: "user", content: opts.prompt }];
   const sys = opts.systemPrompt ?? toolListToSystemPrompt(tools);
 
+  const tracker = new ContextTracker({
+    windowSize: opts.contextWindow,
+    threshold: opts.contextThreshold,
+  });
+
+  // Summarize older messages by asking the provider for a concise recap.
+  const summarize = async (msgs: ChatMessage[]): Promise<string> => {
+    const summaryReq: ChatRequest = {
+      model: opts.model,
+      system: "You compress conversations. Produce a concise summary of the conversation below, preserving key facts, decisions, file paths, command results, and any unfinished tasks. Output only the summary text.",
+      messages: [...msgs, { role: "user", content: "Summarize everything above concisely." }],
+      stream: true,
+      maxTokens: 1024,
+      signal: opts.signal,
+    };
+    const evs = await collectStream(opts.provider.stream(summaryReq));
+    return evs
+      .filter((e): e is Extract<StreamEvent, { type: "text_delta" }> => e.type === "text_delta")
+      .map((e) => e.delta)
+      .join("")
+      .trim();
+  };
+
+  const windowSize = opts.contextWindow ?? 200_000;
+  const threshold = opts.contextThreshold ?? 0.8;
+  // Approximate live context size = tokens sent+produced on the most recent
+  // turn (the whole history is re-sent each turn, so this tracks the window).
+  let contextTokens = 0;
+
   let total: TokenUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, thinking: 0 };
   let turns = 0;
   let aborted = false;
@@ -44,6 +74,22 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
   while (turns < opts.maxTurns) {
     turns += 1;
     if (opts.signal?.aborted) { aborted = true; break; }
+
+    // Auto-compact when the context window fills up (SPEC V14).
+    if (contextTokens >= windowSize * threshold && messages.length > 4) {
+      try {
+        const result = await tracker.compact(messages, summarize);
+        if (result.removedCount > 0) {
+          messages.splice(0, messages.length, ...result.messages);
+          opts.onEvent({
+            type: "compacted",
+            text: `Context auto-compacted: summarized ${result.removedCount} older messages (~${result.summaryTokens} tokens).`,
+          });
+        }
+      } catch (err) {
+        debug.warn("compaction failed; continuing without it", { err: String(err) });
+      }
+    }
     const req: ChatRequest = {
       model: opts.model,
       system: sys,
@@ -82,6 +128,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
         case "usage":
           if (e.usage) {
             total = sumUsage(total, e.usage);
+            contextTokens = e.usage.input + e.usage.output;
             opts.onEvent({ type: "usage", usage: e.usage });
           }
           break;
