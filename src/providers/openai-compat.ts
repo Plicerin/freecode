@@ -95,7 +95,9 @@ export class OpenAICompatProvider implements Provider {
     }
     if (!resp.ok || !resp.body) {
       const text = await resp.text().catch(() => "");
-      throw friendlyError(new Error(`${resp.status} ${text}`), this.id);
+      const err = new Error(`${resp.status} ${text}`) as Error & { status?: number };
+      err.status = resp.status;
+      throw friendlyError(err, this.id);
     }
 
     const reader = resp.body.getReader();

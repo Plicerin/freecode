@@ -3,8 +3,15 @@ import { MockProvider } from "./mock";
 import { AnthropicProvider } from "./anthropic";
 import { OpenAICompatProvider } from "./openai-compat";
 import { GeminiProvider } from "./gemini";
+import { UnimplementedProvider } from "./unimplemented";
 import type { ResolvedConfig } from "../config/schema";
 import { debug } from "../utils/debug";
+
+/** OpenAI-compatible endpoints live under /v1; ensure the base URL has it. */
+function ensureV1(url: string): string {
+  const trimmed = url.replace(/\/+$/, "");
+  return /\/v\d+$/.test(trimmed) ? trimmed : `${trimmed}/v1`;
+}
 
 export function buildProvider(config: ResolvedConfig): Provider {
   const { provider, baseUrl, apiKey, model } = config;
@@ -32,10 +39,18 @@ export function buildProvider(config: ResolvedConfig): Provider {
     case "lmstudio":
       return new OpenAICompatProvider("lmstudio", "LM Studio", {
         apiKey,
-        baseUrl: baseUrl ?? "http://127.0.0.1:1234/v1",
+        baseUrl: ensureV1(baseUrl ?? "http://127.0.0.1:1234/v1"),
         providerName: "lmstudio",
         defaultModel: model,
         authHeader: "lmstudio",
+      });
+    case "ollama":
+      return new OpenAICompatProvider("ollama", "Ollama", {
+        apiKey,
+        baseUrl: ensureV1(baseUrl ?? "http://127.0.0.1:11434/v1"),
+        providerName: "ollama",
+        defaultModel: model,
+        authHeader: "none",
       });
     case "nim":
       return new OpenAICompatProvider("nim", "NVIDIA NIM", {
@@ -49,9 +64,9 @@ export function buildProvider(config: ResolvedConfig): Provider {
       return new GeminiProvider({ apiKey, baseUrl });
     case "bedrock":
     case "vertex":
-    case "ollama":
-      // Real impls deferred — fall back to mock so the app runs with zero config.
-      // V11 satisfied: working stub ships, no API key needed to launch.
+      // Not implemented yet — fail honestly rather than silently returning mock output.
+      return new UnimplementedProvider(provider);
+    case "mock":
       return new MockProvider();
     default:
       return new MockProvider();

@@ -102,6 +102,7 @@ function defaultModelFor(p: ProviderId): string {
     case "ollama": return "llama3.2";
     case "lmstudio": return "local-model";
     case "nim": return "meta/llama-3.1-70b-instruct";
+    case "mock": return "mock-1";
     default: return "claude-sonnet-4-5";
   }
 }
