@@ -83,7 +83,7 @@ export class OpenAICompatProvider implements Provider {
     if (req.tools && req.tools.length > 0 && this.opts.supportsTools) {
       body.tools = req.tools.map((t) => ({
         type: "function",
-        function: { name: t.name, description: t.description, parameters: zodToJsonShape(t.schema) },
+        function: { name: t.name, description: t.description, parameters: t.parameters ?? zodToJsonShape(t.schema) },
       }));
     }
     debug.log("openai-compat request", { url, model: req.model, provider: this.id });

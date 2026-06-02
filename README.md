@@ -65,6 +65,34 @@ Without a flag, freecode auto-detects whichever key is set.
 }
 ```
 
+## MCP servers
+
+freecode is an MCP (Model Context Protocol) client. Declare stdio servers under `mcpServers` in `~/.freecode/settings.json` and their tools are loaded at startup and offered to the model alongside the built-ins:
+
+```jsonc
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/project"]
+    },
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": { "GITHUB_TOKEN": "ghp_..." },
+      "disabled": false
+    }
+  }
+}
+```
+
+- Tools are namespaced `<server>__<tool>` to avoid collisions.
+- MCP tools always require approval (permission `confirm`) — they're external code.
+- A server that fails to start is reported and skipped; the rest keep working.
+- `/mcp` in the REPL lists connected servers and their tools.
+
+Currently supported transport: **stdio** (SSE/HTTP transport is planned).
+
 ## CLI flags
 
 ```text
@@ -86,6 +114,7 @@ freecode --permission-mode bypass           # skip all prompts
 | `/resume`  | List sessions or resume by id                 |
 | `/context` | Show token usage + cost                       |
 | `/provider`| Show or switch provider                       |
+| `/mcp`     | List connected MCP servers and their tools    |
 | `/help`    | List commands                                 |
 | `/compact` | Force context compaction                      |
 
@@ -144,6 +173,6 @@ Retries use exponential backoff with jitter. `CLAUDE_DEBUG=1` writes verbose log
 
 This is a working v0.1. See `SPEC.md` for the full design.
 
-**Working:** real providers — Anthropic, OpenAI-compat (covers OpenAI / GitHub Models / LM Studio / NVIDIA NIM), Gemini, and **Ollama** (local, via its OpenAI-compatible API); plus an explicit `mock` provider for offline demos. Settings priority + JSONC + hot-reload, sessions + /new + /resume, 8 tools, permission engine with interactive approval prompts (allow / allow-always / deny), denylist, REPL with banner + info box + slash commands + keybinds, dark/light theme, agent loop with streaming + tool exec + retry, **auto-compaction** when the context window fills, **per-model cost** estimation (local models free), friendly error mapping, --print headless mode, 24 unit tests.
+**Working:** real providers — Anthropic, OpenAI-compat (covers OpenAI / GitHub Models / LM Studio / NVIDIA NIM), Gemini, and **Ollama** (local, via its OpenAI-compatible API); plus an explicit `mock` provider for offline demos. Settings priority + JSONC + hot-reload, sessions + /new + /resume, 8 built-in tools + **MCP client** (stdio servers, tools loaded at startup), permission engine with interactive approval prompts (allow / allow-always / deny), denylist, REPL with banner + info box + slash commands + keybinds, dark/light theme, agent loop with streaming + tool exec + retry, **auto-compaction** when the context window fills, **per-model cost** estimation (local models free), friendly error mapping, --print headless mode, 27 unit tests.
 
 **Not implemented yet (fail honestly — no fake output):** AWS Bedrock (needs SigV4 signing) and Google Vertex (needs service-account auth) return a clear "not implemented" error. Also deferred: gRPC bidirectional stream (`serve` is a port-binding placeholder), spinner shimmer component, prompt-cache markers in provider requests.

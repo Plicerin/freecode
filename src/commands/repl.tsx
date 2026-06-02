@@ -11,11 +11,15 @@ import { priceFor } from "../agent/pricing";
 import { newSession, appendEvent, listSessions, resumeSession, readSession, type Session } from "../session/manager";
 import { makeTheme } from "../tui/theme";
 import { debug } from "../utils/debug";
+import type { Tool } from "../tools/types";
+import type { McpServerStatus } from "../mcp/manager";
 
 export interface ReplOptions {
   flags?: CliFlags;
   resumeId?: string;
   initialPrompt?: string;
+  extraTools?: Tool[];
+  mcpStatus?: McpServerStatus[];
 }
 
 interface UiMessage {
@@ -26,7 +30,7 @@ interface UiMessage {
   ok?: boolean;
 }
 
-const SLASH_COMMANDS = ["/model", "/new", "/resume", "/context", "/provider", "/help", "/compact"];
+const SLASH_COMMANDS = ["/model", "/new", "/resume", "/context", "/provider", "/mcp", "/help", "/compact"];
 
 // 5-row block font for the startup banner.
 const FONT: Record<string, string[]> = {
@@ -123,19 +127,36 @@ function Intro({ provider, model, endpoint, isLocal, theme }: IntroProps): JSX.E
 }
 
 export async function startRepl(opts: ReplOptions = {}): Promise<void> {
+  const config = loadConfig({ flags: opts.flags ?? {} });
+  const { McpManager } = await import("../mcp/manager");
+  const mcp = new McpManager();
+  await mcp.startAll(config.mcpServers);
+
   const { render } = await import("ink");
-  const instance = render(<Repl flags={opts.flags ?? {}} resumeId={opts.resumeId} initialPrompt={opts.initialPrompt} />);
-  await instance.waitUntilExit();
+  const instance = render(
+    <Repl
+      flags={opts.flags ?? {}}
+      resumeId={opts.resumeId}
+      initialPrompt={opts.initialPrompt}
+      extraTools={mcp.tools}
+      mcpStatus={mcp.status}
+    />,
+  );
+  try {
+    await instance.waitUntilExit();
+  } finally {
+    await mcp.stopAll();
+  }
 }
 
-export function Repl({ flags, resumeId, initialPrompt }: ReplOptions): JSX.Element {
+export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: ReplOptions): JSX.Element {
   const { exit } = useApp();
   const config = useMemo(() => loadConfig({ flags: flags ?? {} }), [flags]);
   const theme = useMemo(() => makeTheme(config.theme), [config.theme]);
   const provider = useMemo(() => buildProvider(config), [config]);
   const tools = useMemo(
-    () =>
-      buildToolRegistry({
+    () => [
+      ...buildToolRegistry({
         webSearch: {
           tavilyKey: process.env.TAVILY_API_KEY,
           exaKey: process.env.EXA_API_KEY,
@@ -143,7 +164,9 @@ export function Repl({ flags, resumeId, initialPrompt }: ReplOptions): JSX.Eleme
           defaultBackend: config.webSearchProvider,
         },
       }),
-    [config.webSearchProvider],
+      ...(extraTools ?? []),
+    ],
+    [config.webSearchProvider, extraTools],
   );
   const permission = useMemo(
     () => createPermissionEngine(config.permissionMode, (async () => "allow") as ApprovalCallback),
@@ -199,6 +222,14 @@ export function Repl({ flags, resumeId, initialPrompt }: ReplOptions): JSX.Eleme
       }
     } else {
       sessionRef.current = newSession(cwd);
+    }
+    if (mcpStatus && mcpStatus.length > 0) {
+      const ok = mcpStatus.filter((s) => s.ok);
+      const toolCount = ok.reduce((n, s) => n + s.toolCount, 0);
+      const failed = mcpStatus.filter((s) => !s.ok);
+      let text = `MCP: ${ok.length}/${mcpStatus.length} server(s) connected, ${toolCount} tool(s) available`;
+      if (failed.length) text += ` — failed: ${failed.map((s) => `${s.name} (${s.error})`).join("; ")}`;
+      setMessages((prev) => [...prev, { id: "mcp-init", role: "system", text }]);
     }
     if (initialPrompt) {
       void submit(initialPrompt);
@@ -310,6 +341,18 @@ export function Repl({ flags, resumeId, initialPrompt }: ReplOptions): JSX.Eleme
           setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Provider switch to ${arg} — restart with --provider ${arg} (env reload required for live switch)` }]);
         } else {
           setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Provider: ${config.provider}\nBase URL: ${config.baseUrl ?? "(default)"}\nModel: ${config.model}` }]);
+        }
+        break;
+      }
+      case "/mcp": {
+        if (!mcpStatus || mcpStatus.length === 0) {
+          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "No MCP servers configured. Add them under \"mcpServers\" in ~/.freecode/settings.json." }]);
+        } else {
+          const lines = mcpStatus.map((s) =>
+            s.ok ? `  ● ${s.name} — ${s.toolCount} tool(s)` : `  ✗ ${s.name} — ${s.error ?? "failed"}`,
+          );
+          const toolNames = (extraTools ?? []).map((t) => `    · ${t.name}`).join("\n");
+          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `MCP servers:\n${lines.join("\n")}${toolNames ? `\n  tools:\n${toolNames}` : ""}` }]);
         }
         break;
       }

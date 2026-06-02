@@ -92,34 +92,46 @@ async function runPrint({ prompt, flags }: { prompt: string; flags: CliFlags }):
       defaultBackend: config.webSearchProvider,
     },
   });
+
+  const { McpManager } = await import("./mcp/manager");
+  const mcp = new McpManager();
+  await mcp.startAll(config.mcpServers);
+  const summary = mcp.summary();
+  if (summary) process.stderr.write(`[${summary}]\n`);
+  tools.push(...mcp.tools);
+
   const cwd = process.cwd();
   const session: Session = opts_or_new(flags.resume, cwd);
   appendEvent(session, { kind: "user", text: prompt, ts: new Date().toISOString() });
   const permission = createPermissionEngine(config.permissionMode, (async () => "allow") as ApprovalCallback);
 
-  await runAgentLoop({
-    provider,
-    tools,
-    model: config.model,
-    maxTurns: config.maxTurns,
-    prompt,
-    permission,
-    promptUser: (async () => "allow") as ApprovalCallback,
-    onEvent: (e) => {
-      if (e.type === "text_delta" && e.text) {
-        process.stdout.write(e.text);
-      } else if (e.type === "tool_call" && e.call) {
-        process.stderr.write(`\n[tool] ${e.call.name}(${JSON.stringify(e.call.arguments).slice(0, 120)})\n`);
-      } else if (e.type === "tool_result" && e.result) {
-        process.stderr.write(`[result] ok=${e.result.ok} bytes=${e.result.output.length}\n`);
-      } else if (e.type === "compacted" && e.text) {
-        process.stderr.write(`\n[${e.text}]\n`);
-      } else if (e.type === "error" && e.error) {
-        process.stderr.write(`\n[error] ${e.error}\n`);
-      }
-    },
-  });
-  process.stdout.write("\n");
+  try {
+    await runAgentLoop({
+      provider,
+      tools,
+      model: config.model,
+      maxTurns: config.maxTurns,
+      prompt,
+      permission,
+      promptUser: (async () => "allow") as ApprovalCallback,
+      onEvent: (e) => {
+        if (e.type === "text_delta" && e.text) {
+          process.stdout.write(e.text);
+        } else if (e.type === "tool_call" && e.call) {
+          process.stderr.write(`\n[tool] ${e.call.name}(${JSON.stringify(e.call.arguments).slice(0, 120)})\n`);
+        } else if (e.type === "tool_result" && e.result) {
+          process.stderr.write(`[result] ok=${e.result.ok} bytes=${e.result.output.length}\n`);
+        } else if (e.type === "compacted" && e.text) {
+          process.stderr.write(`\n[${e.text}]\n`);
+        } else if (e.type === "error" && e.error) {
+          process.stderr.write(`\n[error] ${e.error}\n`);
+        }
+      },
+    });
+    process.stdout.write("\n");
+  } finally {
+    await mcp.stopAll();
+  }
 }
 
 function opts_or_new(resumeId: string | undefined, cwd: string): Session {

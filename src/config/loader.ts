@@ -215,6 +215,7 @@ export function loadConfig(opts: LoadOptions): ResolvedConfig {
     contextThreshold: settings.contextThreshold ?? DEFAULTS.contextThreshold,
     enablePromptCache: settings.enablePromptCache ?? DEFAULTS.enablePromptCache,
     enableExtendedThinking: settings.enableExtendedThinking ?? DEFAULTS.enableExtendedThinking,
+    mcpServers: settings.mcpServers,
     source: {
       provider: provider.source as Source,
       model: modelPick.source as Source,

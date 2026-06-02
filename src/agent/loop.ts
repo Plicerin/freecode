@@ -99,6 +99,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
         description: t.description,
         schema: t.schema as never,
         permission: t.permission,
+        parameters: t.parameters,
       })),
       stream: true,
       maxTokens: 8192,

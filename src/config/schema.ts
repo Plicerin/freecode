@@ -36,6 +36,16 @@ export const ProfileSchema = z.object({
 });
 export type Profile = z.infer<typeof ProfileSchema>;
 
+/** A stdio MCP server: a command to spawn that speaks MCP over stdin/stdout. */
+export const McpServerSchema = z.object({
+  command: z.string().min(1),
+  args: z.array(z.string()).optional(),
+  env: z.record(z.string()).optional(),
+  /** Skip this server without deleting its config. */
+  disabled: z.boolean().optional(),
+});
+export type McpServerConfig = z.infer<typeof McpServerSchema>;
+
 export const SettingsSchema = z.object({
   model: z.string().min(1).optional(),
   permissionMode: PermissionModeSchema.optional(),
@@ -46,6 +56,7 @@ export const SettingsSchema = z.object({
   enablePromptCache: z.boolean().optional(),
   enableExtendedThinking: z.boolean().optional(),
   extraEnv: z.record(z.string()).optional(),
+  mcpServers: z.record(McpServerSchema).optional(),
 });
 export type Settings = z.infer<typeof SettingsSchema>;
 
@@ -61,6 +72,7 @@ export const ResolvedConfigSchema = z.object({
   contextThreshold: z.number().min(0.1).max(1).default(0.8),
   enablePromptCache: z.boolean().default(true),
   enableExtendedThinking: z.boolean().default(false),
+  mcpServers: z.record(McpServerSchema).optional(),
   source: z.object({
     provider: z.enum(["cli", "profile", "env", "settings", "default"]),
     model: z.enum(["cli", "profile", "env", "settings", "default"]),

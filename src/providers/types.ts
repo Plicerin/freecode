@@ -15,6 +15,9 @@ export interface ToolDefinition<T = unknown> {
   description: string;
   schema: z.ZodType<T>;
   permission?: "safe" | "confirm" | "danger";
+  /** Raw JSON Schema for params; when set, providers use it verbatim instead
+   * of deriving one from `schema` (used for MCP tools, which arrive as JSON Schema). */
+  parameters?: Record<string, unknown>;
 }
 
 export interface ToolCall {

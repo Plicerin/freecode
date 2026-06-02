@@ -21,6 +21,8 @@ export interface Tool<TArgs = unknown> {
   description: string;
   schema: z.ZodType<TArgs>;
   permission: "safe" | "confirm" | "danger";
+  /** Raw JSON Schema for params; set by MCP tools whose schema isn't Zod-derived. */
+  parameters?: Record<string, unknown>;
   run(args: TArgs, ctx: ToolContext): Promise<ToolResult>;
 }
 
@@ -30,5 +32,6 @@ export function toProviderTool<T>(tool: Tool<T>): ToolDefinition<T> {
     description: tool.description,
     schema: tool.schema,
     permission: tool.permission,
+    parameters: tool.parameters,
   };
 }
