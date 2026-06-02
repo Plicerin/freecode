@@ -34,7 +34,11 @@ export function extractAttachments(
   const tokenRe = /@(?:"([^"]+)"|([^\s"]+))/g;
   let m: RegExpExecArray | null;
   while ((m = tokenRe.exec(text)) !== null) {
-    const p = m[1] ?? m[2];
+    let p = m[1] ?? m[2];
+    if (!p) continue;
+    // For unquoted tokens, strip trailing punctuation so "@file.png:" or
+    // "@file.png?" resolve correctly (the colon/question mark isn't part of the path).
+    if (!m[1]) p = p.replace(/[)\].,:;!?'"]+$/, "");
     if (!p) continue;
     const abs = isAbsolute(p) ? p : resolve(cwd, p);
     const ext = extname(p).toLowerCase();

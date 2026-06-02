@@ -46,3 +46,16 @@ describe("contextWindowFor", () => {
     expect(contextWindowFor("something-unknown")).toBe(128_000);
   });
 });
+
+describe("@path trailing punctuation", () => {
+  it("resolves @file.png: and @file.txt? despite trailing punctuation", () => {
+    const { mkdtempSync, writeFileSync } = require("node:fs");
+    const { tmpdir } = require("node:os");
+    const { join } = require("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "oc-punct-"));
+    writeFileSync(join(dir, "a.txt"), "hi");
+    const r = extractAttachments("look at @a.txt: now and @a.txt?", dir);
+    expect(r.files.length).toBeGreaterThanOrEqual(1);
+    expect(r.files[0]!.content).toBe("hi");
+  });
+});
