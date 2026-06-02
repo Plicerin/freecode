@@ -24,7 +24,7 @@ export function friendlyError(err: unknown, provider: string): Error {
     }
     return new Error(`Could not reach ${provider} — check your network or baseUrl`);
   }
-  if (status === 401 || code === "invalid_api_key" || msg.includes("invalid api key") || msg.includes("unauthorized")) {
+  if (status === 401 || code === "invalid_api_key" || msg.includes("invalid api key") || msg.includes("api key not valid") || msg.includes("unauthorized")) {
     if (provider === "nim") {
       return new Error("Invalid NVIDIA API key — get one at build.nvidia.com (free tier available)");
     }

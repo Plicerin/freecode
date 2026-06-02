@@ -111,7 +111,9 @@ export class GeminiProvider implements Provider {
     }
     if (!resp.ok || !resp.body) {
       const text = await resp.text().catch(() => "");
-      throw friendlyError(new Error(`${resp.status} ${text}`), "gemini");
+      const err = new Error(`${resp.status} ${text}`) as Error & { status?: number };
+      err.status = resp.status;
+      throw friendlyError(err, "gemini");
     }
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();

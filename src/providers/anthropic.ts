@@ -115,7 +115,9 @@ export class AnthropicProvider implements Provider {
     }
     if (!resp.ok || !resp.body) {
       const text = await resp.text().catch(() => "");
-      throw friendlyError(new Error(`${resp.status} ${text}`), "anthropic");
+      const err = new Error(`${resp.status} ${text}`) as Error & { status?: number };
+      err.status = resp.status;
+      throw friendlyError(err, "anthropic");
     }
 
     const reader = resp.body.getReader();
