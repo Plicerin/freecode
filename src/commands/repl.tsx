@@ -12,6 +12,7 @@ import { extractAttachments } from "../agent/attachments";
 import { summarizeConversation } from "../agent/summarize";
 import { Vault } from "../config/vault";
 import { loadCustomCommands, expandCommand } from "./custom-commands";
+import { closest } from "../utils/fuzzy";
 import { newSession, appendEvent, listSessions, resumeSession, readSession, type Session } from "../session/manager";
 import { makeTheme } from "../tui/theme";
 import { debug } from "../utils/debug";
@@ -506,7 +507,8 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         if (custom) {
           void submit(expandCommand(custom.body, arg));
         } else {
-          setErrorLine(`Unknown command: ${name}`);
+          const suggestion = closest(name ?? "", slashNames, 3);
+          setErrorLine(`Unknown command: ${name}${suggestion ? ` — did you mean ${suggestion}?` : ""}`);
         }
       }
     }
@@ -568,7 +570,8 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     if (key.tab) {
       // autocomplete slash command (built-in + custom)
       if (input.startsWith("/")) {
-        const match = slashNames.find((c) => c.startsWith(input));
+        // Prefix match first, then fall back to the closest fuzzy match (typos).
+        const match = slashNames.find((c) => c.startsWith(input)) ?? closest(input, slashNames, 4);
         if (match) setEditor({ text: match + " ", cursor: match.length + 1 });
       }
       return;

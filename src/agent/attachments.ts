@@ -1,6 +1,18 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { resolve, isAbsolute, extname } from "node:path";
+import { existsSync, readFileSync, statSync, readdirSync } from "node:fs";
+import { resolve, isAbsolute, extname, dirname, basename } from "node:path";
 import type { ImagePart } from "../providers/types";
+import { closest } from "../utils/fuzzy";
+
+/** Suggest the nearest existing filename in the same directory (typo help). */
+function suggestSibling(abs: string): string | undefined {
+  try {
+    const names = readdirSync(dirname(abs));
+    const match = closest(basename(abs), names, 4);
+    return match;
+  } catch {
+    return undefined;
+  }
+}
 
 const MEDIA: Record<string, string> = {
   ".png": "image/png",
@@ -47,7 +59,11 @@ export function extractAttachments(
 
     if (mediaType) {
       // image attachment
-      if (!isFile) { notes.push(`attachment not found: ${p}`); continue; }
+      if (!isFile) {
+        const hint = suggestSibling(abs);
+        notes.push(`attachment not found: ${p}${hint ? ` (did you mean ${hint}?)` : ""}`);
+        continue;
+      }
       if (statSync(abs).size > MAX_IMAGE_BYTES) { notes.push(`image too large (>10MB): ${p}`); continue; }
       try {
         images.push({ data: readFileSync(abs).toString("base64"), mediaType });
