@@ -1,6 +1,8 @@
 # freecode
 
-Provider-agnostic coding agent CLI. REPL + headless. Multi-LLM, multi-tool. Drop-in Claude Code with the Anthropic lock-in removed. Bun runtime.
+**Total freedom. No guesswork.**
+
+Provider-agnostic coding agent CLI. REPL + headless. Multi-LLM, multi-tool. Drop-in Claude Code with the Anthropic lock-in removed — and it verifies its own work before it claims it's done. Bun runtime.
 
 ## Quick start
 

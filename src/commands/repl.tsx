@@ -140,7 +140,7 @@ function Intro({ provider, model, endpoint, isLocal, theme }: IntroProps): JSX.E
       <Banner />
       <Box marginLeft={1} marginTop={1}>
         <Text color={theme.hex.assistant}>✦ </Text>
-        <Text>Any model. Every tool. Zero limits.</Text>
+        <Text>Total freedom. No guesswork.</Text>
         <Text color={theme.hex.assistant}> ✦</Text>
       </Box>
       <Box marginLeft={1} marginTop={1} flexDirection="column" borderStyle="round" borderColor={theme.border} paddingX={1}>
