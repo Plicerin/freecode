@@ -1,3 +1,5 @@
+import { readFileSync, existsSync, statSync } from "node:fs";
+import { join } from "node:path";
 import type { Tool } from "./types";
 import { createBashTool, bashShellName, type BashToolOptions } from "./bash";
 import { FileReadTool } from "./file-read";
@@ -27,6 +29,26 @@ export function buildToolRegistry(opts: RegistryOptions = {}): Tool[] {
     WebFetchTool,
     ViewImageTool,
   ];
+}
+
+const CONTEXT_FILES = ["FREECODE.md", "AGENTS.md", "CLAUDE.md"];
+const MAX_CONTEXT_BYTES = 32_000;
+
+/** Load a project-context file from cwd (first match wins), capped in size. */
+function loadProjectContext(cwd: string): { file: string; content: string } | null {
+  for (const name of CONTEXT_FILES) {
+    const p = join(cwd, name);
+    try {
+      if (!existsSync(p) || !statSync(p).isFile()) continue;
+      let content = readFileSync(p, "utf8").trim();
+      if (!content) continue;
+      if (content.length > MAX_CONTEXT_BYTES) content = content.slice(0, MAX_CONTEXT_BYTES) + "\n…(truncated)";
+      return { file: name, content };
+    } catch {
+      // unreadable — skip
+    }
+  }
+  return null;
 }
 
 export function toolListToSystemPrompt(tools: Tool[]): string {
@@ -65,5 +87,11 @@ export function toolListToSystemPrompt(tools: Tool[]): string {
   }
   lines.push("");
   lines.push("When you need a tool, call it. The runtime executes it and returns the result so you can continue.");
+  const ctx = loadProjectContext(cwd);
+  if (ctx) {
+    lines.push("");
+    lines.push(`Project context (from ${ctx.file}) — follow these project-specific instructions:`);
+    lines.push(ctx.content);
+  }
   return lines.join("\n");
 }
