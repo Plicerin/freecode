@@ -3,12 +3,14 @@ import type { ThemeName } from "../config/schema";
 
 export interface RGB { r: number; g: number; b: number; }
 
+// freecode palette — one cool family (blues/greys); warm tones are reserved
+// strictly for status, so warmth in the UI always means something.
 export const RGB = {
-  assistant: { r: 215, g: 119, b: 87 } as RGB,
-  permission: { r: 87, g: 105, b: 247 } as RGB,
-  success: { r: 44, g: 122, b: 57 } as RGB,
-  error: { r: 171, g: 43, b: 63 } as RGB,
-  warning: { r: 150, g: 108, b: 30 } as RGB,
+  assistant: { r: 91, g: 156, b: 246 } as RGB, // azure — brand / assistant
+  permission: { r: 111, g: 143, b: 232 } as RGB, // periwinkle
+  success: { r: 63, g: 182, b: 143 } as RGB, // teal — verified / pass
+  error: { r: 236, g: 106, b: 106 } as RGB, // coral — error
+  warning: { r: 216, g: 162, b: 74 } as RGB, // amber — caution / unverified
 } as const;
 
 function hex(c: RGB): string {
@@ -28,11 +30,11 @@ export function makeTheme(name: ThemeName) {
   return {
     name,
     isDark,
-    base: isDark ? "#ffffff" : "#000000",
-    dim: "#888888",
-    border: "#666666",
-    user: isDark ? "#22d3ee" : "#2563eb",
-    tool: isDark ? "#d946ef" : "#a21caf",
+    base: isDark ? "#e6ebf4" : "#1f2a37",
+    dim: isDark ? "#707c92" : "#64748b",
+    border: isDark ? "#39435a" : "#c3cdda",
+    user: isDark ? "#56c2d6" : "#0e8aa6",
+    tool: isDark ? "#8895ad" : "#5b6b86",
     hex: HEX,
     chalk: {
       assistant: chalk.hex(HEX.assistant),

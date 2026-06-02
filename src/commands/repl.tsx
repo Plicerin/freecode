@@ -75,10 +75,10 @@ function bannerRows(word: string): string[] {
   return rows;
 }
 
-// Interpolate an orange→red gradient across the banner rows.
+// Interpolate an azure→deep-blue gradient across the banner rows.
 function gradientHex(t: number): string {
-  const top = { r: 245, g: 166, b: 90 };
-  const bot = { r: 171, g: 43, b: 63 };
+  const top = { r: 124, g: 192, b: 255 };
+  const bot = { r: 45, g: 90, b: 168 };
   const lerp = (a: number, b: number) => Math.round(a + (b - a) * t);
   const c = [lerp(top.r, bot.r), lerp(top.g, bot.g), lerp(top.b, bot.b)];
   return `#${c.map((v) => v.toString(16).padStart(2, "0")).join("")}`;
@@ -699,7 +699,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
                 {m.role === "assistant" && <Text color={theme.hex.assistant}>● </Text>}
                 {m.role === "tool" && <Text color={theme.tool}>⚙ </Text>}
                 {m.role === "system" && <Text color={theme.dim}>· </Text>}
-                <Text color={m.role === "assistant" ? theme.hex.assistant : m.role === "ledger" ? theme.dim : undefined} dimColor={m.role === "ledger"}>{m.text}</Text>
+                <Text color={m.role === "ledger" ? theme.dim : undefined} dimColor={m.role === "ledger"}>{m.text}</Text>
               </Text>
             </Box>
           ))}
