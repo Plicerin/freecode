@@ -56,6 +56,30 @@ export function resolveVerify(cwd: string, configVerify?: string | string[]): Ve
   return { commands: [], source: "none" };
 }
 
+/**
+ * Resolve a FAST check for the auto-gate — compile-level only (typecheck /
+ * build / lint), never the full test suite, so it stays snappy. An explicit
+ * verifyQuick config wins; otherwise auto-detect; otherwise none.
+ */
+export function resolveQuickVerify(cwd: string, configQuick?: string | string[]): VerifyPlan {
+  if (configQuick) {
+    const commands = (Array.isArray(configQuick) ? configQuick : [configQuick]).filter((c) => c.trim());
+    if (commands.length) return { commands, source: "config" };
+  }
+  const pkgPath = join(cwd, "package.json");
+  if (existsSync(pkgPath)) {
+    try {
+      const scripts = (JSON.parse(readFileSync(pkgPath, "utf8")).scripts ?? {}) as Record<string, string>;
+      const pm = detectPackageManager(cwd);
+      const script = ["typecheck", "build", "lint"].find((s) => scripts[s]);
+      if (script) return { commands: [`${pm} run ${script}`], source: "detected" };
+    } catch { /* fall through */ }
+  }
+  if (existsSync(join(cwd, "Cargo.toml"))) return { commands: ["cargo check"], source: "detected" };
+  if (existsSync(join(cwd, "go.mod"))) return { commands: ["go build ./..."], source: "detected" };
+  return { commands: [], source: "none" };
+}
+
 function runOne(command: string, cwd: string, signal?: AbortSignal): Promise<{ code: number; output: string }> {
   return new Promise((resolve) => {
     let child: ReturnType<typeof spawn>;

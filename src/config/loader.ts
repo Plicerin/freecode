@@ -22,6 +22,7 @@ export interface CliFlags {
   maxTurns?: number;
   webSearchProvider?: "duckduckgo" | "tavily" | "exa" | "firecrawl";
   enableExtendedThinking?: boolean;
+  verifyMode?: "off" | "on" | "strict";
   print?: boolean;
   resume?: string;
   port?: number;
@@ -234,6 +235,7 @@ export function loadConfig(opts: LoadOptions): ResolvedConfig {
     mcpServers: settings.mcpServers,
     hooks: settings.hooks,
     verify: settings.verify,
+    verifyMode: opts.flags.verifyMode ?? settings.verifyMode ?? "on",
     source: {
       provider: provider.source as Source,
       model: modelPick.source as Source,

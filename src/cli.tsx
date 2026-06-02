@@ -5,6 +5,7 @@ import { buildToolRegistry } from "./tools/registry";
 import { createPermissionEngine } from "./permissions/modes";
 import { runAgentLoop } from "./agent/loop";
 import { contextWindowFor } from "./agent/pricing";
+import { resolveVerify, resolveQuickVerify } from "./agent/verify";
 import { newSession, appendEvent, listSessions, resumeSession, type Session } from "./session/manager";
 import { type ApprovalCallback } from "./permissions/modes";
 import { debug } from "./utils/debug";
@@ -25,6 +26,7 @@ interface ParsedArgs {
   maxTurns?: number;
   webSearchProvider?: "duckduckgo" | "tavily" | "exa" | "firecrawl";
   thinking?: boolean;
+  verifyMode?: "off" | "on" | "strict";
 }
 
 const program = new Command();
@@ -45,7 +47,8 @@ program
   .option("--theme <name>", "dark|light")
   .option("--max-turns <n>", "Maximum agent loop turns", (v) => Number.parseInt(v, 10))
   .option("--web-search <provider>", "duckduckgo|tavily|exa|firecrawl")
-  .option("--thinking", "Enable extended thinking / reasoning", false);
+  .option("--thinking", "Enable extended thinking / reasoning", false)
+  .option("--verify-mode <mode>", "off|on|strict (auto-verify after changes)");
 
 async function main(): Promise<void> {
   // `freecode auth …` manages the encrypted key vault (handled before commander).
@@ -66,6 +69,7 @@ async function main(): Promise<void> {
     maxTurns: opts.maxTurns,
     webSearchProvider: opts.webSearchProvider,
     enableExtendedThinking: opts.thinking ? true : undefined,
+    verifyMode: opts.verifyMode,
     print: opts.print,
     resume: opts.resume,
     port: opts.port ? Number.parseInt(opts.port, 10) : undefined,
@@ -135,6 +139,8 @@ async function runPrint({ prompt, flags }: { prompt: string; flags: CliFlags }):
       enablePromptCache: config.enablePromptCache,
       enableExtendedThinking: config.enableExtendedThinking,
       hooks: config.hooks,
+      verifyMode: config.verifyMode,
+      verifyPlan: config.verifyMode === "strict" ? resolveVerify(cwd, config.verify) : config.verifyMode === "on" ? resolveQuickVerify(cwd) : undefined,
       permission,
       promptUser: (async () => "allow") as ApprovalCallback,
       onEvent: (e) => {
@@ -146,6 +152,8 @@ async function runPrint({ prompt, flags }: { prompt: string; flags: CliFlags }):
           process.stderr.write(`[result] ok=${e.result.ok} bytes=${e.result.output.length}\n`);
         } else if (e.type === "compacted" && e.text) {
           process.stderr.write(`\n[${e.text}]\n`);
+        } else if (e.type === "verify" && e.text) {
+          process.stderr.write(`\n${e.text}\n`);
         } else if (e.type === "error" && e.error) {
           process.stderr.write(`\n[error] ${e.error}\n`);
         }

@@ -190,6 +190,19 @@ Run shell commands on lifecycle events via `hooks` in `~/.freecode/settings.json
 - **Stop** runs when a turn finishes.
 - `matcher` is a regex tested against the tool name; omit it to match every tool.
 
+## Verification — earned confidence
+
+freecode tries not to tell you something works until it has watched it work. After a turn that changes files, it runs the project's checks and **self-corrects** if they fail — so a bug it introduced is caught before it ever claims "done".
+
+- `verifyMode` (settings or `--verify-mode`): `off` · `on` (default) · `strict`.
+  - **on** — after a file change, run *quick* checks (auto-detected `typecheck`/`build`/`lint`, `cargo check`, `go build`) with a visible, **Esc-skippable** status; on failure, feed the output back and retry up to 3 times.
+  - **strict** — same, but uses the *full* checks (including tests) and is stricter about ending red.
+  - **off** — only the manual `/verify`.
+- `/verify` runs the full checks on demand and reports the real result.
+- `verify` (settings, string or array) overrides the auto-detected commands.
+
+The point: the slow part (full tests) stays manual or `strict`; the default gate is fast and legible, so verification never feels like a hung model.
+
 ## Headless / CI
 
 ```bash

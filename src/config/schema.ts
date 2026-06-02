@@ -68,6 +68,7 @@ export const SettingsSchema = z.object({
   mcpServers: z.record(McpServerSchema).optional(),
   hooks: HooksSchema.optional(),
   verify: z.union([z.string(), z.array(z.string())]).optional(),
+  verifyMode: z.enum(["off", "on", "strict"]).optional(),
 });
 export type Settings = z.infer<typeof SettingsSchema>;
 
@@ -86,6 +87,7 @@ export const ResolvedConfigSchema = z.object({
   mcpServers: z.record(McpServerSchema).optional(),
   hooks: HooksSchema.optional(),
   verify: z.union([z.string(), z.array(z.string())]).optional(),
+  verifyMode: z.enum(["off", "on", "strict"]).default("on"),
   source: z.object({
     provider: z.enum(["cli", "profile", "env", "settings", "default"]),
     model: z.enum(["cli", "profile", "env", "settings", "default"]),

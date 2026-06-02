@@ -13,7 +13,7 @@ import { summarizeConversation } from "../agent/summarize";
 import { Vault } from "../config/vault";
 import { loadCustomCommands, expandCommand } from "./custom-commands";
 import { closest } from "../utils/fuzzy";
-import { resolveVerify, runVerify } from "../agent/verify";
+import { resolveVerify, resolveQuickVerify, runVerify } from "../agent/verify";
 import { newSession, appendEvent, listSessions, resumeSession, readSession, type Session } from "../session/manager";
 import { makeTheme } from "../tui/theme";
 import { debug } from "../utils/debug";
@@ -313,6 +313,11 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       // Plan mode: read-only tools (permission=safe) + a plan-only system prompt.
       const activeTools = planMode ? tools.filter((t) => t.permission === "safe") : tools;
       const systemPrompt = planMode ? toolListToSystemPrompt(activeTools) + PLAN_MODE_NOTE : undefined;
+      // Auto-verify gate: skip in plan mode (nothing changes). on = quick checks; strict = full.
+      const vmode = planMode ? "off" : config.verifyMode;
+      const verifyPlan = vmode === "strict" ? resolveVerify(process.cwd(), config.verify)
+        : vmode === "on" ? resolveQuickVerify(process.cwd())
+        : undefined;
       const result = await runAgentLoop({
         provider,
         tools: activeTools,
@@ -327,6 +332,8 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         enablePromptCache: config.enablePromptCache,
         enableExtendedThinking: config.enableExtendedThinking,
         hooks: config.hooks,
+        verifyPlan,
+        verifyMode: vmode,
         permission,
         promptUser,
         signal: controller.signal,
@@ -365,6 +372,8 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
             setCostUsd(trackerRef.current.costUsd());
           } else if (e.type === "compacted" && e.text) {
             setMessages((prev) => [...prev, { id: `c-${Date.now()}`, role: "system", text: e.text! }]);
+          } else if (e.type === "verify" && e.text) {
+            setMessages((prev) => [...prev, { id: `vfy-${Date.now()}-${prev.length}`, role: "system", text: e.text! }]);
           } else if (e.type === "error" && e.error) {
             setErrorLine(e.error);
           }

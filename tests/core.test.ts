@@ -123,6 +123,7 @@ describe("Provider registry", () => {
       contextThreshold: 0.8,
       enablePromptCache: true,
       enableExtendedThinking: false,
+      verifyMode: "on",
       source: { provider: "cli", model: "cli", baseUrl: "cli", apiKey: "cli" },
     });
     expect(p.id).toBe("nim");

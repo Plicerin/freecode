@@ -7,10 +7,11 @@ import { toolListToSystemPrompt } from "../tools/registry";
 import { ContextTracker } from "./context";
 import { summarizeConversation } from "./summarize";
 import { runHooks } from "./hooks";
+import { runVerify, type VerifyPlan } from "./verify";
 import type { HooksConfig } from "../config/schema";
 
 export interface AgentEvent {
-  type: "text_delta" | "tool_call" | "tool_result" | "thinking_delta" | "usage" | "done" | "error" | "approval_needed" | "compacted";
+  type: "text_delta" | "tool_call" | "tool_result" | "thinking_delta" | "usage" | "done" | "error" | "approval_needed" | "compacted" | "verify";
   text?: string;
   call?: ToolCall;
   result?: { id: string; output: string; ok: boolean; durationMs: number };
@@ -41,6 +42,9 @@ export interface AgentLoopOptions {
   enablePromptCache?: boolean;
   enableExtendedThinking?: boolean;
   hooks?: HooksConfig;
+  /** Auto-verify gate: run these checks after a file-changing turn. */
+  verifyPlan?: VerifyPlan;
+  verifyMode?: "off" | "on" | "strict";
 }
 
 export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: number; usage: TokenUsage; aborted: boolean; messages: ChatMessage[] }> {
@@ -69,6 +73,14 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
   let total: TokenUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, thinking: 0 };
   let turns = 0;
   let aborted = false;
+
+  // Auto-verify gate state.
+  const verifyMode = opts.verifyMode ?? "off";
+  const verifyEnabled = verifyMode !== "off" && (opts.verifyPlan?.commands.length ?? 0) > 0;
+  const MAX_VERIFY = 3;
+  let changed = false; // a file-mutating tool succeeded this task
+  let verifyAttempts = 0;
+  let verifyFailed = false;
 
   while (turns < opts.maxTurns) {
     turns += 1;
@@ -158,7 +170,28 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
     messages.push({ role: "assistant", content: turnText, toolCalls: turnToolCalls });
 
     if (sawError) break;
-    if (turnToolCalls.length === 0) break;
+    if (turnToolCalls.length === 0) {
+      // The agent is done talking. Earn the "done": if it changed files, run
+      // the verify gate; on failure, feed it back and let it self-correct.
+      if (verifyEnabled && changed && verifyAttempts < MAX_VERIFY && !opts.signal?.aborted) {
+        verifyAttempts += 1;
+        const plan = opts.verifyPlan!;
+        opts.onEvent({ type: "verify", text: `⏳ Verifying: ${plan.commands.join(" && ")}…` });
+        const res = await runVerify(plan, process.cwd(), opts.signal);
+        if (opts.signal?.aborted) { aborted = true; break; }
+        if (res.ok) {
+          opts.onEvent({ type: "verify", text: `✓ Verified — ${res.ranCommands.join(" && ")} passed.` });
+          verifyFailed = false;
+          break;
+        }
+        opts.onEvent({ type: "verify", text: `✗ Verification failed (${res.failedCommand}) — fixing…` });
+        verifyFailed = true;
+        changed = false;
+        messages.push({ role: "user", content: `Verification failed running \`${res.failedCommand}\`:\n\n${res.output.slice(-3000)}\n\nFix the underlying cause, then we'll re-check.` });
+        continue;
+      }
+      break;
+    }
 
     // Execute tools sequentially; could parallelize later
     const pendingImages: ImagePart[] = [];
@@ -203,6 +236,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
       const result = await tool.run(parsed.data, { cwd: process.cwd(), signal: opts.signal });
       const durationMs = Date.now() - t0;
       const payload = result.ok ? result.output : `Error: ${result.error ?? "unknown"}\n${result.output}`;
+      if (result.ok && (tool.name === "FileWrite" || tool.name === "FileEdit")) changed = true;
       messages.push({ role: "tool", toolCallId: call.id, content: payload });
       opts.onEvent({ type: "tool_result", result: { id: call.id, output: payload, ok: result.ok, durationMs } });
       // PostToolUse hook — observe the result (side effects only; can't block).
@@ -221,6 +255,9 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
     if (aborted) break;
   }
 
+  if (verifyFailed && !aborted) {
+    opts.onEvent({ type: "verify", text: `⚠ Checks still failing after ${verifyAttempts} attempt(s) — left as-is for you to review.` });
+  }
   await runHooks("Stop", opts.hooks, { event: "Stop", turns, aborted, cwd: process.cwd() }, undefined, opts.signal);
   opts.onEvent({ type: "done", reason: aborted ? "aborted" : turns >= opts.maxTurns ? "max_turns" : "end_turn" });
   return { turns, usage: total, aborted, messages };
