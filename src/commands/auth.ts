@@ -72,7 +72,13 @@ export async function runAuth(args: string[]): Promise<void> {
       process.stdout.write(vault.remove(provider) ? `✓ Removed ${provider}.\n` : `No ${provider} key stored.\n`);
       break;
     }
+    case "onboard":
+    case "setup": {
+      const { runOnboarding } = await import("./onboarding");
+      await runOnboarding();
+      break;
+    }
     default:
-      process.stdout.write("Usage: freecode auth <set|list|remove> [provider]\nKeys are stored encrypted in ~/.freecode/vault.json (auto-unlocks via ~/.freecode/vault.key).\n");
+      process.stdout.write("Usage: freecode auth <set|list|remove|onboard> [provider]\nKeys are stored encrypted in ~/.freecode/vault.json (auto-unlocks via ~/.freecode/vault.key).\n");
   }
 }

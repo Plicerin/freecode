@@ -20,25 +20,11 @@ const PROVIDERS: ProviderOption[] = [
 
 const theme = makeTheme("dark");
 
-/** A masked single-line input: shows '*' per character + a live count, so you
- * can see the key landed (and that paste worked) without revealing it. */
-function MaskedKeyInput({ onSubmit }: { onSubmit: (value: string) => void }): JSX.Element {
-  const [val, setVal] = useState("");
-  useInput((input, key) => {
-    if (key.return) { onSubmit(val); return; }
-    if (key.backspace || key.delete) { setVal((v) => v.slice(0, -1)); return; }
-    if (key.ctrl || key.meta) return;
-    const clean = (input || "").replace(/[\x00-\x1F\x7F]/g, ""); // paste-safe; drop control bytes
-    if (clean) setVal((v) => v + clean);
-  });
-  return (
-    <Text>
-      <Text color={theme.user}>› </Text>
-      <Text>{"*".repeat(val.length)}</Text>
-      <Text inverse> </Text>
-      {val.length > 0 && <Text dimColor>  ({val.length} chars)</Text>}
-    </Text>
-  );
+// Strip bracketed-paste wrappers (\e[200~ … \e[201~) that Windows Terminal and
+// others send around pasted text, then drop any remaining control bytes.
+function sanitizeTyped(input: string): string {
+  // ESC is optional: Ink often consumes the \x1b and delivers "[200~…[201~".
+  return input.replace(/\x1b?\[20[01]~/g, "").replace(/[\x00-\x1F\x7F]/g, "");
 }
 
 export function Onboarding({ onComplete }: { onComplete: () => void }): JSX.Element {
@@ -47,6 +33,7 @@ export function Onboarding({ onComplete }: { onComplete: () => void }): JSX.Elem
   const [cursor, setCursor] = useState(0);
   const [queue, setQueue] = useState<string[]>([]);
   const [qIdx, setQIdx] = useState(0);
+  const [keyDraft, setKeyDraft] = useState("");
   const [savedCount, setSavedCount] = useState(0);
   const storedRef = useState<Record<string, string>>({})[0];
 
@@ -60,34 +47,45 @@ export function Onboarding({ onComplete }: { onComplete: () => void }): JSX.Elem
     setTimeout(onComplete, 700);
   }
 
-  useInput((input, key) => {
-    if (step !== "select") return;
-    if (key.upArrow) setCursor((c) => Math.max(0, c - 1));
-    else if (key.downArrow) setCursor((c) => Math.min(PROVIDERS.length - 1, c + 1));
-    else if (input === " ") {
-      setChecked((prev) => {
-        const next = new Set(prev);
-        const id = PROVIDERS[cursor]!.id;
-        if (next.has(id)) next.delete(id); else next.add(id);
-        return next;
-      });
-    } else if (key.return) {
-      const sel = PROVIDERS.filter((p) => checked.has(p.id)).map((p) => p.id);
-      if (sel.length === 0) { finish({}); return; }
-      setQueue(sel);
-      setQIdx(0);
-      setStep("enter");
-    } else if (key.escape) {
-      finish({}); // skip
-    }
-  });
-
   function submitKey(value: string): void {
     const id = queue[qIdx]!;
     if (value.trim()) storedRef[id] = value.trim();
+    setKeyDraft("");
     if (qIdx + 1 < queue.length) setQIdx((i) => i + 1);
     else finish(storedRef);
   }
+
+  // Single input handler for both steps — avoids multi-useInput/focus issues.
+  useInput((input, key) => {
+    if (step === "select") {
+      if (key.upArrow) setCursor((c) => Math.max(0, c - 1));
+      else if (key.downArrow) setCursor((c) => Math.min(PROVIDERS.length - 1, c + 1));
+      else if (input === " ") {
+        setChecked((prev) => {
+          const next = new Set(prev);
+          const id = PROVIDERS[cursor]!.id;
+          if (next.has(id)) next.delete(id); else next.add(id);
+          return next;
+        });
+      } else if (key.return) {
+        const sel = PROVIDERS.filter((p) => checked.has(p.id)).map((p) => p.id);
+        if (sel.length === 0) { finish({}); return; }
+        setQueue(sel);
+        setQIdx(0);
+        setStep("enter");
+      } else if (key.escape) {
+        finish({});
+      }
+      return;
+    }
+    if (step === "enter") {
+      if (key.return) { submitKey(keyDraft); return; }
+      if (key.backspace || key.delete) { setKeyDraft((v) => v.slice(0, -1)); return; }
+      if (key.ctrl || key.meta) return;
+      const clean = sanitizeTyped(input || "");
+      if (clean) setKeyDraft((v) => v + clean);
+    }
+  });
 
   return (
     <Box flexDirection="column" paddingX={1} paddingY={1}>
@@ -120,7 +118,12 @@ export function Onboarding({ onComplete }: { onComplete: () => void }): JSX.Elem
             <Text dimColor> (enter to skip):</Text>
           </Text>
           <Box marginTop={1}>
-            <MaskedKeyInput key={qIdx} onSubmit={submitKey} />
+            <Text>
+              <Text color={theme.user}>› </Text>
+              <Text color={theme.hex.success}>{"*".repeat(keyDraft.length)}</Text>
+              <Text inverse> </Text>
+              {keyDraft.length > 0 && <Text dimColor>  ({keyDraft.length} chars)</Text>}
+            </Text>
           </Box>
         </Box>
       )}
