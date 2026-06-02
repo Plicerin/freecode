@@ -56,14 +56,14 @@ function profileProvider(profile: Profile, envProvider: ProviderId | undefined):
   return profile.provider ?? envProvider;
 }
 
-/** Read a provider key from the encrypted vault, if it's unlocked via env. */
+/** Read a provider key from the encrypted vault. Device-mode vaults unlock
+ * automatically; passphrase-mode needs FREECODE_VAULT_PASSPHRASE. */
 function vaultApiKey(provider: ProviderId): string | undefined {
-  const pass = getEnv("FREECODE_VAULT_PASSPHRASE");
-  if (!pass || !Vault.exists()) return undefined;
+  if (!Vault.exists()) return undefined;
   try {
-    return Vault.open(pass).get(provider);
+    return Vault.load().get(provider);
   } catch {
-    return undefined; // wrong passphrase — fall through to other sources
+    return undefined; // locked/corrupted — fall through to other sources
   }
 }
 

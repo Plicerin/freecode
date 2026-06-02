@@ -10,6 +10,7 @@ import { ContextTracker } from "../agent/context";
 import { priceFor, contextWindowFor } from "../agent/pricing";
 import { extractAttachments } from "../agent/attachments";
 import { summarizeConversation } from "../agent/summarize";
+import { Vault } from "../config/vault";
 import { newSession, appendEvent, listSessions, resumeSession, readSession, type Session } from "../session/manager";
 import { makeTheme } from "../tui/theme";
 import { debug } from "../utils/debug";
@@ -144,7 +145,16 @@ function Intro({ provider, model, endpoint, isLocal, theme }: IntroProps): JSX.E
 }
 
 export async function startRepl(opts: ReplOptions = {}): Promise<void> {
-  const config = loadConfig({ flags: opts.flags ?? {} });
+  let config = loadConfig({ flags: opts.flags ?? {} });
+
+  // First-run onboarding: no key anywhere for a cloud provider → collect them.
+  const localProvider = ["ollama", "lmstudio", "mock"].includes(config.provider);
+  if (!Vault.exists() && !config.apiKey && !localProvider && !opts.resumeId) {
+    const { runOnboarding } = await import("./onboarding");
+    await runOnboarding();
+    config = loadConfig({ flags: opts.flags ?? {} }); // re-resolve now that the vault may hold keys
+  }
+
   const { McpManager } = await import("../mcp/manager");
   const mcp = new McpManager();
   await mcp.startAll(config.mcpServers);

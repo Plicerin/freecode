@@ -36,17 +36,9 @@ function promptHidden(question: string): Promise<string> {
   });
 }
 
-async function passphrase(): Promise<string> {
-  const env = process.env.FREECODE_VAULT_PASSPHRASE;
-  if (env) return env;
-  const p = await promptHidden(Vault.exists() ? "Vault passphrase: " : "Create a vault passphrase: ");
-  if (!p) fail("A passphrase is required.");
-  return p;
-}
-
-function open(pass: string): Vault {
+function open(): Vault {
   try {
-    return Vault.open(pass);
+    return Vault.load();
   } catch (err) {
     fail(err instanceof Error ? err.message : String(err));
   }
@@ -59,16 +51,16 @@ export async function runAuth(args: string[]): Promise<void> {
     case "set":
     case "add": {
       if (!provider) fail("Usage: freecode auth set <provider>");
-      const vault = open(await passphrase());
-      const key = await promptHidden(`API key for ${provider}: `);
+      const vault = open();
+      const key = await promptHidden(`Paste the API key for ${provider}: `);
       if (!key.trim()) fail("No key entered.");
       vault.set(provider, key.trim());
-      process.stdout.write(`✓ Stored ${provider} key in the vault.\n`);
+      process.stdout.write(`✓ Stored ${provider} key in the vault. You won't need to enter it again.\n`);
       break;
     }
     case "list":
     case "ls": {
-      const vault = open(await passphrase());
+      const vault = open();
       const list = vault.list();
       process.stdout.write(list.length ? `Stored providers:\n${list.map((p) => `  ${p}`).join("\n")}\n` : "Vault is empty.\n");
       break;
@@ -76,11 +68,11 @@ export async function runAuth(args: string[]): Promise<void> {
     case "remove":
     case "rm": {
       if (!provider) fail("Usage: freecode auth remove <provider>");
-      const vault = open(await passphrase());
+      const vault = open();
       process.stdout.write(vault.remove(provider) ? `✓ Removed ${provider}.\n` : `No ${provider} key stored.\n`);
       break;
     }
     default:
-      process.stdout.write("Usage: freecode auth <set|list|remove> [provider]\nKeys are stored encrypted in ~/.freecode/vault.json. Set FREECODE_VAULT_PASSPHRASE to unlock at runtime.\n");
+      process.stdout.write("Usage: freecode auth <set|list|remove> [provider]\nKeys are stored encrypted in ~/.freecode/vault.json (auto-unlocks via ~/.freecode/vault.key).\n");
   }
 }

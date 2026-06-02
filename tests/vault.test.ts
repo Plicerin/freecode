@@ -1,42 +1,51 @@
-import { describe, it, expect } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { describe, it, expect, afterEach } from "bun:test";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Vault } from "../src/config/vault";
 
-function tmpVault() { return join(mkdtempSync(join(tmpdir(), "oc-vault-")), "vault.json"); }
+function paths() {
+  const dir = mkdtempSync(join(tmpdir(), "oc-vault-"));
+  return { vault: join(dir, "vault.json"), key: join(dir, "vault.key") };
+}
 
-describe("Vault", () => {
-  it("stores and retrieves a secret across reopen", () => {
-    const p = tmpVault();
-    const v = Vault.open("hunter2", p);
-    v.set("anthropic", "sk-ant-secret");
-    v.set("openai", "sk-oai-secret");
-    // reopen with the same passphrase
-    const v2 = Vault.open("hunter2", p);
+afterEach(() => { delete process.env.FREECODE_VAULT_PASSPHRASE; });
+
+describe("Vault — device mode (no passphrase)", () => {
+  it("auto-unlocks and round-trips across reopen", () => {
+    const p = paths();
+    const v = Vault.load(p.vault, p.key);
+    v.setMany({ anthropic: "sk-ant-secret", openai: "sk-oai-secret" });
+    const v2 = Vault.load(p.vault, p.key); // no passphrase needed
     expect(v2.get("anthropic")).toBe("sk-ant-secret");
-    expect(v2.list().sort()).toEqual(["anthropic", "openai"]);
-  });
-
-  it("rejects a wrong passphrase", () => {
-    const p = tmpVault();
-    Vault.open("correct", p).set("openai", "sk-x");
-    expect(() => Vault.open("wrong", p)).toThrow(/unlock|passphrase/i);
+    expect(v2.list()).toEqual(["anthropic", "openai"]);
   });
 
   it("removes a secret", () => {
-    const p = tmpVault();
-    const v = Vault.open("pw", p);
+    const p = paths();
+    const v = Vault.load(p.vault, p.key);
     v.set("gemini", "AIza-x");
     expect(v.remove("gemini")).toBe(true);
     expect(v.remove("gemini")).toBe(false);
-    expect(Vault.open("pw", p).get("gemini")).toBeUndefined();
+    expect(Vault.load(p.vault, p.key).get("gemini")).toBeUndefined();
   });
 
-  it("does not store keys in plaintext on disk", () => {
-    const p = tmpVault();
-    Vault.open("pw", p).set("openai", "sk-PLAINTEXT-MARKER");
-    const raw = require("node:fs").readFileSync(p, "utf8");
-    expect(raw).not.toContain("sk-PLAINTEXT-MARKER");
+  it("never writes a key in plaintext", () => {
+    const p = paths();
+    Vault.load(p.vault, p.key).set("openai", "sk-PLAINTEXT-MARKER");
+    expect(readFileSync(p.vault, "utf8")).not.toContain("sk-PLAINTEXT-MARKER");
+  });
+});
+
+describe("Vault — passphrase mode", () => {
+  it("uses FREECODE_VAULT_PASSPHRASE and rejects a wrong one", () => {
+    const p = paths();
+    process.env.FREECODE_VAULT_PASSPHRASE = "correct-horse";
+    Vault.load(p.vault, p.key).set("openai", "sk-x");
+    expect(Vault.load(p.vault, p.key).get("openai")).toBe("sk-x");
+    process.env.FREECODE_VAULT_PASSPHRASE = "wrong";
+    expect(() => Vault.load(p.vault, p.key)).toThrow(/unlock|passphrase|corrupted/i);
+    delete process.env.FREECODE_VAULT_PASSPHRASE;
+    expect(() => Vault.load(p.vault, p.key)).toThrow(/passphrase-protected/i);
   });
 });
