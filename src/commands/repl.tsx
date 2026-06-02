@@ -199,7 +199,14 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
 
   const [messages, setMessages] = useState<UiMessage[]>([]);
   const [model, setModel] = useState(config.model);
-  const [input, setInput] = useState("");
+  // Text + caret kept in ONE state so fast input (e.g. paste) updates them
+  // atomically — separate states race and garble characters.
+  const [editor, setEditor] = useState<{ text: string; cursor: number }>({ text: "", cursor: 0 });
+  const input = editor.text;
+  const cursor = editor.cursor;
+  const historyRef = useRef<string[]>([]); // submitted prompts, oldest first
+  const [historyIdx, setHistoryIdx] = useState<number | null>(null); // null = editing live input
+  const draftRef = useRef(""); // live input saved while browsing history
   const [busy, setBusy] = useState(false);
   const [showTasks, setShowTasks] = useState(false);
   const [errorLine, setErrorLine] = useState<string | null>(null);
@@ -453,24 +460,56 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       return;
     }
     if (key.ctrl && input2 === "u") {
-      setInput("");
+      setEditor({ text: "", cursor: 0 });
       return;
     }
     if (key.ctrl && input2 === "t") {
       setShowTasks((v) => !v);
       return;
     }
+    if (key.ctrl && input2 === "a") { setEditor((e) => ({ ...e, cursor: 0 })); return; }            // line start
+    if (key.ctrl && input2 === "e") { setEditor((e) => ({ ...e, cursor: e.text.length })); return; } // line end
+    // Command history (up/down).
+    if (key.upArrow) {
+      const h = historyRef.current;
+      if (h.length === 0) return;
+      const idx = historyIdx === null ? h.length - 1 : Math.max(0, historyIdx - 1);
+      if (historyIdx === null) draftRef.current = input;
+      setHistoryIdx(idx);
+      setEditor({ text: h[idx]!, cursor: h[idx]!.length });
+      return;
+    }
+    if (key.downArrow) {
+      if (historyIdx === null) return;
+      const h = historyRef.current;
+      if (historyIdx >= h.length - 1) {
+        setHistoryIdx(null);
+        setEditor({ text: draftRef.current, cursor: draftRef.current.length });
+      } else {
+        const idx = historyIdx + 1;
+        setHistoryIdx(idx);
+        setEditor({ text: h[idx]!, cursor: h[idx]!.length });
+      }
+      return;
+    }
+    if (key.leftArrow) { setEditor((e) => ({ ...e, cursor: Math.max(0, e.cursor - 1) })); return; }
+    if (key.rightArrow) { setEditor((e) => ({ ...e, cursor: Math.min(e.text.length, e.cursor + 1) })); return; }
     if (key.tab) {
       // autocomplete slash command
       if (input.startsWith("/")) {
         const match = SLASH_COMMANDS.find((c) => c.startsWith(input));
-        if (match) setInput(match + " ");
+        if (match) setEditor({ text: match + " ", cursor: match.length + 1 });
       }
       return;
     }
     if (key.return) {
       const value = input;
-      setInput("");
+      if (value.trim()) {
+        const h = historyRef.current;
+        if (h[h.length - 1] !== value) h.push(value);
+      }
+      setEditor({ text: "", cursor: 0 });
+      setHistoryIdx(null);
       if (value.startsWith("/")) {
         void runSlash(value);
       } else {
@@ -478,12 +517,16 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       }
       return;
     }
-    if (key.backspace || key.delete) {
-      setInput((v) => v.slice(0, -1));
+    if (key.backspace) {
+      setEditor((e) => (e.cursor > 0 ? { text: e.text.slice(0, e.cursor - 1) + e.text.slice(e.cursor), cursor: e.cursor - 1 } : e));
+      return;
+    }
+    if (key.delete) {
+      setEditor((e) => ({ ...e, text: e.text.slice(0, e.cursor) + e.text.slice(e.cursor + 1) }));
       return;
     }
     if (input2 && !key.ctrl && !key.meta) {
-      setInput((v) => v + input2);
+      setEditor((e) => ({ text: e.text.slice(0, e.cursor) + input2 + e.text.slice(e.cursor), cursor: e.cursor + input2.length }));
     }
   });
 
@@ -534,7 +577,10 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       ) : (
         <Box borderStyle="round" borderColor={theme.border} paddingX={1} marginTop={1}>
           <Text>
-            <Text color={theme.user}>› </Text><Text>{input || " "}</Text>
+            <Text color={theme.user}>› </Text>
+            <Text>{input.slice(0, cursor)}</Text>
+            <Text inverse>{input.slice(cursor, cursor + 1) || " "}</Text>
+            <Text>{input.slice(cursor + 1)}</Text>
           </Text>
         </Box>
       )}
