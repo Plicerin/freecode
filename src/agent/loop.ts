@@ -1,7 +1,7 @@
 import type { Provider, ChatRequest, ChatMessage, ToolCall, StreamEvent, TokenUsage, ImagePart } from "../providers/types";
 import type { Tool } from "../tools/types";
 import type { PermissionEngine, ApprovalCallback } from "../permissions/modes";
-import { withRetry } from "../utils/retry";
+import { withRetry, isRateLimitError } from "../utils/retry";
 import { debug } from "../utils/debug";
 import { toolListToSystemPrompt } from "../tools/registry";
 import { ContextTracker } from "./context";
@@ -113,43 +113,53 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
       signal: opts.signal,
     };
 
-    const events = await withRetry(async () => collectStream(opts.provider.stream(req)));
-    const collected = await events;
-
     let turnText = "";
-    const turnToolCalls: ToolCall[] = [];
+    let turnToolCalls: ToolCall[] = [];
     let sawError = false;
+    let emitted = false;
 
-    for (const e of collected) {
-      switch (e.type) {
-        case "text_delta":
-          turnText += e.delta;
-          opts.onEvent({ type: "text_delta", text: e.delta });
-          break;
-        case "thinking_delta":
-          opts.onEvent({ type: "thinking_delta", text: e.delta });
-          break;
-        case "tool_call":
-          turnToolCalls.push(e.call);
-          opts.onEvent({ type: "tool_call", call: e.call });
-          break;
-        case "usage":
-          if (e.usage) {
-            total = sumUsage(total, e.usage);
-            contextTokens = e.usage.input + e.usage.output;
-            opts.onEvent({ type: "usage", usage: e.usage });
+    // Stream events live (dispatch as they arrive) so the UI can render tokens
+    // incrementally. Retry only applies before the first event (e.g. a 429 at
+    // connection time); once streaming has started we don't re-run.
+    await withRetry(
+      async () => {
+        turnText = "";
+        turnToolCalls = [];
+        sawError = false;
+        for await (const e of opts.provider.stream(req)) {
+          emitted = true;
+          switch (e.type) {
+            case "text_delta":
+              turnText += e.delta;
+              opts.onEvent({ type: "text_delta", text: e.delta });
+              break;
+            case "thinking_delta":
+              opts.onEvent({ type: "thinking_delta", text: e.delta });
+              break;
+            case "tool_call":
+              turnToolCalls.push(e.call);
+              opts.onEvent({ type: "tool_call", call: e.call });
+              break;
+            case "usage":
+              if (e.usage) {
+                total = sumUsage(total, e.usage);
+                contextTokens = e.usage.input + e.usage.output;
+                opts.onEvent({ type: "usage", usage: e.usage });
+              }
+              break;
+            case "end":
+              if (e.reason === "error") aborted = true;
+              break;
+            case "error":
+              sawError = true;
+              aborted = true;
+              opts.onEvent({ type: "error", error: String((e.error as Error)?.message ?? e.error) });
+              break;
           }
-          break;
-        case "end":
-          if (e.reason === "error") aborted = true;
-          break;
-        case "error":
-          sawError = true;
-          aborted = true;
-          opts.onEvent({ type: "error", error: String((e.error as Error)?.message ?? e.error) });
-          break;
-      }
-    }
+        }
+      },
+      { shouldRetry: (err) => !emitted && isRateLimitError(err) },
+    );
 
     messages.push({ role: "assistant", content: turnText, toolCalls: turnToolCalls });
 

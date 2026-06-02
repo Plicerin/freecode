@@ -207,6 +207,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   const [pending, setPending] = useState<ApprovalRequest | null>(null);
   const approvalResolver = useRef<((d: ApprovalDecision) => void) | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const streamIdRef = useRef<string | null>(null); // id of the assistant bubble currently streaming
 
   const promptUser: ApprovalCallback = (req) =>
     new Promise<ApprovalDecision>((resolve) => {
@@ -267,9 +268,11 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     if (failed.length) setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: failed.join("\n") }]);
     appendEvent(sessionRef.current, { kind: "user", text: prompt, ts: new Date().toISOString() });
     let buffer = "";
+    let streamedAny = false;
     const t0 = Date.now();
     const controller = new AbortController();
     abortRef.current = controller;
+    streamIdRef.current = null;
     try {
       const result = await runAgentLoop({
         provider,
@@ -285,7 +288,19 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         onEvent: (e) => {
           if (e.type === "text_delta" && e.text) {
             buffer += e.text;
+            streamedAny = true;
+            const delta = e.text;
+            setMessages((prev) => {
+              const sid = streamIdRef.current;
+              if (sid) {
+                return prev.map((m) => (m.id === sid ? { ...m, text: m.text + delta } : m));
+              }
+              const id = `a-${t0}-${prev.length}`;
+              streamIdRef.current = id;
+              return [...prev, { id, role: "assistant", text: delta }];
+            });
           } else if (e.type === "tool_call" && e.call) {
+            streamIdRef.current = null; // text after a tool call starts a fresh bubble
             const call = e.call;
             const tid = `t-${call.id ?? Math.random().toString(36).slice(2, 8)}`;
             setMessages((prev) => [...prev, { id: tid, role: "tool", text: `→ ${call.name}(${JSON.stringify(call.arguments).slice(0, 120)})`, toolName: call.name }]);
@@ -311,8 +326,11 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         },
       });
       conversationRef.current = result.messages; // carry full context into the next turn
-      const aid = `a-${t0}`;
-      setMessages((prev) => [...prev, { id: aid, role: "assistant", text: buffer }]);
+      // Text was streamed live into assistant bubbles; only push a fallback
+      // message if the provider produced text without streaming events.
+      if (!streamedAny && buffer) {
+        setMessages((prev) => [...prev, { id: `a-${t0}`, role: "assistant", text: buffer }]);
+      }
       appendEvent(sessionRef.current, { kind: "assistant", text: buffer, ts: new Date().toISOString(), usage: result.usage as unknown as Record<string, number> });
       debug.log("turn complete", { turns: result.turns, usage: result.usage });
     } catch (err) {

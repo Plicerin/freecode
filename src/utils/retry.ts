@@ -12,7 +12,7 @@ export interface RetryOptions {
 
 const DEFAULT_MAX = 10;
 
-function isRateLimitError(err: unknown): boolean {
+export function isRateLimitError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   const msg = err.message.toLowerCase();
   if (msg.includes("rate limit")) return true;
