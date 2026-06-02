@@ -152,7 +152,9 @@ Review $ARGUMENTS for correctness bugs and suggest fixes.
 
 ## Keyboard
 
-`Ctrl+C` exit · `Ctrl+U` clear input · `Ctrl+T` toggle tasks sidebar · `Tab` autocomplete slash · `Enter` submit
+`Ctrl+C` exit · `Ctrl+U` clear input · `Ctrl+T` toggle tasks sidebar · `Enter` submit
+
+Type `/` to open a live command menu (filters as you type); `↑`/`↓` to select, `Tab` to complete. `↑`/`↓` otherwise recall input history.
 
 ## Tools
 

@@ -39,6 +39,19 @@ interface UiMessage {
 
 const SLASH_COMMANDS = ["/model", "/new", "/resume", "/context", "/provider", "/mcp", "/plan", "/verify", "/help", "/compact"];
 
+const COMMAND_DESC: Record<string, string> = {
+  "/model": "show or switch model",
+  "/new": "start a fresh session",
+  "/resume": "list or resume sessions",
+  "/context": "token usage + cost",
+  "/provider": "show or switch provider",
+  "/mcp": "MCP servers and tools",
+  "/plan": "toggle read-only plan mode",
+  "/verify": "run the project's checks",
+  "/help": "list commands",
+  "/compact": "compact the conversation",
+};
+
 const PLAN_MODE_NOTE =
   "\n\nPLAN MODE: You are in read-only planning mode. Do NOT modify anything — no file writes or edits, no state-changing commands. Investigate the request using the available read-only tools, then present a concise, numbered implementation plan and STOP. The user will review it and exit plan mode to have you carry it out.";
 
@@ -223,11 +236,21 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   const [messages, setMessages] = useState<UiMessage[]>([]);
   const [model, setModel] = useState(config.model);
   const [planMode, setPlanMode] = useState(false);
+  const [menuIdx, setMenuIdx] = useState(0);
   // Text + caret kept in ONE state so fast input (e.g. paste) updates them
   // atomically — separate states race and garble characters.
   const [editor, setEditor] = useState<{ text: string; cursor: number }>({ text: "", cursor: 0 });
   const input = editor.text;
   const cursor = editor.cursor;
+  // Live slash-command suggestions: shown while typing a command name (no space yet).
+  const menuMatches = useMemo(() => {
+    if (!input.startsWith("/") || input.includes(" ")) return [] as Array<{ name: string; desc: string }>;
+    return slashNames
+      .filter((n) => n.startsWith(input))
+      .slice(0, 8)
+      .map((n) => ({ name: n, desc: COMMAND_DESC[n] ?? customCommands.get(n.slice(1))?.description ?? "" }));
+  }, [input, slashNames, customCommands]);
+  useEffect(() => { setMenuIdx(0); }, [input]); // reset highlight as the query changes
   const historyRef = useRef<string[]>([]); // submitted prompts, oldest first
   const [historyIdx, setHistoryIdx] = useState<number | null>(null); // null = editing live input
   const draftRef = useRef(""); // live input saved while browsing history
@@ -580,6 +603,9 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     }
     if (key.ctrl && input2 === "a") { setEditor((e) => ({ ...e, cursor: 0 })); return; }            // line start
     if (key.ctrl && input2 === "e") { setEditor((e) => ({ ...e, cursor: e.text.length })); return; } // line end
+    // When the slash-command menu is open, up/down navigate it (not history).
+    if (menuMatches.length > 0 && key.upArrow) { setMenuIdx((i) => Math.max(0, i - 1)); return; }
+    if (menuMatches.length > 0 && key.downArrow) { setMenuIdx((i) => Math.min(menuMatches.length - 1, i + 1)); return; }
     // Command history (up/down).
     if (key.upArrow) {
       const h = historyRef.current;
@@ -606,10 +632,13 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     if (key.leftArrow) { setEditor((e) => ({ ...e, cursor: Math.max(0, e.cursor - 1) })); return; }
     if (key.rightArrow) { setEditor((e) => ({ ...e, cursor: Math.min(e.text.length, e.cursor + 1) })); return; }
     if (key.tab) {
-      // autocomplete slash command (built-in + custom)
-      if (input.startsWith("/")) {
-        // Prefix match first, then fall back to the closest fuzzy match (typos).
-        const match = slashNames.find((c) => c.startsWith(input)) ?? closest(input, slashNames, 4);
+      if (menuMatches.length > 0) {
+        // Complete the highlighted suggestion from the live menu.
+        const pick = menuMatches[Math.min(menuIdx, menuMatches.length - 1)]!.name;
+        setEditor({ text: pick + " ", cursor: pick.length + 1 });
+      } else if (input.startsWith("/")) {
+        // Fuzzy fallback for typos (e.g. /compcat -> /compact).
+        const match = closest(input, slashNames, 4);
         if (match) setEditor({ text: match + " ", cursor: match.length + 1 });
       }
       return;
@@ -684,6 +713,20 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           </Box>
         )}
       </Box>
+
+      {!pending && menuMatches.length > 0 && (
+        <Box flexDirection="column" paddingX={1} marginTop={1}>
+          {menuMatches.map((m, i) => {
+            const sel = i === Math.min(menuIdx, menuMatches.length - 1);
+            return (
+              <Text key={m.name} color={sel ? theme.user : undefined} dimColor={!sel}>
+                {sel ? "❯ " : "  "}{m.name}{m.desc ? `  —  ${m.desc}` : ""}
+              </Text>
+            );
+          })}
+          <Text dimColor>  ↑/↓ select · Tab complete</Text>
+        </Box>
+      )}
 
       {pending ? (
         <Box flexDirection="column" borderStyle="round" borderColor={theme.hex.warning} paddingX={1} marginTop={1}>
