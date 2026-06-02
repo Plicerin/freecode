@@ -12,6 +12,7 @@ import { newSession, appendEvent, listSessions, resumeSession, readSession, type
 import { makeTheme } from "../tui/theme";
 import { debug } from "../utils/debug";
 import type { Tool } from "../tools/types";
+import type { ChatMessage } from "../providers/types";
 import type { McpServerStatus } from "../mcp/manager";
 
 export interface ReplOptions {
@@ -179,6 +180,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     }),
   );
   const sessionRef = useRef<Session>(undefined as unknown as Session);
+  const conversationRef = useRef<ChatMessage[]>([]); // running provider-format history
 
   const [messages, setMessages] = useState<UiMessage[]>([]);
   const [model, setModel] = useState(config.model);
@@ -256,6 +258,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         model,
         maxTurns: config.maxTurns,
         prompt,
+        history: conversationRef.current,
         permission,
         promptUser,
         signal: controller.signal,
@@ -287,6 +290,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           }
         },
       });
+      conversationRef.current = result.messages; // carry full context into the next turn
       const aid = `a-${t0}`;
       setMessages((prev) => [...prev, { id: aid, role: "assistant", text: buffer }]);
       appendEvent(sessionRef.current, { kind: "assistant", text: buffer, ts: new Date().toISOString(), usage: result.usage as unknown as Record<string, number> });
@@ -320,6 +324,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       case "/new": {
         const cwd = process.cwd();
         sessionRef.current = newSession(cwd);
+        conversationRef.current = [];
         setMessages([]);
         setCostUsd(0);
         setErrorLine(null);

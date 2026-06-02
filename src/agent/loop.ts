@@ -25,6 +25,8 @@ export interface AgentLoopOptions {
   maxTurns: number;
   systemPrompt?: string;
   prompt: string;
+  /** Prior conversation (provider-format) to continue, enabling multi-turn memory. */
+  history?: ChatMessage[];
   permission: PermissionEngine;
   promptUser: ApprovalCallback;
   signal?: AbortSignal;
@@ -33,9 +35,9 @@ export interface AgentLoopOptions {
   contextThreshold?: number;
 }
 
-export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: number; usage: TokenUsage; aborted: boolean }> {
+export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: number; usage: TokenUsage; aborted: boolean; messages: ChatMessage[] }> {
   const tools = opts.tools;
-  const messages: ChatMessage[] = [{ role: "user", content: opts.prompt }];
+  const messages: ChatMessage[] = [...(opts.history ?? []), { role: "user", content: opts.prompt }];
   const sys = opts.systemPrompt ?? toolListToSystemPrompt(tools);
 
   const tracker = new ContextTracker({
@@ -191,7 +193,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
   }
 
   opts.onEvent({ type: "done", reason: aborted ? "aborted" : turns >= opts.maxTurns ? "max_turns" : "end_turn" });
-  return { turns, usage: total, aborted };
+  return { turns, usage: total, aborted, messages };
 }
 
 function sumUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
