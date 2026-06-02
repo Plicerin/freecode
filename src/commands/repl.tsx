@@ -181,6 +181,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   const sessionRef = useRef<Session>(undefined as unknown as Session);
 
   const [messages, setMessages] = useState<UiMessage[]>([]);
+  const [model, setModel] = useState(config.model);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [showTasks, setShowTasks] = useState(false);
@@ -249,7 +250,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       const result = await runAgentLoop({
         provider,
         tools,
-        model: config.model,
+        model,
         maxTurns: config.maxTurns,
         prompt,
         permission,
@@ -299,10 +300,11 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     switch (name) {
       case "/model": {
         if (arg) {
-          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Model switched to ${arg} (effective next turn)` }]);
-          // In a full impl, mutate config.model via reload; here we log and continue.
+          setModel(arg);
+          trackerRef.current.setPricing(priceFor(arg, config.provider));
+          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Model switched to ${arg} (provider: ${config.provider}). Active from your next message.` }]);
         } else {
-          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Current model: ${config.model} (provider: ${config.provider})` }]);
+          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Current model: ${model} (provider: ${config.provider})` }]);
         }
         break;
       }
@@ -340,7 +342,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         if (arg) {
           setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Provider switch to ${arg} — restart with --provider ${arg} (env reload required for live switch)` }]);
         } else {
-          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Provider: ${config.provider}\nBase URL: ${config.baseUrl ?? "(default)"}\nModel: ${config.model}` }]);
+          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Provider: ${config.provider}\nBase URL: ${config.baseUrl ?? "(default)"}\nModel: ${model}` }]);
         }
         break;
       }
@@ -477,7 +479,8 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
               : "Ctrl+C exit · Ctrl+U clear · Ctrl+T tasks · Tab complete · Enter send"}
         </Text>
         <Text>
-          <Text dimColor>cost </Text>
+          <Text color={theme.hex.assistant}>{model}</Text>
+          <Text dimColor>  cost </Text>
           <Text color={theme.hex.success}>${costUsd.toFixed(4)}</Text>
         </Text>
       </Box>

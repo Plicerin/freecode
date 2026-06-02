@@ -27,6 +27,10 @@ export class ContextTracker extends EventEmitter {
     this.pricing = opts.pricing ?? { input: 3, output: 15 };
   }
 
+  setPricing(pricing: ModelPrice): void {
+    this.pricing = pricing;
+  }
+
   record(u: TokenUsage): void {
     this.usage = {
       input: this.usage.input + u.input,
