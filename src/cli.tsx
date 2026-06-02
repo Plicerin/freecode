@@ -24,6 +24,7 @@ interface ParsedArgs {
   theme?: "dark" | "light";
   maxTurns?: number;
   webSearchProvider?: "duckduckgo" | "tavily" | "exa" | "firecrawl";
+  thinking?: boolean;
 }
 
 const program = new Command();
@@ -43,7 +44,8 @@ program
   .option("--permission-mode <mode>", "manual|auto|bypass")
   .option("--theme <name>", "dark|light")
   .option("--max-turns <n>", "Maximum agent loop turns", (v) => Number.parseInt(v, 10))
-  .option("--web-search <provider>", "duckduckgo|tavily|exa|firecrawl");
+  .option("--web-search <provider>", "duckduckgo|tavily|exa|firecrawl")
+  .option("--thinking", "Enable extended thinking / reasoning", false);
 
 async function main(): Promise<void> {
   // `freecode auth …` manages the encrypted key vault (handled before commander).
@@ -63,6 +65,7 @@ async function main(): Promise<void> {
     theme: opts.theme,
     maxTurns: opts.maxTurns,
     webSearchProvider: opts.webSearchProvider,
+    enableExtendedThinking: opts.thinking ? true : undefined,
     print: opts.print,
     resume: opts.resume,
     port: opts.port ? Number.parseInt(opts.port, 10) : undefined,
@@ -129,6 +132,8 @@ async function runPrint({ prompt, flags }: { prompt: string; flags: CliFlags }):
       images,
       contextWindow: contextWindowFor(config.model),
       contextThreshold: config.contextThreshold,
+      enablePromptCache: config.enablePromptCache,
+      enableExtendedThinking: config.enableExtendedThinking,
       permission,
       promptUser: (async () => "allow") as ApprovalCallback,
       onEvent: (e) => {

@@ -21,6 +21,7 @@ export interface CliFlags {
   theme?: "dark" | "light";
   maxTurns?: number;
   webSearchProvider?: "duckduckgo" | "tavily" | "exa" | "firecrawl";
+  enableExtendedThinking?: boolean;
   print?: boolean;
   resume?: string;
   port?: number;
@@ -229,7 +230,7 @@ export function loadConfig(opts: LoadOptions): ResolvedConfig {
     maxTurns: turnsPick.value ?? DEFAULTS.maxTurns,
     contextThreshold: settings.contextThreshold ?? DEFAULTS.contextThreshold,
     enablePromptCache: settings.enablePromptCache ?? DEFAULTS.enablePromptCache,
-    enableExtendedThinking: settings.enableExtendedThinking ?? DEFAULTS.enableExtendedThinking,
+    enableExtendedThinking: opts.flags.enableExtendedThinking ?? settings.enableExtendedThinking ?? DEFAULTS.enableExtendedThinking,
     mcpServers: settings.mcpServers,
     source: {
       provider: provider.source as Source,

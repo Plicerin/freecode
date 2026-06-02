@@ -118,6 +118,7 @@ freecode --resume <session-id>              # resume a session in REPL
 freecode --serve --port 50051               # gRPC server (placeholder)
 freecode --provider openai --model gpt-4o   # override provider
 freecode --permission-mode bypass           # skip all prompts
+freecode --thinking                          # enable extended thinking / reasoning
 ```
 
 ## Slash commands (REPL)

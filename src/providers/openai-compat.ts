@@ -84,10 +84,16 @@ export class OpenAICompatProvider implements Provider {
       // GPT-5 family and o-series reasoning models renamed the cap to
       // max_completion_tokens and only accept the default temperature.
       body.max_completion_tokens = maxTokens;
+      // These models reason natively. reasoning_effort + function tools is
+      // rejected on /v1/chat/completions, so only set it when no tools are sent.
+      const hasTools = !!(req.tools && req.tools.length > 0 && this.opts.supportsTools);
+      if (req.enableExtendedThinking && !hasTools) body.reasoning_effort = "high";
     } else {
       body.max_tokens = maxTokens;
       body.temperature = req.temperature ?? 0.7;
     }
+    // Note: OpenAI prompt caching is automatic (no markers); cached_tokens are
+    // already read from usage. Anthropic needs explicit cache_control markers.
     if (req.tools && req.tools.length > 0 && this.opts.supportsTools) {
       body.tools = req.tools.map((t) => ({
         type: "function",

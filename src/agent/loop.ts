@@ -36,6 +36,8 @@ export interface AgentLoopOptions {
   onEvent: (event: AgentEvent) => void;
   contextWindow?: number;
   contextThreshold?: number;
+  enablePromptCache?: boolean;
+  enableExtendedThinking?: boolean;
 }
 
 export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: number; usage: TokenUsage; aborted: boolean; messages: ChatMessage[] }> {
@@ -97,6 +99,8 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
       })),
       stream: true,
       maxTokens: 8192,
+      enablePromptCache: opts.enablePromptCache,
+      enableExtendedThinking: opts.enableExtendedThinking,
       signal: opts.signal,
     };
 

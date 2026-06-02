@@ -5,6 +5,54 @@ import { debug } from "../utils/debug";
 
 interface AnthropicBlock { type: string; [k: string]: unknown }
 
+const EPHEMERAL = { type: "ephemeral" } as const;
+
+/**
+ * Build the Anthropic /v1/messages request body, applying prompt caching
+ * (cache_control breakpoints on the system prompt, tools, and the last
+ * message) and extended thinking when requested.
+ */
+export function buildAnthropicBody(req: ChatRequest): Record<string, unknown> {
+  const cache = req.enablePromptCache !== false; // default on
+  const messages = toAnthropicMessages(req.messages);
+
+  // Cache the conversation prefix: breakpoint on the last block of the last message.
+  if (cache && messages.length > 0) {
+    const last = messages[messages.length - 1]!;
+    const block = last.content[last.content.length - 1];
+    if (block) (block as Record<string, unknown>).cache_control = EPHEMERAL;
+  }
+
+  const body: Record<string, unknown> = {
+    model: req.model,
+    max_tokens: req.maxTokens ?? 8192,
+    messages,
+    stream: true,
+  };
+
+  // System prompt — array form so it can carry a cache breakpoint.
+  if (req.system) {
+    body.system = cache
+      ? [{ type: "text", text: req.system, cache_control: EPHEMERAL }]
+      : req.system;
+  }
+
+  if (req.tools && req.tools.length > 0) {
+    const tools = toAnthropicTools(req.tools);
+    if (cache) (tools[tools.length - 1] as Record<string, unknown>).cache_control = EPHEMERAL;
+    body.tools = tools;
+  }
+
+  if (req.enableExtendedThinking) {
+    const budget = 8000;
+    body.thinking = { type: "enabled", budget_tokens: budget };
+    // max_tokens must exceed the thinking budget; give headroom for the answer.
+    body.max_tokens = Math.max(Number(body.max_tokens) || 0, budget + 8000);
+  }
+
+  return body;
+}
+
 /** Convert tool definitions to Anthropic's tool format. */
 export function toAnthropicTools(tools: ToolDefinition[]): Array<Record<string, unknown>> {
   return tools.map((t) => ({
@@ -87,16 +135,7 @@ export class AnthropicProvider implements Provider {
       return;
     }
     const url = `${this.baseUrl}/v1/messages`;
-    const body: Record<string, unknown> = {
-      model: req.model,
-      max_tokens: req.maxTokens ?? 8192,
-      system: req.system,
-      messages: toAnthropicMessages(req.messages),
-      stream: true,
-    };
-    if (req.tools && req.tools.length > 0) {
-      body.tools = toAnthropicTools(req.tools);
-    }
+    const body = buildAnthropicBody(req);
     debug.log("anthropic request", { url, model: req.model });
     let resp: Response;
     try {

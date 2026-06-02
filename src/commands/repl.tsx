@@ -307,6 +307,8 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         history: conversationRef.current,
         contextWindow: contextWindowFor(model),
         contextThreshold: config.contextThreshold,
+        enablePromptCache: config.enablePromptCache,
+        enableExtendedThinking: config.enableExtendedThinking,
         permission,
         promptUser,
         signal: controller.signal,
