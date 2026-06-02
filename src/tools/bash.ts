@@ -19,12 +19,36 @@ const DEFAULT_DENY: RegExp[] = [
   /\bwget\b.*\|\s*(?:ba)?sh\b/,
   /:\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:/,
   /\bchmod\s+-R\s+777\s+\/(?:\s|$)/,
+  // PowerShell catastrophic recursive delete of a drive root (defense-in-depth;
+  // the permission prompt is the primary guard, so normal ./dir deletes are fine).
+  /\bRemove-Item\b[^|\n]*-Recurse\b[^|\n]*-Force\b[^|\n]*\b[A-Za-z]:\\?(?:\s|$)/i,
 ];
 
 export interface BashToolOptions {
   allow?: RegExp[];
   deny?: RegExp[];
   maxOutputBytes?: number;
+  /** Override the Windows shell (default powershell.exe). */
+  shellPath?: string;
+}
+
+const IS_WINDOWS = process.platform === "win32";
+
+/** The shell the Bash tool executes in, for the system prompt and UX. */
+export function bashShellName(): string {
+  return IS_WINDOWS ? "PowerShell" : "bash/sh";
+}
+
+/**
+ * Build the spawn invocation for a command. On Windows we run PowerShell
+ * explicitly (shell:true would use cmd.exe, which rejects PowerShell syntax);
+ * on Unix we let the default shell interpret the command string.
+ */
+function spawnArgs(command: string, shellPath: string | undefined): { file: string; args: string[]; useShell: boolean } {
+  if (IS_WINDOWS) {
+    return { file: shellPath ?? "powershell.exe", args: ["-NoProfile", "-NonInteractive", "-Command", command], useShell: false };
+  }
+  return { file: command, args: [], useShell: true };
 }
 
 export function createBashTool(opts: BashToolOptions = {}): Tool<z.infer<typeof ArgsSchema>> {
@@ -34,7 +58,7 @@ export function createBashTool(opts: BashToolOptions = {}): Tool<z.infer<typeof 
 
   return {
     name: "Bash",
-    description: "Execute a shell command. Use for git, npm, scripts, system inspection. Long-running output is truncated.",
+    description: `Execute a shell command in ${bashShellName()}. Use for git, npm, scripts, system inspection. Long-running output is truncated.`,
     schema: ArgsSchema,
     permission: "confirm",
     async run(args, ctx) {
@@ -52,8 +76,9 @@ export function createBashTool(opts: BashToolOptions = {}): Tool<z.infer<typeof 
         return { ok: false, output: "", error: "Command not in allowlist" };
       }
       return new Promise((resolve) => {
-        const child = spawn(args.command, {
-          shell: true,
+        const inv = spawnArgs(args.command, opts.shellPath);
+        const child = spawn(inv.file, inv.args, {
+          shell: inv.useShell,
           cwd: args.cwd ?? ctx.cwd,
           env: { ...process.env, ...(args.env ?? {}) },
           signal: ctx.signal,

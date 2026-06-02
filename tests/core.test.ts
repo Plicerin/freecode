@@ -13,7 +13,7 @@ import type { Tool } from "../src/tools/types";
 
 describe("MockProvider", () => {
   it("streams text then ends", async () => {
-    const p = new MockProvider();
+    const p = new MockProvider(0);
     const events: string[] = [];
     for await (const e of p.stream({ model: "mock-1", messages: [{ role: "user", content: "hi" }] })) {
       if (e.type === "text_delta") events.push(e.delta);
@@ -43,7 +43,7 @@ describe("Bash tool denylist (V4)", () => {
     const r = await t.run({ command: cmd }, { cwd: process.cwd() });
     expect(r.ok).toBe(true);
     expect(r.output).toMatch(/hello/);
-  });
+  }, 30000); // real shell spawn; first PowerShell launch can be slow under AV
 });
 
 describe("FileRead / FileWrite", () => {
@@ -94,7 +94,7 @@ describe("Agent loop integration", () => {
     const tools: Tool[] = [];
     const perm = createPermissionEngine("bypass", (async () => "allow") as ApprovalCallback);
     const res = await runAgentLoop({
-      provider: new MockProvider(),
+      provider: new MockProvider(0),
       tools,
       model: "mock-1",
       maxTurns: 5,

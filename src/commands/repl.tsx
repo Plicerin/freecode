@@ -189,6 +189,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   const [costUsd, setCostUsd] = useState(0);
   const [pending, setPending] = useState<ApprovalRequest | null>(null);
   const approvalResolver = useRef<((d: ApprovalDecision) => void) | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   const promptUser: ApprovalCallback = (req) =>
     new Promise<ApprovalDecision>((resolve) => {
@@ -246,6 +247,8 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     appendEvent(sessionRef.current, { kind: "user", text: prompt, ts: new Date().toISOString() });
     let buffer = "";
     const t0 = Date.now();
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
       const result = await runAgentLoop({
         provider,
@@ -255,6 +258,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         prompt,
         permission,
         promptUser,
+        signal: controller.signal,
         onEvent: (e) => {
           if (e.type === "text_delta" && e.text) {
             buffer += e.text;
@@ -288,8 +292,13 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       appendEvent(sessionRef.current, { kind: "assistant", text: buffer, ts: new Date().toISOString(), usage: result.usage as unknown as Record<string, number> });
       debug.log("turn complete", { turns: result.turns, usage: result.usage });
     } catch (err) {
-      setErrorLine(err instanceof Error ? err.message : String(err));
+      if (controller.signal.aborted) {
+        setMessages((prev) => [...prev, { id: `int-${Date.now()}`, role: "system", text: "⏹ Interrupted." }]);
+      } else {
+        setErrorLine(err instanceof Error ? err.message : String(err));
+      }
     } finally {
+      abortRef.current = null;
       setBusy(false);
     }
   }
@@ -382,6 +391,11 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       if (lower === "a") approvalResolver.current?.("allow");
       else if (lower === "y") approvalResolver.current?.("allow-always");
       else if (lower === "d" || key.escape) approvalResolver.current?.("deny");
+      return;
+    }
+    // esc interrupts a running turn.
+    if (key.escape && busy) {
+      abortRef.current?.abort();
       return;
     }
     if (key.ctrl && input2 === "u") {

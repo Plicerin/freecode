@@ -13,6 +13,9 @@ export class MockProvider implements Provider {
   name = "Mock";
   id = "mock";
 
+  /** Per-character streaming delay (ms). Cosmetic; pass 0 in tests. */
+  constructor(private readonly delayMs: number = 8) {}
+
   models() {
     return ["mock-1", "mock-2", "mock-fast"];
   }
@@ -30,7 +33,7 @@ export class MockProvider implements Provider {
     for (const ch of text) {
       buffer += ch;
       yield { type: "text_delta", delta: ch };
-      await sleep(8);
+      if (this.delayMs > 0) await sleep(this.delayMs);
     }
 
     // One-shot demo tool call on the first turn if the prompt mentions
