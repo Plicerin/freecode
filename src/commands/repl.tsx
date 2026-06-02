@@ -13,6 +13,7 @@ import { summarizeConversation } from "../agent/summarize";
 import { Vault } from "../config/vault";
 import { loadCustomCommands, expandCommand } from "./custom-commands";
 import { closest } from "../utils/fuzzy";
+import { resolveVerify, runVerify } from "../agent/verify";
 import { newSession, appendEvent, listSessions, resumeSession, readSession, type Session } from "../session/manager";
 import { makeTheme } from "../tui/theme";
 import { debug } from "../utils/debug";
@@ -36,7 +37,7 @@ interface UiMessage {
   ok?: boolean;
 }
 
-const SLASH_COMMANDS = ["/model", "/new", "/resume", "/context", "/provider", "/mcp", "/plan", "/help", "/compact"];
+const SLASH_COMMANDS = ["/model", "/new", "/resume", "/context", "/provider", "/mcp", "/plan", "/verify", "/help", "/compact"];
 
 const PLAN_MODE_NOTE =
   "\n\nPLAN MODE: You are in read-only planning mode. Do NOT modify anything — no file writes or edits, no state-changing commands. Investigate the request using the available read-only tools, then present a concise, numbered implementation plan and STOP. The user will review it and exit plan mode to have you carry it out.";
@@ -450,6 +451,26 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Provider switch to ${arg} — restart with --provider ${arg} (env reload required for live switch)` }]);
         } else {
           setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Provider: ${config.provider}\nBase URL: ${config.baseUrl ?? "(default)"}\nModel: ${model}` }]);
+        }
+        break;
+      }
+      case "/verify": {
+        const plan = resolveVerify(process.cwd(), config.verify);
+        if (plan.source === "none") {
+          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "No verification command found. Set \"verify\" in settings, or add a test/typecheck script." }]);
+          break;
+        }
+        setBusy(true);
+        setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Verifying (${plan.source}): ${plan.commands.join(" && ")}…` }]);
+        try {
+          const res = await runVerify(plan, process.cwd());
+          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: res.ok
+            ? `✓ Verified — ${res.ranCommands.join(" && ")} passed.`
+            : `✗ Verification failed at \`${res.failedCommand}\`:\n${res.output.slice(-1500)}` }]);
+        } catch (err) {
+          setErrorLine(err instanceof Error ? err.message : String(err));
+        } finally {
+          setBusy(false);
         }
         break;
       }

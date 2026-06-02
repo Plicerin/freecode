@@ -233,6 +233,7 @@ export function loadConfig(opts: LoadOptions): ResolvedConfig {
     enableExtendedThinking: opts.flags.enableExtendedThinking ?? settings.enableExtendedThinking ?? DEFAULTS.enableExtendedThinking,
     mcpServers: settings.mcpServers,
     hooks: settings.hooks,
+    verify: settings.verify,
     source: {
       provider: provider.source as Source,
       model: modelPick.source as Source,

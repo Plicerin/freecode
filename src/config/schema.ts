@@ -67,6 +67,7 @@ export const SettingsSchema = z.object({
   extraEnv: z.record(z.string()).optional(),
   mcpServers: z.record(McpServerSchema).optional(),
   hooks: HooksSchema.optional(),
+  verify: z.union([z.string(), z.array(z.string())]).optional(),
 });
 export type Settings = z.infer<typeof SettingsSchema>;
 
@@ -84,6 +85,7 @@ export const ResolvedConfigSchema = z.object({
   enableExtendedThinking: z.boolean().default(false),
   mcpServers: z.record(McpServerSchema).optional(),
   hooks: HooksSchema.optional(),
+  verify: z.union([z.string(), z.array(z.string())]).optional(),
   source: z.object({
     provider: z.enum(["cli", "profile", "env", "settings", "default"]),
     model: z.enum(["cli", "profile", "env", "settings", "default"]),

@@ -132,6 +132,7 @@ freecode --thinking                          # enable extended thinking / reason
 | `/provider`| Show or switch provider                       |
 | `/mcp`     | List connected MCP servers and their tools    |
 | `/plan`    | Toggle read-only plan mode (propose, don't change) |
+| `/verify`  | Run the project's checks and report the real result |
 | `/help`    | List commands                                 |
 | `/compact` | Force context compaction                      |
 
