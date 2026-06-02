@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { resolve, isAbsolute } from "node:path";
-import { createTwoFilesPatch, applyPatches } from "diff";
+import { createTwoFilesPatch, applyPatch } from "diff";
 import { z } from "zod";
 import type { Tool } from "./types";
 
@@ -8,14 +8,26 @@ const ArgsSchema = z.object({
   path: z.string().min(1),
   oldText: z.string().optional(),
   newText: z.string().optional(),
+  replaceAll: z.boolean().optional(),
   unifiedDiff: z.string().min(1).optional(),
 }).refine((a) => (a.oldText !== undefined && a.newText !== undefined) || a.unifiedDiff, {
   message: "Provide either (oldText + newText) or unifiedDiff",
 });
 
+function countOccurrences(haystack: string, needle: string): number {
+  if (!needle) return 0;
+  let count = 0;
+  let i = haystack.indexOf(needle);
+  while (i !== -1) {
+    count += 1;
+    i = haystack.indexOf(needle, i + needle.length);
+  }
+  return count;
+}
+
 export const FileEditTool: Tool<z.infer<typeof ArgsSchema>> = {
   name: "FileEdit",
-  description: "Edit a file. Two modes: (1) oldText + newText string replace, (2) unifiedDiff patch (patch format from `diff -u`).",
+  description: "Edit a file. Two modes: (1) oldText + newText string replace (oldText must be unique unless replaceAll is set), (2) unifiedDiff patch (from `diff -u`).",
   schema: ArgsSchema,
   permission: "confirm",
   async run(args, ctx) {
@@ -26,37 +38,39 @@ export const FileEditTool: Tool<z.infer<typeof ArgsSchema>> = {
     const original = readFileSync(abs, "utf8");
 
     if (args.oldText !== undefined && args.newText !== undefined) {
-      if (!original.includes(args.oldText)) {
+      const matches = countOccurrences(original, args.oldText);
+      if (matches === 0) {
         return { ok: false, output: "", error: "oldText not found in file (no match)" };
       }
-      const updated = original.replace(args.oldText, args.newText);
+      if (matches > 1 && !args.replaceAll) {
+        return { ok: false, output: "", error: `oldText is not unique (${matches} matches). Add surrounding context to make it unique, or set replaceAll: true.` };
+      }
+      const updated = args.replaceAll
+        ? original.split(args.oldText).join(args.newText)
+        : original.replace(args.oldText, args.newText);
       try {
         writeFileSync(abs, updated, "utf8");
       } catch (err) {
         return { ok: false, output: "", error: `Write failed: ${String(err)}` };
       }
       const diff = createTwoFilesPatch(args.path, args.path, original, updated, "before", "after");
-      return { ok: true, output: diff, metadata: { mode: "replace", changedBytes: args.newText.length - args.oldText.length } };
+      return { ok: true, output: diff, metadata: { mode: "replace", replacements: args.replaceAll ? matches : 1 } };
     }
 
     if (args.unifiedDiff) {
-      // Unified diff path: parse the patch and apply it.
-      // The diff library requires a loadFile/patched/complete callback contract;
-      // we use the synchronous in-memory variant.
-      const result = applyPatches(args.unifiedDiff, {
-        loadFile: (_idx: number, _cb: (err: Error | null, data?: string) => void) => original,
-        patched: (_idx: number, _content: string, _cb: (err: Error | null) => void) => {},
-        complete: (_err?: Error | null) => {},
-      } as unknown as Parameters<typeof applyPatches>[1]);
-      if (typeof result === "string" && result) {
-        try {
-          writeFileSync(abs, result, "utf8");
-        } catch (err) {
-          return { ok: false, output: "", error: `Write failed: ${String(err)}` };
-        }
-        return { ok: true, output: "Patch applied", metadata: { mode: "diff" } };
+      // applyPatch (singular) is synchronous and returns the patched string,
+      // or false if the patch doesn't apply cleanly.
+      const result = applyPatch(original, args.unifiedDiff);
+      if (result === false) {
+        return { ok: false, output: "", error: "Patch did not apply cleanly against the current file contents" };
       }
-      return { ok: false, output: "", error: "Patch did not apply cleanly" };
+      try {
+        writeFileSync(abs, result, "utf8");
+      } catch (err) {
+        return { ok: false, output: "", error: `Write failed: ${String(err)}` };
+      }
+      const diff = createTwoFilesPatch(args.path, args.path, original, result, "before", "after");
+      return { ok: true, output: diff, metadata: { mode: "diff" } };
     }
 
     return { ok: false, output: "", error: "No edit payload provided" };

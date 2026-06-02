@@ -76,6 +76,20 @@ function defaultEndpoint(provider: string, baseUrl?: string): string {
   }
 }
 
+/**
+ * Rebuild a conversation history from persisted session events so a resumed
+ * session keeps its context. Text-only (user/assistant) — tool_use/tool_result
+ * pairing isn't reconstructed, which keeps the provider message format valid.
+ */
+function historyFromEvents(events: Array<{ kind: string; text?: string }>): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  for (const e of events) {
+    if (e.kind === "user" && e.text) out.push({ role: "user", content: e.text });
+    else if (e.kind === "assistant" && e.text) out.push({ role: "assistant", content: e.text });
+  }
+  return out;
+}
+
 function Banner(): JSX.Element {
   const rows = [...bannerRows("FREE"), ...bannerRows("CODE")];
   return (
@@ -223,6 +237,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
             ok: (e as { ok?: boolean }).ok,
           }));
         setMessages(restored);
+        conversationRef.current = historyFromEvents(events);
       }
     } else {
       sessionRef.current = newSession(cwd);
@@ -340,7 +355,18 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           const s = resumeSession(process.cwd(), arg);
           if (s) {
             sessionRef.current = s;
-            setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Resumed ${arg}` }]);
+            const events = readSession(s) as Array<{ kind: string; text: string; name?: string; ok?: boolean }>;
+            const restored: UiMessage[] = events
+              .filter((e) => e.kind === "user" || e.kind === "assistant" || e.kind === "tool_result")
+              .map((e, i) => ({
+                id: `${s.id}-${i}`,
+                role: e.kind === "user" ? "user" : e.kind === "assistant" ? "assistant" : "tool",
+                text: e.text,
+                toolName: (e as { name?: string }).name,
+                ok: (e as { ok?: boolean }).ok,
+              }));
+            conversationRef.current = historyFromEvents(events);
+            setMessages([...restored, { id: `s-${Date.now()}`, role: "system", text: `Resumed ${arg} (${conversationRef.current.length} messages of context)` }]);
           } else {
             setErrorLine(`No such session: ${arg}`);
           }
