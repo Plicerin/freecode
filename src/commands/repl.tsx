@@ -517,12 +517,11 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       }
       return;
     }
-    if (key.backspace) {
+    // Terminals are inconsistent: the Backspace key arrives as key.backspace
+    // (0x08) on some and key.delete (0x7f) on others, so treat both as a
+    // backspace (delete the char before the caret).
+    if (key.backspace || key.delete) {
       setEditor((e) => (e.cursor > 0 ? { text: e.text.slice(0, e.cursor - 1) + e.text.slice(e.cursor), cursor: e.cursor - 1 } : e));
-      return;
-    }
-    if (key.delete) {
-      setEditor((e) => ({ ...e, text: e.text.slice(0, e.cursor) + e.text.slice(e.cursor + 1) }));
       return;
     }
     if (input2 && !key.ctrl && !key.meta) {
