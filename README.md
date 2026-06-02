@@ -30,6 +30,8 @@ Set the active provider with an env flag, then supply the matching key:
 
 Without a flag, freecode auto-detects whichever key is set.
 
+> **Note:** AWS Bedrock and Google Vertex are listed for selector completeness but are **not implemented yet** — selecting them returns a clear "not implemented" error rather than fake output. Use `--provider mock` for an offline, no-key demo.
+
 ## Per-project profile
 
 `.freecode-profile.json` in your project root overrides env settings for that project only:
@@ -142,6 +144,6 @@ Retries use exponential backoff with jitter. `CLAUDE_DEBUG=1` writes verbose log
 
 This is a working v0.1. See `SPEC.md` for the full design.
 
-**Working:** 9 providers (Anthropic, OpenAI-compat covers OpenAI/GitHub Models/LM Studio/NVIDIA NIM, Gemini, mock; Bedrock/Vertex/Ollama fall through to mock), settings priority + JSONC + hot-reload, sessions + /new + /resume, 8 tools, permission engine, denylist, REPL with status bar + input + footer + slash commands + keybinds, dark/light theme with fixed RGB constants, agent loop with streaming + tool exec + retry, friendly error mapping, --print headless mode, 17 unit tests.
+**Working:** real providers — Anthropic, OpenAI-compat (covers OpenAI / GitHub Models / LM Studio / NVIDIA NIM), Gemini, and **Ollama** (local, via its OpenAI-compatible API); plus an explicit `mock` provider for offline demos. Settings priority + JSONC + hot-reload, sessions + /new + /resume, 8 tools, permission engine with interactive approval prompts (allow / allow-always / deny), denylist, REPL with banner + info box + slash commands + keybinds, dark/light theme, agent loop with streaming + tool exec + retry, **auto-compaction** when the context window fills, **per-model cost** estimation (local models free), friendly error mapping, --print headless mode, 24 unit tests.
 
-**Deferred:** gRPC proto + bidirectional stream (current `serve` is a port-binding placeholder), Bedrock + Vertex + Ollama real providers (mock fallback for now), spinner shimmer component (TUI shows static indicator), auto-compact invocation wired to provider, prompt cache markers in provider requests.
+**Not implemented yet (fail honestly — no fake output):** AWS Bedrock (needs SigV4 signing) and Google Vertex (needs service-account auth) return a clear "not implemented" error. Also deferred: gRPC bidirectional stream (`serve` is a port-binding placeholder), spinner shimmer component, prompt-cache markers in provider requests.
