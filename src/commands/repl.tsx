@@ -545,15 +545,24 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       }
       return;
     }
-    // Terminals are inconsistent: the Backspace key arrives as key.backspace
-    // (0x08) on some and key.delete (0x7f) on others, so treat both as a
-    // backspace (delete the char before the caret).
-    if (key.backspace || key.delete) {
-      setEditor((e) => (e.cursor > 0 ? { text: e.text.slice(0, e.cursor - 1) + e.text.slice(e.cursor), cursor: e.cursor - 1 } : e));
+    // Backspace. A single press arrives as key.backspace (0x08) or key.delete
+    // (0x7f). HELD backspace (auto-repeat) arrives as a batched chunk like
+    // "\x7f\x7f\x7f" that Ink does NOT flag — so detect that too and delete N.
+    let bs = 0;
+    if (key.backspace || key.delete) bs = 1;
+    else if (input2 && /^[\x08\x7f]+$/.test(input2)) bs = input2.length;
+    if (bs > 0) {
+      setEditor((e) => {
+        const c = Math.max(0, e.cursor - bs);
+        return { text: e.text.slice(0, c) + e.text.slice(e.cursor), cursor: c };
+      });
       return;
     }
+    // Insert printable input. Strip control characters so stray DEL/BS bytes
+    // from key bursts are never inserted (which previously pushed the caret).
     if (input2 && !key.ctrl && !key.meta) {
-      setEditor((e) => ({ text: e.text.slice(0, e.cursor) + input2 + e.text.slice(e.cursor), cursor: e.cursor + input2.length }));
+      const clean = input2.replace(/[\x00-\x1F\x7F]/g, "");
+      if (clean) setEditor((e) => ({ text: e.text.slice(0, e.cursor) + clean + e.text.slice(e.cursor), cursor: e.cursor + clean.length }));
     }
   });
 
