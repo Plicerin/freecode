@@ -38,7 +38,7 @@ interface UiMessage {
   ok?: boolean;
 }
 
-const SLASH_COMMANDS = ["/model", "/new", "/resume", "/context", "/provider", "/mcp", "/plan", "/verify", "/help", "/compact", "/about"];
+const SLASH_COMMANDS = ["/model", "/new", "/resume", "/context", "/provider", "/mcp", "/plan", "/verify", "/help", "/compact", "/about", "/exit"];
 
 const COMMAND_DESC: Record<string, string> = {
   "/model": "show or switch model",
@@ -52,6 +52,7 @@ const COMMAND_DESC: Record<string, string> = {
   "/help": "list commands",
   "/compact": "compact the conversation",
   "/about": "meet Bubo, the freecode owl",
+  "/exit": "exit freecode",
 };
 
 const PLAN_MODE_NOTE =
@@ -548,6 +549,11 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       }
       case "/about": {
         setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `${OWL_MICRO}  ${MASCOT_BIO}` }]);
+        break;
+      }
+      case "/exit":
+      case "/quit": {
+        exit();
         break;
       }
       case "/compact": {

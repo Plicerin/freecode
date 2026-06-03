@@ -142,6 +142,7 @@ freecode --thinking                          # enable extended thinking / reason
 | `/help`    | List commands                                 |
 | `/compact` | Force context compaction                      |
 | `/about`   | Meet Bubo, the freecode owl                    |
+| `/exit`    | Exit freecode (`/quit`, or `Ctrl+C`)           |
 
 ### Custom slash commands
 
