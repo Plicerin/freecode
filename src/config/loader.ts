@@ -97,6 +97,14 @@ function providerEnvKey(p: ProviderId): string | undefined {
 // actually has a usable key — vault or env — over the hardcoded default. Without
 // this, freecode boots pointing at anthropic with no key while the user's key
 // (e.g. openai) sits in the vault.
+// Does this provider have a key we can actually use? Local providers need none.
+function hasUsableKey(p: ProviderId): boolean {
+  if (p === "ollama" || p === "lmstudio") return true;
+  if (vaultApiKey(p)) return true;
+  const envKey = providerEnvKey(p);
+  return !!(envKey && getEnv(envKey));
+}
+
 function firstProviderWithKey(): ProviderId | undefined {
   const order: ProviderId[] = ["anthropic", "openai", "gemini", "github-models", "nim"];
   let vaultProviders: string[] = [];
@@ -106,9 +114,7 @@ function firstProviderWithKey(): ProviderId | undefined {
     vaultProviders = [];
   }
   for (const p of order) {
-    if (vaultProviders.includes(p)) return p;
-    const envKey = providerEnvKey(p);
-    if (envKey && getEnv(envKey)) return p;
+    if (hasUsableKey(p)) return p;
   }
   return vaultProviders.length ? (vaultProviders[0] as ProviderId) : undefined;
 }
@@ -155,14 +161,24 @@ export function loadConfig(opts: LoadOptions): ResolvedConfig {
   const settings: Settings = loadJsoncSettings(opts.settingsPath);
 
   const envProvider = detectProviderFromEnv();
-  const provider = pick<ProviderId | undefined>(
-    opts.flags.provider,
-    profile.provider,
-    envProvider,
-    undefined,
-    undefined,
-  );
-  const finalProvider: ProviderId = provider.value ?? firstProviderWithKey() ?? DEFAULTS.provider;
+  // A deliberate choice (CLI flag or project profile) is absolute. Otherwise an
+  // env-detected provider is honored only if it has a usable key — so a stray
+  // CLAUDE_CODE_USE_X flag (or empty key var) can't boot us into a keyless
+  // provider while a real key (e.g. openai in the vault) goes unused.
+  const deliberate = opts.flags.provider ?? profile.provider;
+  let finalProvider: ProviderId;
+  let providerSource: Source;
+  if (deliberate) {
+    finalProvider = deliberate;
+    providerSource = opts.flags.provider !== undefined ? "cli" : "profile";
+  } else if (envProvider && hasUsableKey(envProvider)) {
+    finalProvider = envProvider;
+    providerSource = "env";
+  } else {
+    const withKey = firstProviderWithKey();
+    finalProvider = withKey ?? envProvider ?? DEFAULTS.provider;
+    providerSource = withKey ? "default" : envProvider ? "env" : "default";
+  }
 
   const envModel = envValueFor("CLAUDE_CODE_MODEL") ?? envValueFor("OPENAI_MODEL") ?? envValueFor("ANTHROPIC_MODEL");
   const modelPick = pick<string | undefined>(
@@ -233,7 +249,7 @@ export function loadConfig(opts: LoadOptions): ResolvedConfig {
     hasKey: !!finalApiKey,
     permMode: permPick.value,
     sources: {
-      provider: provider.source,
+      provider: providerSource,
       model: modelPick.source,
       baseUrl: baseUrlPick.source,
       apiKey: apiKeyPick.source,
@@ -257,7 +273,7 @@ export function loadConfig(opts: LoadOptions): ResolvedConfig {
     verify: settings.verify,
     verifyMode: opts.flags.verifyMode ?? settings.verifyMode ?? "on",
     source: {
-      provider: provider.source as Source,
+      provider: providerSource,
       model: modelPick.source as Source,
       baseUrl: baseUrlPick.source as Source,
       apiKey: apiKeyPick.source as Source,
