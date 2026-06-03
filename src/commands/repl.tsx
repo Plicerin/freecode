@@ -141,15 +141,37 @@ function Banner(): JSX.Element {
   );
 }
 
+// Human-readable reason a provider was selected — shown in the startup box so
+// "why is it on X?" is never a mystery.
+function providerReason(provider: string, source: string): string {
+  switch (source) {
+    case "cli": return "--provider flag";
+    case "profile": return ".freecode-profile.json";
+    case "env": {
+      const flag = `CLAUDE_CODE_USE_${provider.toUpperCase().replace(/-/g, "_")}`;
+      if (process.env[flag]) return flag;
+      const keyVar: Record<string, string> = {
+        anthropic: "ANTHROPIC_API_KEY", openai: "OPENAI_API_KEY", gemini: "GEMINI_API_KEY",
+        "github-models": "GITHUB_TOKEN", nim: "NVIDIA_API_KEY", ollama: "OLLAMA_HOST", lmstudio: "LMSTUDIO_HOST",
+      };
+      return keyVar[provider] && process.env[keyVar[provider]!] ? keyVar[provider]! : "env";
+    }
+    case "default": return "auto-detected key";
+    default: return source;
+  }
+}
+
 interface IntroProps {
   provider: string;
   model: string;
   endpoint: string;
   isLocal: boolean;
+  providerNote: string;
+  hasKey: boolean;
   theme: ReturnType<typeof makeTheme>;
 }
 
-function Intro({ provider, model, endpoint, isLocal, theme }: IntroProps): JSX.Element {
+function Intro({ provider, model, endpoint, isLocal, providerNote, hasKey, theme }: IntroProps): JSX.Element {
   const label = (s: string) => <Text color={theme.dim}>{s.padEnd(10)}</Text>;
   return (
     <Box flexDirection="column" marginBottom={1}>
@@ -165,7 +187,12 @@ function Intro({ provider, model, endpoint, isLocal, theme }: IntroProps): JSX.E
         </Box>
       </Box>
       <Box marginLeft={1} marginTop={1} flexDirection="column" borderStyle="round" borderColor={theme.border} paddingX={1}>
-        <Text>{label("Provider")}<Text color={theme.hex.assistant}>{provider}</Text></Text>
+        <Text>
+          {label("Provider")}
+          <Text color={theme.hex.assistant}>{provider}</Text>
+          <Text color={theme.dim}>{`  · ${providerNote}`}</Text>
+          {!hasKey && !isLocal && <Text color={theme.hex.warning}>{"  · no key — freecode auth add " + provider}</Text>}
+        </Text>
         <Text>{label("Model")}<Text bold>{model}</Text></Text>
         <Text>{label("Endpoint")}<Text color={theme.user}>{endpoint}</Text></Text>
       </Box>
@@ -826,7 +853,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       >
         {(item) =>
           item.kind === "intro" ? (
-            <Intro key={item.key} provider={config.provider} model={model} endpoint={endpoint} isLocal={isLocal} theme={theme} />
+            <Intro key={item.key} provider={config.provider} model={model} endpoint={endpoint} isLocal={isLocal} providerNote={providerReason(config.provider, config.source.provider)} hasKey={!!config.apiKey} theme={theme} />
           ) : (
             <Box key={item.key} paddingX={1}>
               <MessageLine m={item.m} theme={theme} />
