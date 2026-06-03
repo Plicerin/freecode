@@ -14,6 +14,7 @@ import { Vault } from "../config/vault";
 import { loadCustomCommands, expandCommand } from "./custom-commands";
 import { executeBench, formatBenchPlain } from "./bench";
 import { previewToolResult } from "../tui/preview";
+import { type Confidence, nextConfidence } from "../tui/confidence";
 import { closest } from "../utils/fuzzy";
 import { resolveVerify, resolveQuickVerify, runVerify } from "../agent/verify";
 import { newSession, appendEvent, resumeSession, readSession, setSessionTitle, listSessionMetas, type Session, type SessionMeta } from "../session/manager";
@@ -158,6 +159,19 @@ function providerReason(provider: string, source: string): string {
     }
     case "default": return "auto-detected key";
     default: return source;
+  }
+}
+
+// Earned-confidence badge for the footer. Reflects the verification state of the
+// CURRENT code (not the last action, not a tally): have the project's checks
+// passed with nothing changed since? Derived only from real verify/ledger
+// signals (see ../tui/confidence) — never a synthesized score.
+function ConfidenceBadge({ state, theme }: { state: Confidence; theme: ReturnType<typeof makeTheme> }): JSX.Element {
+  switch (state) {
+    case "verified": return <Text color={theme.hex.success}>✓ verified</Text>;
+    case "unverified": return <Text color={theme.hex.warning}>~ unverified</Text>;
+    case "failing": return <Text color={theme.hex.error}>✗ failing</Text>;
+    default: return <Text dimColor>· unchecked</Text>;
   }
 }
 
@@ -327,6 +341,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   const [showTasks, setShowTasks] = useState(false);
   const [errorLine, setErrorLine] = useState<string | null>(null);
   const [costUsd, setCostUsd] = useState(0);
+  const [confidence, setConfidence] = useState<Confidence>("unchecked");
   const [pending, setPending] = useState<ApprovalRequest | null>(null);
   // Interactive resume picker: when open, ↑/↓ choose and Enter resumes.
   const [picker, setPicker] = useState<{ items: SessionMeta[]; idx: number } | null>(null);
@@ -491,9 +506,13 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           } else if (e.type === "compacted" && e.text) {
             setMessages((prev) => [...prev, { id: `c-${Date.now()}`, role: "system", text: e.text! }]);
           } else if (e.type === "verify" && e.text) {
+            if (/✓ Verified|passed/.test(e.text)) setConfidence("verified");
+            else if (/failed|still failing/i.test(e.text)) setConfidence("failing");
             setMessages((prev) => [...prev, { id: `vfy-${Date.now()}-${prev.length}`, role: "system", text: e.text! }]);
           } else if (e.type === "ledger" && e.ledger) {
             const L = e.ledger;
+            // Drive the confidence badge from the real ledger (sticky on read-only turns).
+            setConfidence((c) => nextConfidence(c, L));
             const lines: string[] = [];
             if (L.verified.length) lines.push(`✓ verified  ${L.verified.join("; ")}`);
             if (L.observed.length) lines.push(`· observed  ${L.observed.join("; ")}`);
@@ -561,6 +580,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         conversationRef.current = [];
         setMessages([]);
         setCostUsd(0);
+        setConfidence("unchecked");
         setErrorLine(null);
         setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "New session started" }]);
         break;
@@ -631,6 +651,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Verifying (${plan.source}): ${plan.commands.join(" && ")}…` }]);
         try {
           const res = await runVerify(plan, process.cwd());
+          setConfidence(res.ok ? "verified" : "failing");
           setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: res.ok
             ? `✓ Verified — ${res.ranCommands.join(" && ")} passed.`
             : `✗ Verification failed at \`${res.failedCommand}\`:\n${res.output.slice(-1500)}` }]);
@@ -936,6 +957,8 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         )}
         <Text>
           {planMode && <Text color={theme.hex.warning}>PLAN  </Text>}
+          <ConfidenceBadge state={confidence} theme={theme} />
+          <Text dimColor>  · </Text>
           <Text color={theme.hex.assistant}>{model}</Text>
           <Text dimColor>  cost </Text>
           <Text color={theme.hex.success}>${costUsd.toFixed(4)}</Text>
