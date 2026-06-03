@@ -9,6 +9,7 @@ import { summarizeConversation } from "./summarize";
 import { runHooks } from "./hooks";
 import { runVerify, type VerifyPlan } from "./verify";
 import { sanitizeToolPairing } from "./sanitize";
+import { redactSecrets } from "../utils/redact";
 import type { HooksConfig } from "../config/schema";
 
 export interface TurnLedger {
@@ -251,7 +252,13 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
       const t0 = Date.now();
       const result = await tool.run(parsed.data, { cwd: process.cwd(), signal: opts.signal });
       const durationMs = Date.now() - t0;
-      const payload = result.ok ? result.output : `Error: ${result.error ?? "unknown"}\n${result.output}`;
+      // Scrub secrets from tool output BEFORE it touches the model, transcript,
+      // or session log. A `Get-ChildItem Env:` or `cat .env` can spill live keys.
+      const red = redactSecrets(result.output);
+      result.output = red.text;
+      if (result.error) result.error = redactSecrets(result.error).text;
+      const payload = (result.ok ? result.output : `Error: ${result.error ?? "unknown"}\n${result.output}`) +
+        (red.count > 0 ? `\n[freecode redacted ${red.count} secret(s) from this output]` : "");
       if (result.ok && (tool.name === "FileWrite" || tool.name === "FileEdit")) changed = true;
       // Record the action for the provenance ledger (facts, not the model's prose).
       const a = parsed.data as { path?: string; command?: string };

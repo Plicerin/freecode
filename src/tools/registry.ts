@@ -73,6 +73,7 @@ export function toolListToSystemPrompt(tools: Tool[]): string {
     "- NEVER recursively scan the working directory for files to modify, rename, or delete unless the user clearly asked you to act on the whole directory. Grabbing unrelated nearby files is a serious error.",
     "- If a task genuinely needs a capability you don't have, say so plainly and stop. Do not substitute unrelated files or fake progress.",
     "- Before a destructive action (delete, overwrite, bulk rename), confirm the exact targets. Don't proceed on ambiguous scope.",
+    "- Never print secret VALUES (API keys, tokens, passwords). To check env/config, test for presence — e.g. whether a variable is set — instead of echoing it. Don't `cat` a .env or dump full env values. (freecode also redacts known key formats from tool output as a backstop, but don't rely on it.)",
     "- Keep responses concise. After tools return, give the user a direct answer.",
     "",
     "Working effectively (tools & shell):",
