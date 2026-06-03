@@ -171,6 +171,20 @@ function Intro({ provider, model, endpoint, isLocal, theme }: IntroProps): JSX.E
   );
 }
 
+// One transcript line. Shared between the Static scrollback (settled turns)
+// and the live region (the turn in flight) so both render identically.
+function MessageLine({ m, theme }: { m: UiMessage; theme: ReturnType<typeof makeTheme> }): JSX.Element {
+  return (
+    <Text>
+      {m.role === "user" && <Text color={theme.user}>› </Text>}
+      {m.role === "assistant" && <Text color={theme.hex.assistant}>● </Text>}
+      {m.role === "tool" && <Text color={theme.tool}>⚙ </Text>}
+      {m.role === "system" && <Text color={theme.dim}>· </Text>}
+      <Text color={m.role === "ledger" ? theme.dim : undefined} dimColor={m.role === "ledger"}>{m.text}</Text>
+    </Text>
+  );
+}
+
 export async function startRepl(opts: ReplOptions = {}): Promise<void> {
   let config = loadConfig({ flags: opts.flags ?? {} });
 
@@ -242,6 +256,11 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   );
 
   const [messages, setMessages] = useState<UiMessage[]>([]);
+  // How many leading messages are "settled" (turn finished, no longer changing)
+  // and so can live in <Static> — written to terminal scrollback once and never
+  // re-rendered. Only the in-flight turn stays in the dynamic region, which
+  // keeps the input box anchored instead of hopping as content grows.
+  const [settled, setSettled] = useState(0);
   const [model, setModel] = useState(config.model);
   const [planMode, setPlanMode] = useState(false);
   const [menuIdx, setMenuIdx] = useState(0);
@@ -270,6 +289,13 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   const approvalResolver = useRef<((d: ApprovalDecision) => void) | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const streamIdRef = useRef<string | null>(null); // id of the assistant bubble currently streaming
+
+  // When the app is idle (no turn running, no approval pending), every message
+  // is final — flush them all to <Static>. During a turn `settled` is frozen,
+  // so the streaming lines render in the dynamic region and the input holds.
+  useEffect(() => {
+    if (!busy && !pending) setSettled(messages.length);
+  }, [busy, pending, messages.length]);
 
   const promptUser: ApprovalCallback = (req) =>
     new Promise<ApprovalDecision>((resolve) => {
@@ -701,24 +727,31 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
 
   return (
     <Box flexDirection="column">
-      <Static items={[{ provider: config.provider, model: config.model, endpoint, isLocal }]}>
-        {(item, i) => (
-          <Intro key={`intro-${i}`} provider={item.provider} model={item.model} endpoint={item.endpoint} isLocal={item.isLocal} theme={theme} />
-        )}
+      {/* Settled history lives in Static: the intro banner first, then every
+          message from finished turns. Static writes each item to scrollback
+          exactly once, so this whole region never re-renders. */}
+      <Static
+        items={[
+          { kind: "intro" as const, key: "intro" },
+          ...messages.slice(0, settled).filter((m) => m.id).map((m, i) => ({ kind: "msg" as const, key: `${m.id}:${i}`, m })),
+        ]}
+      >
+        {(item) =>
+          item.kind === "intro" ? (
+            <Intro key={item.key} provider={config.provider} model={model} endpoint={endpoint} isLocal={isLocal} theme={theme} />
+          ) : (
+            <Box key={item.key} paddingX={1}>
+              <MessageLine m={item.m} theme={theme} />
+            </Box>
+          )
+        }
       </Static>
 
+      {/* The in-flight turn (and transient status) — the only part that reflows. */}
       <Box flexDirection="row">
         <Box flexDirection="column" flexGrow={1} paddingX={1}>
-          {messages.slice(-200).filter((m) => m.id).map((m, i) => (
-            <Box key={`${m.id}:${i}`} flexDirection="column" marginBottom={0}>
-              <Text>
-                {m.role === "user" && <Text color={theme.user}>› </Text>}
-                {m.role === "assistant" && <Text color={theme.hex.assistant}>● </Text>}
-                {m.role === "tool" && <Text color={theme.tool}>⚙ </Text>}
-                {m.role === "system" && <Text color={theme.dim}>· </Text>}
-                <Text color={m.role === "ledger" ? theme.dim : undefined} dimColor={m.role === "ledger"}>{m.text}</Text>
-              </Text>
-            </Box>
+          {messages.slice(settled).filter((m) => m.id).map((m, i) => (
+            <MessageLine key={`${m.id}:${settled + i}`} m={m} theme={theme} />
           ))}
           {busy && <Text color={theme.hex.warning}>· Combobulating…</Text>}
           {errorLine && <Text color={theme.hex.error}>! {errorLine}</Text>}
