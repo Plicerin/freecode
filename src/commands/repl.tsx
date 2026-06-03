@@ -764,7 +764,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
             ? "[a] allow once · [y] allow always · [d] deny (esc)"
             : busy
               ? "esc to interrupt"
-              : "Ctrl+C exit · Ctrl+U clear · Ctrl+T tasks · Tab complete · Enter send"}
+              : ""}
         </Text>
         <Text>
           {planMode && <Text color={theme.hex.warning}>PLAN  </Text>}
