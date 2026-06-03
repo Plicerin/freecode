@@ -122,6 +122,15 @@ export function createBashTool(opts: BashToolOptions = {}): Tool<z.infer<typeof 
           try { child.kill("SIGKILL"); } catch { /* already gone */ }
         };
 
+        // On interrupt/exit, kill the whole tree (not just the direct child that
+        // the spawn `signal` handles) so a running test suite doesn't outlive us,
+        // and force-resolve if its pipes linger so the loop is never stuck.
+        ctx.signal?.addEventListener("abort", () => {
+          killed = true;
+          killTree();
+          if (!forceTimer) forceTimer = setTimeout(() => settle({ ok: false, output: stdout, error: "Interrupted." + (stderr ? `\n${stderr}` : "") }), 3000);
+        }, { once: true });
+
         const timeoutMsg = `Command timed out after ${timeoutMs}ms — it may be interactive or long-running. Re-run with non-interactive flags (e.g. --yes / -y) or pass a larger timeoutMs.`;
         timeout = setTimeout(() => {
           killed = true;

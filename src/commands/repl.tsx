@@ -268,6 +268,10 @@ export async function startRepl(opts: ReplOptions = {}): Promise<void> {
     await instance.waitUntilExit();
   } finally {
     await mcp.stopAll();
+    // Force a clean exit: lingering handles (a still-running spawned process's
+    // pipes, raw-mode stdin) can otherwise keep the runtime alive after the UI
+    // has closed, so the process appears to hang.
+    process.exit(0);
   }
 }
 
@@ -348,6 +352,14 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   const approvalResolver = useRef<((d: ApprovalDecision) => void) | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const streamIdRef = useRef<string | null>(null); // id of the assistant bubble currently streaming
+
+  // Exit cleanly: abort any in-flight turn first so spawned tool processes (e.g.
+  // a running test suite) are signaled to die — otherwise their open pipes keep
+  // the runtime alive and the process appears to hang after the UI closes.
+  const exitNow = (): void => {
+    abortRef.current?.abort();
+    exit();
+  };
 
   // When the app is idle (no turn running, no approval pending), every message
   // is final — flush them all to <Static>. During a turn `settled` is frozen,
@@ -707,7 +719,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       }
       case "/exit":
       case "/quit": {
-        exit();
+        exitNow();
         break;
       }
       case "/compact": {
@@ -748,7 +760,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
 
   useInput((input2, key) => {
     if (key.ctrl && input2 === "c") {
-      exit();
+      exitNow();
       return;
     }
     // While the resume picker is open, ↑/↓ choose, Enter resumes, Esc cancels.
