@@ -15,6 +15,7 @@ import { loadCustomCommands, expandCommand } from "./custom-commands";
 import { executeBench, formatBenchPlain } from "./bench";
 import { previewToolResult } from "../tui/preview";
 import { type Confidence, nextConfidence } from "../tui/confidence";
+import { logActivity, setActivityLog, activityState } from "../utils/activity";
 import { closest } from "../utils/fuzzy";
 import { resolveVerify, resolveQuickVerify, runVerify } from "../agent/verify";
 import { newSession, appendEvent, resumeSession, readSession, setSessionTitle, listSessionMetas, type Session, type SessionMeta } from "../session/manager";
@@ -41,7 +42,7 @@ interface UiMessage {
   ok?: boolean;
 }
 
-const SLASH_COMMANDS = ["/model", "/new", "/resume", "/rename", "/context", "/provider", "/mcp", "/plan", "/verify", "/bench", "/help", "/compact", "/about", "/exit"];
+const SLASH_COMMANDS = ["/model", "/new", "/resume", "/rename", "/context", "/provider", "/plan", "/verify", "/bench", "/log", "/mcp", "/help", "/compact", "/about", "/exit"];
 
 // Compact relative time for the session picker.
 function relTime(ms: number): string {
@@ -63,6 +64,7 @@ const COMMAND_DESC: Record<string, string> = {
   "/plan": "toggle read-only plan mode",
   "/verify": "run the project's checks",
   "/bench": "race the performance ghost",
+  "/log": "toggle the verification activity log",
   "/help": "list commands",
   "/compact": "compact the conversation",
   "/about": "meet Bubo, the freecode owl",
@@ -376,6 +378,20 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     return () => clearInterval(id);
   }, [busy]);
 
+  // Record session context once (no-op unless the activity log is enabled).
+  useEffect(() => {
+    logActivity(`SESSION start cwd=${process.cwd()} provider=${config.provider} model=${config.model} verifyMode=${config.verifyMode}`);
+  }, []);
+
+  // Update the confidence badge and log the transition to the activity log.
+  const updateConfidence = (compute: (c: Confidence) => Confidence): void => {
+    setConfidence((prev) => {
+      const next = compute(prev);
+      if (next !== prev) logActivity(`CONFIDENCE ${prev} → ${next}`);
+      return next;
+    });
+  };
+
   // Restore a session into the live REPL — shared by /resume <id> and the picker.
   function doResume(s: Session): void {
     sessionRef.current = s;
@@ -443,6 +459,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
 
   async function submit(prompt: string): Promise<void> {
     if (!prompt.trim() || busy) return;
+    logActivity(`USER ${prompt.replace(/\s+/g, " ").trim().slice(0, 200)}`);
     setBusy(true);
     setErrorLine(null);
     const { images, files, notes } = extractAttachments(prompt, process.cwd());
@@ -526,13 +543,13 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           } else if (e.type === "compacted" && e.text) {
             setMessages((prev) => [...prev, { id: `c-${Date.now()}`, role: "system", text: e.text! }]);
           } else if (e.type === "verify" && e.text) {
-            if (/✓ Verified|passed/.test(e.text)) setConfidence("verified");
-            else if (/failed|still failing/i.test(e.text)) setConfidence("failing");
+            if (/✓ Verified|passed/.test(e.text)) updateConfidence(() => "verified");
+            else if (/failed|still failing/i.test(e.text)) updateConfidence(() => "failing");
             setMessages((prev) => [...prev, { id: `vfy-${Date.now()}-${prev.length}`, role: "system", text: e.text! }]);
           } else if (e.type === "ledger" && e.ledger) {
             const L = e.ledger;
             // Drive the confidence badge from the real ledger (sticky on read-only turns).
-            setConfidence((c) => nextConfidence(c, L));
+            updateConfidence((c) => nextConfidence(c, L));
             const lines: string[] = [];
             if (L.verified.length) lines.push(`✓ verified  ${L.verified.join("; ")}`);
             if (L.observed.length) lines.push(`· observed  ${L.observed.join("; ")}`);
@@ -600,7 +617,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         conversationRef.current = [];
         setMessages([]);
         setCostUsd(0);
-        setConfidence("unchecked");
+        updateConfidence(() => "unchecked");
         setErrorLine(null);
         setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "New session started" }]);
         break;
@@ -671,7 +688,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Verifying (${plan.source}): ${plan.commands.join(" && ")}…` }]);
         try {
           const res = await runVerify(plan, process.cwd());
-          setConfidence(res.ok ? "verified" : "failing");
+          updateConfidence(() => (res.ok ? "verified" : "failing"));
           setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: res.ok
             ? `✓ Verified — ${res.ranCommands.join(" && ")} passed.`
             : `✗ Verification failed at \`${res.failedCommand}\`:\n${res.output.slice(-1500)}` }]);
@@ -723,6 +740,17 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         } finally {
           setBusy(false);
         }
+        break;
+      }
+      case "/log": {
+        const want = arg.trim().toLowerCase();
+        const cur = activityState();
+        const on = want === "on" ? true : want === "off" ? false : !cur.on;
+        const st = setActivityLog(on);
+        if (on) logActivity(`--- activity log enabled (cwd=${process.cwd()} provider=${config.provider} model=${model}) ---`);
+        setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: on
+          ? `Activity log ON → ${st.path}\nRecords commands, verify runs, the ledger, and confidence transitions. Share that file to audit verification.`
+          : "Activity log OFF." }]);
         break;
       }
       case "/exit":

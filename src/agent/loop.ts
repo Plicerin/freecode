@@ -10,6 +10,7 @@ import { runHooks } from "./hooks";
 import { runVerify, type VerifyPlan } from "./verify";
 import { sanitizeToolPairing } from "./sanitize";
 import { redactSecrets } from "../utils/redact";
+import { logActivity } from "../utils/activity";
 import type { HooksConfig } from "../config/schema";
 
 export interface TurnLedger {
@@ -196,11 +197,13 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
         const res = await runVerify(plan, process.cwd(), opts.signal);
         if (opts.signal?.aborted) { aborted = true; break; }
         if (res.ok) {
+          logActivity(`VERIFY ${res.ranCommands.join(" && ")} → PASS`);
           opts.onEvent({ type: "verify", text: `✓ Verified — ${res.ranCommands.join(" && ")} passed.` });
           verifyFailed = false;
           verifiedCommands = res.ranCommands;
           break;
         }
+        logActivity(`VERIFY ${plan.commands.join(" && ")} → FAIL @ ${res.failedCommand}`);
         opts.onEvent({ type: "verify", text: `✗ Verification failed (${res.failedCommand}) — fixing…` });
         verifyFailed = true;
         changed = false;
@@ -269,6 +272,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
       else if (tool.name === "Glob" || tool.name === "Grep") led.searched += 1;
       else if (tool.name === "ViewImage") led.viewed += 1;
       else led.other.push(tool.name);
+      logActivity(`TOOL ${tool.name} ${argsSummary.slice(0, 100)} → ${result.ok ? "ok" : "FAIL"} (${durationMs}ms)${result.ok && changed && (tool.name === "FileWrite" || tool.name === "FileEdit") ? " [CHANGED]" : ""}`);
       messages.push({ role: "tool", toolCallId: call.id, content: payload });
       opts.onEvent({ type: "tool_result", result: { id: call.id, output: payload, ok: result.ok, durationMs } });
       // PostToolUse hook — observe the result (side effects only; can't block).
@@ -321,6 +325,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
     if (verifyFailed) believed.push("checks failing — changes unconfirmed");
 
     if (observed.length || verified.length || believed.length) {
+      logActivity(`LEDGER verified=[${verified.join("; ")}] observed=[${observed.join("; ")}] believed=[${believed.join("; ")}]`);
       opts.onEvent({ type: "ledger", ledger: { verified, observed, believed } });
     }
   }
