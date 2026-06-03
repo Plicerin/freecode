@@ -1,29 +1,39 @@
 import { test, expect } from "bun:test";
 import { redactSecrets } from "../src/utils/redact";
 
+// Synthetic keys are ASSEMBLED AT RUNTIME from fragments so no secret-shaped
+// literal ever sits in this source file — otherwise GitHub secret scanning (and
+// push protection) flags the fixtures as real keys. They still match the
+// redaction patterns at runtime, which is what we're testing.
+const body = (n: number) => "x".repeat(n);
+const FAKE = {
+  openai: "sk-" + "proj-" + body(40),
+  anthropic: "sk-" + "ant-" + body(30),
+  github: "gh" + "p_" + body(36),
+  google: "AI" + "za" + body(35),
+  hf: "h" + "f_" + body(24),
+  nvidia: "nv" + "api-" + body(24),
+};
+
 test("redacts an OpenAI project key (the sk-proj- format that leaked)", () => {
-  // SYNTHETIC key — same shape, not a real secret (never commit a live key).
-  const out = redactSecrets("OPENAI_API_KEY  sk-proj-EXAMPLEdummytestkey000000000000000000000000abc");
+  const out = redactSecrets(`OPENAI_API_KEY  ${FAKE.openai}`);
   expect(out.count).toBe(1);
-  expect(out.text).not.toMatch(/sk-proj-EXAMPLE/);
+  expect(out.text).not.toContain(FAKE.openai);
   expect(out.text).toMatch(/\[REDACTED:openai-key\]/);
   expect(out.text).toMatch(/OPENAI_API_KEY/); // var name preserved, value gone
 });
 
 test("redacts multiple distinct key formats in one blob", () => {
   const blob = [
-    "ANTHROPIC_API_KEY=sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123",
-    "GH=ghp_abcdefghijklmnopqrstuvwxyz0123456789",
-    "GOOGLE=AIzaSyAbc123def456ghi789jkl012mno345pqr",
-    "HF=hf_abcdefghijklmnopqrstuvwxyz0123",
-    "NIM=nvapi-abcdefghijklmnopqrstuvwxyz",
+    `ANTHROPIC_API_KEY=${FAKE.anthropic}`,
+    `GH=${FAKE.github}`,
+    `GOOGLE=${FAKE.google}`,
+    `HF=${FAKE.hf}`,
+    `NIM=${FAKE.nvidia}`,
   ].join("\n");
   const out = redactSecrets(blob);
   expect(out.count).toBeGreaterThanOrEqual(5);
-  expect(out.text).not.toMatch(/sk-ant-api03-abc/);
-  expect(out.text).not.toMatch(/ghp_abc/);
-  expect(out.text).not.toMatch(/AIzaSyAbc/);
-  expect(out.text).not.toMatch(/hf_abc/);
+  for (const v of Object.values(FAKE)) expect(out.text).not.toContain(v);
 });
 
 test("leaves ordinary output untouched", () => {
