@@ -5,7 +5,40 @@ function fail(msg: string): never {
   process.exit(1);
 }
 
-/** Read a line from stdin without echoing it (for passphrases / keys). */
+// Pure input reducer for the hidden key prompt (unit-tested). Given the buffer
+// so far and a raw stdin chunk, returns the new buffer, whether Enter ended the
+// line, and the bytes to echo (asterisks for accepted chars, "\b \b" to rub out
+// a backspaced one). Strips bracketed-paste wrappers (␛[200~ … ␛[201~) and other
+// escape/control sequences so a pasted key isn't stored with terminal cruft.
+export function applyHiddenInput(buf: string, chunk: string): { buf: string; submit: boolean; echo: string } {
+  let part = chunk;
+  let submit = false;
+  const nl = part.search(/[\r\n]/);
+  if (nl >= 0) {
+    part = part.slice(0, nl);
+    submit = true;
+  }
+  const cleaned = part
+    .replace(/\x1b\[[0-9;]*[~A-Za-z]/g, "") // CSI sequences: paste markers, arrows, etc.
+    .replace(/\[20[01]~/g, "") // bracketed-paste wrappers if the ESC was already swallowed
+    .replace(/\x1b/g, ""); // stray ESC
+  let out = buf;
+  let echo = "";
+  for (const ch of cleaned) {
+    if (ch === "\x7f" || ch === "\x08") {
+      if (out.length) {
+        out = out.slice(0, -1);
+        echo += "\b \b";
+      }
+    } else if (ch >= " ") {
+      out += ch;
+      echo += "*";
+    }
+  }
+  return { buf: out, submit, echo };
+}
+
+/** Read a key from stdin, masking it with asterisks (for keys / passphrases). */
 function promptHidden(question: string): Promise<string> {
   return new Promise((resolve) => {
     process.stdout.write(question);
@@ -14,22 +47,20 @@ function promptHidden(question: string): Promise<string> {
     stdin.resume();
     let buf = "";
     const onData = (chunk: Buffer): void => {
-      for (const ch of chunk.toString("utf8")) {
-        if (ch === "\r" || ch === "\n") {
-          stdin.setRawMode?.(false);
-          stdin.pause();
-          stdin.off("data", onData);
-          process.stdout.write("\n");
-          resolve(buf);
-          return;
-        } else if (ch === "\x7f" || ch === "\x08") {
-          buf = buf.slice(0, -1);
-        } else if (ch === "\x03") {
-          process.stdout.write("\n");
-          process.exit(130); // Ctrl-C
-        } else if (ch >= " ") {
-          buf += ch;
-        }
+      const raw = chunk.toString("utf8");
+      if (raw.includes("\x03")) {
+        process.stdout.write("\n");
+        process.exit(130); // Ctrl-C
+      }
+      const res = applyHiddenInput(buf, raw);
+      buf = res.buf;
+      if (res.echo) process.stdout.write(res.echo);
+      if (res.submit) {
+        stdin.setRawMode?.(false);
+        stdin.pause();
+        stdin.off("data", onData);
+        process.stdout.write("\n");
+        resolve(buf);
       }
     };
     stdin.on("data", onData);
