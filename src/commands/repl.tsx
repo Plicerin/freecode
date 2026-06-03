@@ -13,6 +13,7 @@ import { summarizeConversation } from "../agent/summarize";
 import { Vault } from "../config/vault";
 import { loadCustomCommands, expandCommand } from "./custom-commands";
 import { executeBench, formatBenchPlain } from "./bench";
+import { previewToolResult } from "../tui/preview";
 import { closest } from "../utils/fuzzy";
 import { resolveVerify, resolveQuickVerify, runVerify } from "../agent/verify";
 import { newSession, appendEvent, resumeSession, readSession, setSessionTitle, listSessionMetas, type Session, type SessionMeta } from "../session/manager";
@@ -452,7 +453,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
             setMessages((prev) =>
               prev
                 .map((m) => (m.id === `t-${rid}` ? { ...m, text: m.text + (r.ok ? " ✓" : " ✗") } : m))
-                .concat([{ id: tid, role: "tool", text: r.output.slice(0, 2000), toolName: "result", ok: r.ok }]),
+                .concat([{ id: tid, role: "tool", text: previewToolResult(r.output), toolName: "result", ok: r.ok }]),
             );
             appendEvent(sessionRef.current, { kind: "tool_result", id: rid, output: r.output, ok: r.ok, durationMs: r.durationMs, ts: new Date().toISOString() });
           } else if (e.type === "usage" && e.usage) {
