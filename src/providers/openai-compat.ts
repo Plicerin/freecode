@@ -90,6 +90,10 @@ export class OpenAICompatProvider implements Provider {
         ...req.messages.map(toOpenAIMessage),
       ],
       stream: true,
+      // Without this, OpenAI (and most compatible APIs) omit token usage from a
+      // streamed response, so cost can never be computed. Asking for it sends a
+      // final usage-only chunk.
+      stream_options: { include_usage: true },
     };
     const maxTokens = req.maxTokens ?? 4096;
     if (usesMaxCompletionTokens(req.model)) {
