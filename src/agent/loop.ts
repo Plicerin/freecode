@@ -8,6 +8,7 @@ import { ContextTracker } from "./context";
 import { summarizeConversation } from "./summarize";
 import { runHooks } from "./hooks";
 import { runVerify, type VerifyPlan } from "./verify";
+import { sanitizeToolPairing } from "./sanitize";
 import type { HooksConfig } from "../config/schema";
 
 export interface TurnLedger {
@@ -115,7 +116,10 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
     const req: ChatRequest = {
       model: opts.model,
       system: sys,
-      messages,
+      // Guarantee tool_call/tool_result pairing before sending. Compaction (just
+      // above) or a resumed-but-corrupted history can otherwise orphan a call and
+      // make the provider reject every request.
+      messages: sanitizeToolPairing(messages),
       tools: tools.map((t) => ({
         name: t.name,
         description: t.description,
@@ -266,6 +270,14 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
       // AFTER all tool results so the tool-response block stays contiguous
       // (providers reject a user message interleaved between tool results).
       if (result.images && result.images.length > 0) pendingImages.push(...result.images);
+    }
+
+    // If we broke out of the tool loop early (esc interrupt), some calls in this
+    // turn's assistant message have no result. Backfill them in-place so the
+    // history we return — and persist — stays valid for the next turn.
+    if (turnToolCalls.length > 0) {
+      const fixed = sanitizeToolPairing(messages);
+      messages.splice(0, messages.length, ...fixed);
     }
 
     // Feed collected tool images back as a single user message so the model sees them.
