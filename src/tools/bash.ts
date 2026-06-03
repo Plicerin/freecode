@@ -34,6 +34,10 @@ export interface BashToolOptions {
 
 const IS_WINDOWS = process.platform === "win32";
 
+// Commands run non-interactively, so a wizard that waits on stdin would hang
+// forever without this backstop. The model can override per-call up to the cap.
+const DEFAULT_TIMEOUT_MS = 120_000;
+
 /** The shell the Bash tool executes in, for the system prompt and UX. */
 export function bashShellName(): string {
   return IS_WINDOWS ? "PowerShell" : "bash/sh";
@@ -58,7 +62,7 @@ export function createBashTool(opts: BashToolOptions = {}): Tool<z.infer<typeof 
 
   return {
     name: "Bash",
-    description: `Execute a shell command in ${bashShellName()}. Use for git, npm, scripts, system inspection. Long-running output is truncated.`,
+    description: `Execute a shell command in ${bashShellName()}. Use for git, npm, scripts, system inspection. Runs NON-INTERACTIVELY (no stdin) with a ${DEFAULT_TIMEOUT_MS / 1000}s default timeout — for scaffolders/installers pass non-interactive flags (e.g. --yes), and set timeoutMs for long jobs. Output is truncated if large.`,
     schema: ArgsSchema,
     permission: "confirm",
     async run(args, ctx) {
@@ -82,6 +86,9 @@ export function createBashTool(opts: BashToolOptions = {}): Tool<z.infer<typeof 
           cwd: args.cwd ?? ctx.cwd,
           env: { ...process.env, ...(args.env ?? {}) },
           signal: ctx.signal,
+          // Ignore stdin: commands run non-interactively, so a prompt (e.g.
+          // `npm create`) gets EOF and fails fast instead of hanging on a read.
+          stdio: ["ignore", "pipe", "pipe"],
         });
         let stdout = "";
         let stderr = "";
@@ -89,10 +96,11 @@ export function createBashTool(opts: BashToolOptions = {}): Tool<z.infer<typeof 
         let stderrBytes = 0;
         let killed = false;
 
-        const timeout = args.timeoutMs ? setTimeout(() => {
+        const timeoutMs = args.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+        const timeout = setTimeout(() => {
           killed = true;
           child.kill("SIGKILL");
-        }, args.timeoutMs) : null;
+        }, timeoutMs);
 
         child.stdout?.on("data", (buf: Buffer) => {
           stdoutBytes += buf.length;
@@ -109,7 +117,7 @@ export function createBashTool(opts: BashToolOptions = {}): Tool<z.infer<typeof 
         child.on("close", (code) => {
           if (timeout) clearTimeout(timeout);
           if (killed) {
-            resolve({ ok: false, output: stdout, error: `Command timed out after ${args.timeoutMs}ms` + (stderr ? `\n${stderr}` : "") });
+            resolve({ ok: false, output: stdout, error: `Command timed out after ${timeoutMs}ms — it may be interactive or long-running. Re-run with non-interactive flags (e.g. --yes / -y) or pass a larger timeoutMs.` + (stderr ? `\n${stderr}` : "") });
             return;
           }
           const ok = code === 0;
