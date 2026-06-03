@@ -133,7 +133,8 @@ freecode --thinking                          # enable extended thinking / reason
 |------------|-----------------------------------------------|
 | `/model`   | Show or switch model                          |
 | `/new`     | Start a fresh session                         |
-| `/resume`  | List sessions or resume by id                 |
+| `/resume`  | Open the session picker (↑/↓ to choose, Enter) |
+| `/rename`  | Name the current session (shows in the picker) |
 | `/context` | Show token usage + cost                       |
 | `/provider`| Show or switch provider                       |
 | `/mcp`     | List connected MCP servers and their tools    |
@@ -163,6 +164,8 @@ Review $ARGUMENTS for correctness bugs and suggest fixes.
 `Ctrl+C` exit · `Ctrl+U` clear input · `Ctrl+T` toggle tasks sidebar · `Enter` submit
 
 Type `/` to open a live command menu (filters as you type); `↑`/`↓` to select, `Tab` to complete. `↑`/`↓` otherwise recall input history.
+
+`/resume` opens an interactive picker — `↑`/`↓` to choose a session, `Enter` to resume, `Esc` to cancel. Name sessions with `/rename <name>` so they're easy to find there.
 
 ## Tools
 

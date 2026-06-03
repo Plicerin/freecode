@@ -6,7 +6,7 @@ import { createPermissionEngine } from "./permissions/modes";
 import { runAgentLoop } from "./agent/loop";
 import { contextWindowFor } from "./agent/pricing";
 import { resolveVerify, resolveQuickVerify } from "./agent/verify";
-import { newSession, appendEvent, listSessions, resumeSession, type Session } from "./session/manager";
+import { newSession, appendEvent, resumeSession, type Session } from "./session/manager";
 import { type ApprovalCallback } from "./permissions/modes";
 import { debug } from "./utils/debug";
 import { setTimeout as wait } from "node:timers/promises";

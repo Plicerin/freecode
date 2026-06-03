@@ -9,12 +9,22 @@ export type SessionEvent =
   | { kind: "tool_call"; id: string; name: string; args: Record<string, unknown>; ts: string }
   | { kind: "tool_result"; id: string; output: string; ok: boolean; ts: string; durationMs: number }
   | { kind: "thinking"; text: string; ts: string }
+  | { kind: "title"; text: string; ts: string }
   | { kind: "system"; text: string; ts: string };
 
 export interface Session {
   id: string;
   cwd: string;
   path: string;
+}
+
+// Richer listing for the resume picker: a human title (if set via /rename), a
+// preview of the first prompt, message count, and last-modified time.
+export interface SessionMeta extends Session {
+  title?: string;
+  preview: string;
+  count: number;
+  mtime: number;
 }
 
 function ensureDir(dir: string): void {
@@ -72,4 +82,35 @@ export function resumeSession(cwd: string, id: string): Session | undefined {
   const path = sessionPath(cwd, id);
   if (!existsSync(path)) return undefined;
   return { id, cwd, path };
+}
+
+/** Give the session a human-readable name (latest title event wins). */
+export function setSessionTitle(session: Session, title: string): void {
+  appendEvent(session, { kind: "title", text: title, ts: nowIso() });
+}
+
+/** The current title of a session from its events, if any. */
+export function titleOf(events: SessionEvent[]): string | undefined {
+  let t: string | undefined;
+  for (const e of events) if (e.kind === "title") t = e.text; // last one wins
+  return t;
+}
+
+/** Sessions with display metadata, newest first — for the resume picker. */
+export function listSessionMetas(cwd: string): SessionMeta[] {
+  const dir = projectDir(cwd);
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((f) => f.endsWith(".jsonl"))
+    .map((f) => {
+      const id = f.replace(/\.jsonl$/, "");
+      const path = sessionPath(cwd, id);
+      const mtime = statSync(path).mtimeMs;
+      const events = readSession({ id, cwd, path });
+      const firstUser = events.find((e) => e.kind === "user") as { text?: string } | undefined;
+      const preview = (firstUser?.text ?? "").replace(/\s+/g, " ").trim().slice(0, 60);
+      const count = events.filter((e) => e.kind === "user" || e.kind === "assistant").length;
+      return { id, cwd, path, title: titleOf(events), preview, count, mtime };
+    })
+    .sort((a, b) => b.mtime - a.mtime);
 }

@@ -14,7 +14,7 @@ import { Vault } from "../config/vault";
 import { loadCustomCommands, expandCommand } from "./custom-commands";
 import { closest } from "../utils/fuzzy";
 import { resolveVerify, resolveQuickVerify, runVerify } from "../agent/verify";
-import { newSession, appendEvent, listSessions, resumeSession, readSession, type Session } from "../session/manager";
+import { newSession, appendEvent, resumeSession, readSession, setSessionTitle, listSessionMetas, type Session, type SessionMeta } from "../session/manager";
 import { makeTheme } from "../tui/theme";
 import { Mascot, OWL_MICRO, MASCOT_BIO } from "../tui/mascot";
 import { debug } from "../utils/debug";
@@ -38,12 +38,22 @@ interface UiMessage {
   ok?: boolean;
 }
 
-const SLASH_COMMANDS = ["/model", "/new", "/resume", "/context", "/provider", "/mcp", "/plan", "/verify", "/help", "/compact", "/about", "/exit"];
+const SLASH_COMMANDS = ["/model", "/new", "/resume", "/rename", "/context", "/provider", "/mcp", "/plan", "/verify", "/help", "/compact", "/about", "/exit"];
+
+// Compact relative time for the session picker.
+function relTime(ms: number): string {
+  const s = Math.max(0, (Date.now() - ms) / 1000);
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
 
 const COMMAND_DESC: Record<string, string> = {
   "/model": "show or switch model",
   "/new": "start a fresh session",
-  "/resume": "list or resume sessions",
+  "/resume": "pick a session to resume (↑/↓)",
+  "/rename": "name the current session",
   "/context": "token usage + cost",
   "/provider": "show or switch provider",
   "/mcp": "MCP servers and tools",
@@ -286,6 +296,8 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   const [errorLine, setErrorLine] = useState<string | null>(null);
   const [costUsd, setCostUsd] = useState(0);
   const [pending, setPending] = useState<ApprovalRequest | null>(null);
+  // Interactive resume picker: when open, ↑/↓ choose and Enter resumes.
+  const [picker, setPicker] = useState<{ items: SessionMeta[]; idx: number } | null>(null);
   const approvalResolver = useRef<((d: ApprovalDecision) => void) | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const streamIdRef = useRef<string | null>(null); // id of the assistant bubble currently streaming
@@ -296,6 +308,23 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   useEffect(() => {
     if (!busy && !pending) setSettled(messages.length);
   }, [busy, pending, messages.length]);
+
+  // Restore a session into the live REPL — shared by /resume <id> and the picker.
+  function doResume(s: Session): void {
+    sessionRef.current = s;
+    const events = readSession(s) as Array<{ kind: string; text: string; name?: string; ok?: boolean }>;
+    const restored: UiMessage[] = events
+      .filter((e) => e.kind === "user" || e.kind === "assistant" || e.kind === "tool_result")
+      .map((e, i) => ({
+        id: `${s.id}-${i}`,
+        role: e.kind === "user" ? "user" : e.kind === "assistant" ? "assistant" : "tool",
+        text: e.text,
+        toolName: (e as { name?: string }).name,
+        ok: (e as { ok?: boolean }).ok,
+      }));
+    conversationRef.current = historyFromEvents(events);
+    setMessages([...restored, { id: `s-${Date.now()}`, role: "system", text: `Resumed (${conversationRef.current.length} messages of context)` }]);
+  }
 
   const promptUser: ApprovalCallback = (req) =>
     new Promise<ApprovalDecision>((resolve) => {
@@ -488,29 +517,29 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         break;
       }
       case "/resume": {
-        const sessions = listSessions(process.cwd());
         if (!arg) {
-          const list = sessions.slice(0, 10).map((s) => `  ${s.id}`).join("\n");
-          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Sessions:\n${list || "(none)"}` }]);
-        } else {
-          const s = resumeSession(process.cwd(), arg);
-          if (s) {
-            sessionRef.current = s;
-            const events = readSession(s) as Array<{ kind: string; text: string; name?: string; ok?: boolean }>;
-            const restored: UiMessage[] = events
-              .filter((e) => e.kind === "user" || e.kind === "assistant" || e.kind === "tool_result")
-              .map((e, i) => ({
-                id: `${s.id}-${i}`,
-                role: e.kind === "user" ? "user" : e.kind === "assistant" ? "assistant" : "tool",
-                text: e.text,
-                toolName: (e as { name?: string }).name,
-                ok: (e as { ok?: boolean }).ok,
-              }));
-            conversationRef.current = historyFromEvents(events);
-            setMessages([...restored, { id: `s-${Date.now()}`, role: "system", text: `Resumed ${arg} (${conversationRef.current.length} messages of context)` }]);
+          const metas = listSessionMetas(process.cwd()).slice(0, 12);
+          if (!metas.length) {
+            setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "No saved sessions yet." }]);
           } else {
-            setErrorLine(`No such session: ${arg}`);
+            setPicker({ items: metas, idx: 0 });
           }
+        } else {
+          // resume by id, or by (case-insensitive) title match
+          const metas = listSessionMetas(process.cwd());
+          const byTitle = metas.find((m) => (m.title ?? "").toLowerCase() === arg.toLowerCase());
+          const s = byTitle ? resumeSession(process.cwd(), byTitle.id) : resumeSession(process.cwd(), arg);
+          if (s) doResume(s);
+          else setErrorLine(`No such session: ${arg}`);
+        }
+        break;
+      }
+      case "/rename": {
+        if (!arg.trim()) {
+          setErrorLine("Usage: /rename <name>");
+        } else {
+          setSessionTitle(sessionRef.current, arg.trim());
+          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Renamed session to "${arg.trim()}"` }]);
         }
         break;
       }
@@ -622,6 +651,14 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     if (key.ctrl && input2 === "c") {
       exit();
       return;
+    }
+    // While the resume picker is open, ↑/↓ choose, Enter resumes, Esc cancels.
+    if (picker) {
+      if (key.upArrow) { setPicker((p) => (p ? { ...p, idx: Math.max(0, p.idx - 1) } : p)); return; }
+      if (key.downArrow) { setPicker((p) => (p ? { ...p, idx: Math.min(p.items.length - 1, p.idx + 1) } : p)); return; }
+      if (key.return) { const sel = picker.items[picker.idx]; setPicker(null); if (sel) doResume({ id: sel.id, cwd: sel.cwd, path: sel.path }); return; }
+      if (key.escape) { setPicker(null); return; }
+      return; // swallow everything else while picking
     }
     // While a tool-approval prompt is open, keys select a decision and nothing else.
     if (pending) {
@@ -753,7 +790,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           {messages.slice(settled).filter((m) => m.id).map((m, i) => (
             <MessageLine key={`${m.id}:${settled + i}`} m={m} theme={theme} />
           ))}
-          {busy && <Text color={theme.hex.warning}>· Combobulating…</Text>}
+          {busy && <Text color={theme.hex.warning}>· Working…</Text>}
           {errorLine && <Text color={theme.hex.error}>! {errorLine}</Text>}
         </Box>
         {showTasks && (
@@ -786,6 +823,20 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
             <Text dimColor>?</Text>
           </Text>
           <Text dimColor>{pending.argsSummary}</Text>
+        </Box>
+      ) : picker ? (
+        <Box flexDirection="column" borderStyle="round" borderColor={theme.user} paddingX={1} marginTop={1}>
+          <Text bold color={theme.user}>Resume a session</Text>
+          {picker.items.map((s, i) => {
+            const sel = i === picker.idx;
+            const label = s.title || s.preview || "(empty session)";
+            return (
+              <Text key={s.id} color={sel ? theme.user : undefined} dimColor={!sel}>
+                {sel ? "❯ " : "  "}{label.padEnd(42).slice(0, 42)}  <Text dimColor>{`${s.count} msg · ${relTime(s.mtime)}`}</Text>
+              </Text>
+            );
+          })}
+          <Text dimColor>  ↑/↓ select · Enter resume · Esc cancel</Text>
         </Box>
       ) : (
         <Box borderStyle="round" borderColor={theme.border} paddingX={1} marginTop={1}>
