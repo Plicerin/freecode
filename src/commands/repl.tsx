@@ -232,7 +232,9 @@ export async function startRepl(opts: ReplOptions = {}): Promise<void> {
 
 export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: ReplOptions): JSX.Element {
   const { exit } = useApp();
-  const config = useMemo(() => loadConfig({ flags: flags ?? {} }), [flags]);
+  // Config is stateful so /provider can switch the active provider live
+  // (re-resolving that provider's key/baseUrl/model from the vault + settings).
+  const [config, setConfig] = useState(() => loadConfig({ flags: flags ?? {} }));
   const theme = useMemo(() => makeTheme(config.theme), [config.theme]);
   const provider = useMemo(() => buildProvider(config), [config]);
   const tools = useMemo(
@@ -569,10 +571,26 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         break;
       }
       case "/provider": {
+        const KNOWN = ["anthropic", "openai", "gemini", "github-models", "bedrock", "vertex", "ollama", "lmstudio", "nim", "mock"];
         if (arg) {
-          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Provider switch to ${arg} — restart with --provider ${arg} (env reload required for live switch)` }]);
+          if (!KNOWN.includes(arg)) {
+            const suggestion = closest(arg, KNOWN, 4);
+            setErrorLine(`Unknown provider: ${arg}${suggestion ? ` — did you mean ${suggestion}?` : ""}. Options: ${KNOWN.join(", ")}`);
+            break;
+          }
+          // Re-resolve for the chosen provider — pulls its key/baseUrl/model from
+          // the vault + settings — and switch live.
+          const newCfg = loadConfig({ flags: { ...(flags ?? {}), provider: arg as CliFlags["provider"] } });
+          setConfig(newCfg);
+          setModel(newCfg.model);
+          trackerRef.current.setPricing(priceFor(newCfg.model, newCfg.provider));
+          const local = ["ollama", "lmstudio", "mock"].includes(newCfg.provider);
+          const text = !newCfg.apiKey && !local
+            ? `Switched to ${arg} (model ${newCfg.model}) — but no API key found. Add one with:  freecode auth add ${arg}`
+            : `Switched to ${arg} — model ${newCfg.model}, ${defaultEndpoint(newCfg.provider, newCfg.baseUrl)}. Active from your next message.`;
+          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text }]);
         } else {
-          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Provider: ${config.provider}\nBase URL: ${config.baseUrl ?? "(default)"}\nModel: ${model}` }]);
+          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Provider: ${config.provider}\nModel: ${model}\nEndpoint: ${defaultEndpoint(config.provider, config.baseUrl)}\nKey: ${config.apiKey ? "set" : "none"}\n\nSwitch with /provider <name> (${KNOWN.join(", ")}).` }]);
         }
         break;
       }

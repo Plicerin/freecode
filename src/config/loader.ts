@@ -93,6 +93,26 @@ function providerEnvKey(p: ProviderId): string | undefined {
   }
 }
 
+// When no provider is explicitly chosen (flags/profile/env), prefer one that
+// actually has a usable key — vault or env — over the hardcoded default. Without
+// this, freecode boots pointing at anthropic with no key while the user's key
+// (e.g. openai) sits in the vault.
+function firstProviderWithKey(): ProviderId | undefined {
+  const order: ProviderId[] = ["anthropic", "openai", "gemini", "github-models", "nim"];
+  let vaultProviders: string[] = [];
+  try {
+    if (Vault.exists()) vaultProviders = Vault.load().list();
+  } catch {
+    vaultProviders = [];
+  }
+  for (const p of order) {
+    if (vaultProviders.includes(p)) return p;
+    const envKey = providerEnvKey(p);
+    if (envKey && getEnv(envKey)) return p;
+  }
+  return vaultProviders.length ? (vaultProviders[0] as ProviderId) : undefined;
+}
+
 function providerBaseUrl(p: ProviderId): string | undefined {
   switch (p) {
     case "anthropic": return getEnv("ANTHROPIC_BASE_URL");
@@ -142,7 +162,7 @@ export function loadConfig(opts: LoadOptions): ResolvedConfig {
     undefined,
     undefined,
   );
-  const finalProvider: ProviderId = provider.value ?? DEFAULTS.provider;
+  const finalProvider: ProviderId = provider.value ?? firstProviderWithKey() ?? DEFAULTS.provider;
 
   const envModel = envValueFor("CLAUDE_CODE_MODEL") ?? envValueFor("OPENAI_MODEL") ?? envValueFor("ANTHROPIC_MODEL");
   const modelPick = pick<string | undefined>(
