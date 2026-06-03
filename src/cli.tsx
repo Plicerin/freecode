@@ -57,6 +57,12 @@ async function main(): Promise<void> {
     await runAuth(process.argv.slice(3));
     return;
   }
+  // `freecode bench …` races the hot-path performance ledger (the ghost).
+  if (process.argv[2] === "bench") {
+    const { runBenchCommand } = await import("./commands/bench");
+    await runBenchCommand(process.argv.slice(3));
+    return;
+  }
   await program.parseAsync(process.argv);
   const opts = program.opts<ParsedArgs>();
   const flags: CliFlags = {

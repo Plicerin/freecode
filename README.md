@@ -223,6 +223,21 @@ The point: the slow part (full tests) stays manual or `strict`; the default gate
 
 `verified` = checks that passed · `observed` = tools that actually ran · `believed` = changes asserted but not confirmed. The `believed` line is the honest one — it's where a polished "done" can hide an unchecked guess.
 
+## Performance ledger — racing the ghost
+
+```bash
+freecode bench            # run the hot-path benchmarks, race this machine's bests
+freecode bench --filter=fuzzy   # only matching benchmarks
+freecode bench --no-save  # don't update the ledger
+freecode bench --json     # machine-readable
+```
+
+`bench` times freecode's own hot paths (command matching, config load, …), reduces each to robust stats (**median + MAD**, not mean), and compares against the **personal best stored for this machine** in `~/.freecode/perf.json`. The only opponent is its own past self — no external repo, no imitation.
+
+The honest part is the **noise rejection**: a run is called a *new personal best* or a *regression* only if it beats the ghost by more than the jitter band — `max(2% of the best, 3 × combined MAD)`. Anything inside that band is reported as a **tie**, never a win. So freecode never claims it got faster when it only got lucky. The ledger is keyed by an environment fingerprint (CPU, cores, runtime), so a fast laptop can't beat a slow CI box's ghost.
+
+This is the measurement floor for self-improvement: before any change can claim "faster," it has to out-run the ghost for real.
+
 ## Headless / CI
 
 ```bash
