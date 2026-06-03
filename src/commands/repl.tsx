@@ -19,7 +19,7 @@ import { closest } from "../utils/fuzzy";
 import { resolveVerify, resolveQuickVerify, runVerify } from "../agent/verify";
 import { newSession, appendEvent, resumeSession, readSession, setSessionTitle, listSessionMetas, type Session, type SessionMeta } from "../session/manager";
 import { makeTheme } from "../tui/theme";
-import { Mascot, OWL_MICRO, MASCOT_BIO } from "../tui/mascot";
+import { Mascot, OWL_MICRO, OWL_FRAMES, MASCOT_BIO } from "../tui/mascot";
 import { debug } from "../utils/debug";
 import type { Tool } from "../tools/types";
 import type { ChatMessage } from "../providers/types";
@@ -346,6 +346,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   const [errorLine, setErrorLine] = useState<string | null>(null);
   const [costUsd, setCostUsd] = useState(0);
   const [confidence, setConfidence] = useState<Confidence>("unchecked");
+  const [eyeFrame, setEyeFrame] = useState(0); // Bubo's eye-dart animation while working
   const [pending, setPending] = useState<ApprovalRequest | null>(null);
   // Interactive resume picker: when open, ↑/↓ choose and Enter resumes.
   const [picker, setPicker] = useState<{ items: SessionMeta[]; idx: number } | null>(null);
@@ -367,6 +368,13 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   useEffect(() => {
     if (!busy && !pending) setSettled(messages.length);
   }, [busy, pending, messages.length]);
+
+  // Animate Bubo's eyes only while a turn is running; reset to forward when idle.
+  useEffect(() => {
+    if (!busy) { setEyeFrame(0); return; }
+    const id = setInterval(() => setEyeFrame((f) => (f + 1) % OWL_FRAMES.length), 200);
+    return () => clearInterval(id);
+  }, [busy]);
 
   // Restore a session into the live REPL — shared by /resume <id> and the picker.
   function doResume(s: Session): void {
@@ -926,6 +934,11 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         </Box>
       )}
 
+      {/* Bubo perches at the top-right of the input cluster — always visible,
+          eyes darting while a turn runs. */}
+      <Box paddingX={1} justifyContent="flex-end">
+        <Text color={theme.hex.assistant}>{busy ? OWL_FRAMES[eyeFrame] : OWL_MICRO}</Text>
+      </Box>
       {pending ? (
         <Box flexDirection="column" borderStyle="round" borderColor={theme.hex.warning} paddingX={1} marginTop={1}>
           <Text>
@@ -965,7 +978,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         ) : busy ? (
           <Text dimColor>esc to interrupt</Text>
         ) : (
-          <Text color={theme.hex.assistant}>{OWL_MICRO}</Text>
+          <Text> </Text>
         )}
         <Text>
           {planMode && <Text color={theme.hex.warning}>PLAN  </Text>}

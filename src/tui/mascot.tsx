@@ -43,6 +43,10 @@ export const OWL: string[] = [
 // Tiny owl for tight spots (prompt, status line, headless banner).
 export const OWL_MICRO = "(◉‿◉)";
 
+// Eye-dart animation for when Bubo is working: the pupils sweep
+// left · center · right · center, as if scanning the problem. Idle = OWL_MICRO.
+export const OWL_FRAMES = ["(◉‿◉)", "(◐‿◐)", "(◉‿◉)", "(◑‿◑)"];
+
 // He has a name: Bubo — after the bronze mechanical owl Athena forged to watch
 // over Perseus in Clash of the Titans. A *built*, watchful companion that
 // checks the path ahead — fitting for a tool that verifies before it claims.
