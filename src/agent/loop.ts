@@ -92,6 +92,10 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
   let verifyAttempts = 0;
   let verifyFailed = false;
   let verifiedCommands: string[] = []; // checks that actually passed
+  // Circuit-breaker: stop flailing if tools keep failing with no progress.
+  const MAX_TOOL_FAILURES = 8;
+  let consecutiveFailures = 0;
+  let lastFailureMsg = "";
 
   // Provenance ledger — machine-derived facts about what the agent really did.
   const led = { wrote: [] as string[], edited: [] as string[], read: 0, ran: [] as string[], searched: 0, viewed: 0, other: [] as string[] };
@@ -262,6 +266,8 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
       if (result.error) result.error = redactSecrets(result.error).text;
       const payload = (result.ok ? result.output : `Error: ${result.error ?? "unknown"}\n${result.output}`) +
         (red.count > 0 ? `\n[freecode redacted ${red.count} secret(s) from this output]` : "");
+      if (result.ok) consecutiveFailures = 0;
+      else { consecutiveFailures += 1; lastFailureMsg = `${tool.name}: ${result.error ?? result.output.slice(0, 160)}`; }
       if (result.ok && (tool.name === "FileWrite" || tool.name === "FileEdit")) changed = true;
       // Record the action for the provenance ledger (facts, not the model's prose).
       const a = parsed.data as { path?: string; command?: string };
@@ -281,6 +287,17 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
       // AFTER all tool results so the tool-response block stays contiguous
       // (providers reject a user message interleaved between tool results).
       if (result.images && result.images.length > 0) pendingImages.push(...result.images);
+    }
+
+    // Circuit-breaker: if tools keep failing with no successful action in
+    // between, stop rather than flailing (e.g. the same FileEdit failing 50×).
+    // Earned confidence includes the honesty to say "I'm stuck" instead of
+    // retrying the identical failing call forever.
+    if (consecutiveFailures >= MAX_TOOL_FAILURES) {
+      const note = `Stopped after ${consecutiveFailures} consecutive tool failures with no progress. Last error — ${lastFailureMsg}`;
+      logActivity(`STOP ${note}`);
+      opts.onEvent({ type: "error", error: note });
+      aborted = true;
     }
 
     // If we broke out of the tool loop early (esc interrupt), some calls in this
