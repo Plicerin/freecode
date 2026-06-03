@@ -2,7 +2,9 @@
 
 **Total freedom. No guesswork.**
 
-Provider-agnostic coding agent CLI. REPL + headless. Multi-LLM, multi-tool. Drop-in Claude Code with the Anthropic lock-in removed — and it verifies its own work before it claims it's done. Bun runtime.
+freecode is a universal AI execution layer built for correctness. It runs any model from any provider and validates its own outputs by default — a consistent, trustworthy interface for AI development, without vendor lock-in or manual verification overhead.
+
+REPL + headless. Multi-LLM, multi-tool. Drop-in Claude Code with the Anthropic lock-in removed. Bun runtime.
 
 ## Quick start
 
