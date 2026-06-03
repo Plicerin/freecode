@@ -43,6 +43,13 @@ export const OWL: string[] = [
 // Tiny owl for tight spots (prompt, status line, headless banner).
 export const OWL_MICRO = "(◉‿◉)";
 
+// He has a name: Bubo — after the bronze mechanical owl Athena forged to watch
+// over Perseus in Clash of the Titans. A *built*, watchful companion that
+// checks the path ahead — fitting for a tool that verifies before it claims.
+export const MASCOT_NAME = "Bubo";
+export const MASCOT_BIO =
+  "Bubo — the freecode owl, named for the bronze owl Athena built to watch over Perseus. Built to watch the path ahead: he checks before he speaks, so a \"done\" is something he's seen, not something he's guessing.";
+
 // Per-glyph palette. `█` is eyes only → bright azure. The body shades from
 // brand azure outline (▓) through muted slate (▒) to a receding dim field (░).
 function glyphColor(ch: string, theme: Theme): { color?: string; bold?: boolean } {

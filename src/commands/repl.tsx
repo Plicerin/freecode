@@ -16,7 +16,7 @@ import { closest } from "../utils/fuzzy";
 import { resolveVerify, resolveQuickVerify, runVerify } from "../agent/verify";
 import { newSession, appendEvent, listSessions, resumeSession, readSession, type Session } from "../session/manager";
 import { makeTheme } from "../tui/theme";
-import { Mascot, OWL_MICRO } from "../tui/mascot";
+import { Mascot, OWL_MICRO, MASCOT_BIO } from "../tui/mascot";
 import { debug } from "../utils/debug";
 import type { Tool } from "../tools/types";
 import type { ChatMessage } from "../providers/types";
@@ -38,7 +38,7 @@ interface UiMessage {
   ok?: boolean;
 }
 
-const SLASH_COMMANDS = ["/model", "/new", "/resume", "/context", "/provider", "/mcp", "/plan", "/verify", "/help", "/compact"];
+const SLASH_COMMANDS = ["/model", "/new", "/resume", "/context", "/provider", "/mcp", "/plan", "/verify", "/help", "/compact", "/about"];
 
 const COMMAND_DESC: Record<string, string> = {
   "/model": "show or switch model",
@@ -51,6 +51,7 @@ const COMMAND_DESC: Record<string, string> = {
   "/verify": "run the project's checks",
   "/help": "list commands",
   "/compact": "compact the conversation",
+  "/about": "meet Bubo, the freecode owl",
 };
 
 const PLAN_MODE_NOTE =
@@ -543,6 +544,10 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         const custom = [...customCommands.values()].map((c) => `${`/${c.name}`}${c.description ? ` — ${c.description}` : ""} (${c.source})`);
         const text = SLASH_COMMANDS.join("\n") + (custom.length ? `\n\nCustom commands:\n${custom.join("\n")}` : "");
         setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text }]);
+        break;
+      }
+      case "/about": {
+        setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `${OWL_MICRO}  ${MASCOT_BIO}` }]);
         break;
       }
       case "/compact": {

@@ -6,6 +6,8 @@ freecode is a universal AI execution layer built for correctness. It runs any mo
 
 REPL + headless. Multi-LLM, multi-tool. Drop-in Claude Code with the Anthropic lock-in removed. Bun runtime.
 
+Your guide is **Bubo** `(◉‿◉)` — the freecode owl, named for the bronze owl Athena built to watch over Perseus. A *built*, watchful companion that checks the path ahead: he verifies before he claims, so a "done" is something he's seen, not something he's guessing. Say `/about` to meet him.
+
 ## Quick start
 
 ```bash
@@ -139,6 +141,7 @@ freecode --thinking                          # enable extended thinking / reason
 | `/verify`  | Run the project's checks and report the real result |
 | `/help`    | List commands                                 |
 | `/compact` | Force context compaction                      |
+| `/about`   | Meet Bubo, the freecode owl                    |
 
 ### Custom slash commands
 
