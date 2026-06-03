@@ -22,3 +22,10 @@ test("system prompt carries the Phase 2 editing craft", () => {
   expect(p).toMatch(/smallest change/i);
   expect(p).toMatch(/Leave no TODOs/i);
 });
+
+test("system prompt carries the Phase 3 approach & communication guidance", () => {
+  const p = toolListToSystemPrompt([]);
+  expect(p).toMatch(/think first/i);
+  expect(p).toMatch(/exactly what was asked/i);
+  expect(p).toMatch(/path:line/i);
+});
