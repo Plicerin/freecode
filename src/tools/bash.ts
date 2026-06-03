@@ -95,11 +95,40 @@ export function createBashTool(opts: BashToolOptions = {}): Tool<z.infer<typeof 
         let stdoutBytes = 0;
         let stderrBytes = 0;
         let killed = false;
+        let settled = false;
 
         const timeoutMs = args.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-        const timeout = setTimeout(() => {
+        let timeout: ReturnType<typeof setTimeout>;
+        let forceTimer: ReturnType<typeof setTimeout> | null = null;
+
+        // Resolve exactly once and clear timers — guards against a force-resolve
+        // racing a late 'close'.
+        const settle = (r: { ok: boolean; output: string; error?: string; metadata?: Record<string, unknown> }): void => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          if (forceTimer) clearTimeout(forceTimer);
+          resolve(r);
+        };
+
+        // SIGKILL only kills the direct child. On Windows a test runner spawns a
+        // whole tree (npm → node → jest workers) that survives and keeps the
+        // stdio pipes open, so 'close' never fires and we'd hang forever. Kill
+        // the entire tree.
+        const killTree = (): void => {
+          if (IS_WINDOWS && child.pid) {
+            try { spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" }); } catch { /* fall through */ }
+          }
+          try { child.kill("SIGKILL"); } catch { /* already gone */ }
+        };
+
+        const timeoutMsg = `Command timed out after ${timeoutMs}ms — it may be interactive or long-running. Re-run with non-interactive flags (e.g. --yes / -y) or pass a larger timeoutMs.`;
+        timeout = setTimeout(() => {
           killed = true;
-          child.kill("SIGKILL");
+          killTree();
+          // Last resort: if orphaned children still hold the pipes open and
+          // 'close' never arrives, force-resolve so the agent loop is never stuck.
+          forceTimer = setTimeout(() => settle({ ok: false, output: stdout, error: timeoutMsg + (stderr ? `\n${stderr}` : "") }), 3000);
         }, timeoutMs);
 
         child.stdout?.on("data", (buf: Buffer) => {
@@ -110,18 +139,14 @@ export function createBashTool(opts: BashToolOptions = {}): Tool<z.infer<typeof 
           stderrBytes += buf.length;
           if (stderrBytes <= maxOutput) stderr += buf.toString("utf8");
         });
-        child.on("error", (err) => {
-          if (timeout) clearTimeout(timeout);
-          resolve({ ok: false, output: stdout, error: err.message + (stderr ? `\n${stderr}` : "") });
-        });
+        child.on("error", (err) => settle({ ok: false, output: stdout, error: err.message + (stderr ? `\n${stderr}` : "") }));
         child.on("close", (code) => {
-          if (timeout) clearTimeout(timeout);
           if (killed) {
-            resolve({ ok: false, output: stdout, error: `Command timed out after ${timeoutMs}ms — it may be interactive or long-running. Re-run with non-interactive flags (e.g. --yes / -y) or pass a larger timeoutMs.` + (stderr ? `\n${stderr}` : "") });
+            settle({ ok: false, output: stdout, error: timeoutMsg + (stderr ? `\n${stderr}` : "") });
             return;
           }
           const ok = code === 0;
-          resolve({
+          settle({
             ok,
             output: stdout + (stderr ? `\n[stderr]\n${stderr}` : ""),
             error: ok ? undefined : `exit code ${code}`,
