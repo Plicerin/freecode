@@ -790,7 +790,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       ) : (
         <Box borderStyle="round" borderColor={theme.border} paddingX={1} marginTop={1}>
           <Text>
-            <Text color={theme.hex.assistant}>{OWL_MICRO} </Text>
+            <Text color={theme.user}>› </Text>
             <Text>{input.slice(0, cursor)}</Text>
             <Text inverse>{input.slice(cursor, cursor + 1) || " "}</Text>
             <Text>{input.slice(cursor + 1)}</Text>
@@ -798,13 +798,13 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         </Box>
       )}
       <Box paddingX={1} flexDirection="row" justifyContent="space-between">
-        <Text dimColor>
-          {pending
-            ? "[a] allow once · [y] allow always · [d] deny (esc)"
-            : busy
-              ? "esc to interrupt"
-              : ""}
-        </Text>
+        {pending ? (
+          <Text dimColor>[a] allow once · [y] allow always · [d] deny (esc)</Text>
+        ) : busy ? (
+          <Text dimColor>esc to interrupt</Text>
+        ) : (
+          <Text color={theme.hex.assistant}>{OWL_MICRO}</Text>
+        )}
         <Text>
           {planMode && <Text color={theme.hex.warning}>PLAN  </Text>}
           <Text color={theme.hex.assistant}>{model}</Text>
