@@ -15,3 +15,10 @@ test("system prompt carries the Phase 1 tools & shell discipline", () => {
   // verify-before-claiming (the identity)
   expect(p).toMatch(/seen it work/i);
 });
+
+test("system prompt carries the Phase 2 editing craft", () => {
+  const p = toolListToSystemPrompt([]);
+  expect(p).toMatch(/Match the surrounding code/i);
+  expect(p).toMatch(/smallest change/i);
+  expect(p).toMatch(/Leave no TODOs/i);
+});
