@@ -505,7 +505,24 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           trackerRef.current.setPricing(priceFor(arg, config.provider));
           setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Model switched to ${arg} (provider: ${config.provider}). Active from your next message.` }]);
         } else {
-          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Current model: ${model} (provider: ${config.provider})` }]);
+          setBusy(true);
+          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "Fetching available models…" }]);
+          try {
+            const all = await provider.models();
+            // Hide obvious non-chat models (embeddings, audio, image, legacy) so the
+            // list is useful — but any name still works via /model <name>.
+            const nonChat = /embedding|whisper|\btts\b|text-to-speech|audio|dall-?e|imagen|\bimage\b|moderation|realtime|transcrib|babbage|davinci|\bsearch\b/i;
+            const chat = all.filter((m) => !nonChat.test(m));
+            const show = chat.length ? chat : all;
+            const hidden = all.length - show.length;
+            const lines = show.map((m) => `  ${m === model ? "→" : " "} ${m}`).join("\n");
+            const note = hidden > 0 ? `\n\n(${hidden} non-chat models hidden — /model <name> still works for any.)` : "";
+            setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Models for ${config.provider} (${show.length}${hidden ? ` of ${all.length}` : ""}, → = current):\n${lines}${note}\n\nSwitch with /model <name>.` }]);
+          } catch (err) {
+            setErrorLine(err instanceof Error ? err.message : String(err));
+          } finally {
+            setBusy(false);
+          }
         }
         break;
       }

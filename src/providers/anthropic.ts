@@ -125,8 +125,21 @@ export class AnthropicProvider implements Provider {
     this.baseUrl = (opts.baseUrl ?? DEFAULT_BASE).replace(/\/+$/, "");
   }
 
-  models() {
-    return ["claude-sonnet-4-5", "claude-opus-4-1", "claude-haiku-4-5"];
+  async models(): Promise<string[]> {
+    const fallback = ["claude-sonnet-4-5", "claude-opus-4-1", "claude-haiku-4-5"];
+    if (!this.apiKey) return fallback;
+    try {
+      const resp = await fetch(`${this.baseUrl}/v1/models?limit=1000`, {
+        headers: { "x-api-key": this.apiKey, "anthropic-version": "2023-06-01" },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!resp.ok) return fallback;
+      const json = (await resp.json()) as { data?: Array<{ id?: string }> };
+      const ids = (json.data ?? []).map((m) => m.id).filter((x): x is string => !!x);
+      return ids.length ? ids : fallback;
+    } catch {
+      return fallback;
+    }
   }
 
   async *stream(req: ChatRequest): AsyncIterable<StreamEvent> {

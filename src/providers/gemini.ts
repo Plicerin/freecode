@@ -81,8 +81,23 @@ export class GeminiProvider implements Provider {
     this.baseUrl = (opts.baseUrl ?? DEFAULT_BASE).replace(/\/+$/, "");
   }
 
-  models() {
-    return ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-flash-latest"];
+  async models(): Promise<string[]> {
+    const fallback = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-flash-latest"];
+    if (!this.apiKey) return fallback;
+    try {
+      const resp = await fetch(`${this.baseUrl}/v1beta/models?key=${this.apiKey}&pageSize=1000`, {
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!resp.ok) return fallback;
+      const json = (await resp.json()) as { models?: Array<{ name?: string; supportedGenerationMethods?: string[] }> };
+      const ids = (json.models ?? [])
+        .filter((m) => !m.supportedGenerationMethods || m.supportedGenerationMethods.includes("generateContent"))
+        .map((m) => (m.name ?? "").replace(/^models\//, ""))
+        .filter(Boolean);
+      return ids.length ? ids : fallback;
+    } catch {
+      return fallback;
+    }
   }
 
   async *stream(req: ChatRequest): AsyncIterable<StreamEvent> {

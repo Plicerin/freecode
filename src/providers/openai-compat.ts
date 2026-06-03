@@ -53,8 +53,20 @@ export class OpenAICompatProvider implements Provider {
     this.opts = { ...DEFAULT_OPTIONS, ...opts };
   }
 
-  models() {
-    return [this.opts.defaultModel];
+  async models(): Promise<string[]> {
+    const fallback = this.opts.defaultModel ? [this.opts.defaultModel] : [];
+    try {
+      const headers: Record<string, string> = {};
+      const auth = this.opts.authHeader ?? "bearer";
+      if (auth !== "none" && this.apiKey) headers["authorization"] = `Bearer ${this.apiKey}`;
+      const resp = await fetch(`${this.baseUrl}/models`, { headers, signal: AbortSignal.timeout(8000) });
+      if (!resp.ok) return fallback;
+      const json = (await resp.json()) as { data?: Array<{ id?: string }> };
+      const ids = (json.data ?? []).map((m) => m.id).filter((x): x is string => !!x);
+      return ids.length ? ids.sort() : fallback;
+    } catch {
+      return fallback; // offline / no key / endpoint unsupported → known default
+    }
   }
 
   async *stream(req: ChatRequest): AsyncIterable<StreamEvent> {

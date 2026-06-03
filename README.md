@@ -131,7 +131,7 @@ freecode --thinking                          # enable extended thinking / reason
 
 | Command    | What it does                                  |
 |------------|-----------------------------------------------|
-| `/model`   | Show or switch model                          |
+| `/model`   | List the models your key can use, or switch   |
 | `/new`     | Start a fresh session                         |
 | `/resume`  | Open the session picker (↑/↓ to choose, Enter) |
 | `/rename`  | Name the current session (shows in the picker) |
