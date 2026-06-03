@@ -12,6 +12,7 @@ import { extractAttachments } from "../agent/attachments";
 import { summarizeConversation } from "../agent/summarize";
 import { Vault } from "../config/vault";
 import { loadCustomCommands, expandCommand } from "./custom-commands";
+import { executeBench, formatBenchPlain } from "./bench";
 import { closest } from "../utils/fuzzy";
 import { resolveVerify, resolveQuickVerify, runVerify } from "../agent/verify";
 import { newSession, appendEvent, resumeSession, readSession, setSessionTitle, listSessionMetas, type Session, type SessionMeta } from "../session/manager";
@@ -38,7 +39,7 @@ interface UiMessage {
   ok?: boolean;
 }
 
-const SLASH_COMMANDS = ["/model", "/new", "/resume", "/rename", "/context", "/provider", "/mcp", "/plan", "/verify", "/help", "/compact", "/about", "/exit"];
+const SLASH_COMMANDS = ["/model", "/new", "/resume", "/rename", "/context", "/provider", "/mcp", "/plan", "/verify", "/bench", "/help", "/compact", "/about", "/exit"];
 
 // Compact relative time for the session picker.
 function relTime(ms: number): string {
@@ -59,6 +60,7 @@ const COMMAND_DESC: Record<string, string> = {
   "/mcp": "MCP servers and tools",
   "/plan": "toggle read-only plan mode",
   "/verify": "run the project's checks",
+  "/bench": "race the performance ghost",
   "/help": "list commands",
   "/compact": "compact the conversation",
   "/about": "meet Bubo, the freecode owl",
@@ -604,6 +606,19 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       }
       case "/about": {
         setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `${OWL_MICRO}  ${MASCOT_BIO}` }]);
+        break;
+      }
+      case "/bench": {
+        setBusy(true);
+        setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "Racing the ghost…" }]);
+        try {
+          const run = await executeBench({});
+          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: formatBenchPlain(run) }]);
+        } catch (err) {
+          setErrorLine(err instanceof Error ? err.message : String(err));
+        } finally {
+          setBusy(false);
+        }
         break;
       }
       case "/exit":

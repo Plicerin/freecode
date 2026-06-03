@@ -46,21 +46,28 @@ function verdictLine(stats: BenchStats, cmp: Comparison): string {
   }
 }
 
-export async function runBenchCommand(argv: string[]): Promise<void> {
-  const save = !argv.includes("--no-save");
-  const json = argv.includes("--json");
-  const filterArg = argv.find((a) => a.startsWith("--filter="));
-  const filter = filterArg ? filterArg.slice("--filter=".length) : undefined;
+export interface BenchRow {
+  name: string;
+  why: string;
+  stats: BenchStats;
+  cmp: Comparison;
+}
+export interface BenchRun {
+  env: ReturnType<typeof envFingerprint>;
+  rows: BenchRow[];
+}
 
+// Shared core: run the benchmarks, race the ghost, update the ledger. Used by
+// both the terminal command and the in-REPL /bench so they never drift.
+export async function executeBench(opts: { filter?: string; save?: boolean } = {}): Promise<BenchRun> {
+  const save = opts.save !== false;
   const fp = envFingerprint();
-  const key = envKey(fp);
   const ledger = loadLedger();
-  const bests = (ledger.envs[key] ??= {});
+  const bests = (ledger.envs[envKey(fp)] ??= {});
   const commit = gitCommit();
 
-  const run = BENCHMARKS.filter((b) => !filter || b.name.includes(filter));
-  const rows: Array<{ name: string; why: string; stats: BenchStats; cmp: Comparison }> = [];
-
+  const run = BENCHMARKS.filter((b) => !opts.filter || b.name.includes(opts.filter));
+  const rows: BenchRow[] = [];
   for (const b of run) {
     const stats = await runBench(b.name, b.run);
     const cmp = compare(stats, bests[b.name]);
@@ -71,8 +78,41 @@ export async function runBenchCommand(argv: string[]): Promise<void> {
       bests[b.name] = toBest(stats, commit);
     }
   }
-
   if (save) saveLedger(ledger);
+  return { env: fp, rows };
+}
+
+function verdictPlain(cmp: Comparison): string {
+  const pct = `${cmp.deltaPct >= 0 ? "+" : ""}${cmp.deltaPct.toFixed(1)}%`;
+  switch (cmp.verdict) {
+    case "new": return "first run — recorded as the ghost";
+    case "best": return `new personal best (${pct} vs ${fmt(cmp.best!.median)})`;
+    case "regression": return `${pct} slower (ghost ${fmt(cmp.best!.median)})`;
+    case "neutral": return `tied the ghost (within noise, Δ${pct})`;
+  }
+}
+
+// Plain-text report (no ANSI) for rendering inside the REPL as a message.
+export function formatBenchPlain(run: BenchRun): string {
+  const width = Math.max(...run.rows.map((r) => r.name.length), 4);
+  const lines = run.rows.map((r) => `  ${r.name.padEnd(width)}  ${fmt(r.stats.median).padStart(9)}  ${verdictPlain(r.cmp)}`);
+  const beaten = run.rows.filter((r) => r.cmp.verdict === "best").length;
+  const regressed = run.rows.filter((r) => r.cmp.verdict === "regression").length;
+  const summary = regressed
+    ? `⚠ ${regressed} regression${regressed === 1 ? "" : "s"}`
+    : beaten
+      ? `beat the ghost on ${beaten}/${run.rows.length}`
+      : "held the line";
+  return `bench — racing the ghost (${run.env.cpu})\n${lines.join("\n")}\n${summary}`;
+}
+
+export async function runBenchCommand(argv: string[]): Promise<void> {
+  const save = !argv.includes("--no-save");
+  const json = argv.includes("--json");
+  const filterArg = argv.find((a) => a.startsWith("--filter="));
+  const filter = filterArg ? filterArg.slice("--filter=".length) : undefined;
+
+  const { env: fp, rows } = await executeBench({ filter, save });
 
   if (json) {
     process.stdout.write(JSON.stringify({ env: fp, results: rows }, null, 2) + "\n");

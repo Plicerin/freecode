@@ -140,6 +140,7 @@ freecode --thinking                          # enable extended thinking / reason
 | `/mcp`     | List connected MCP servers and their tools    |
 | `/plan`    | Toggle read-only plan mode (propose, don't change) |
 | `/verify`  | Run the project's checks and report the real result |
+| `/bench`   | Race the performance ghost without leaving the REPL |
 | `/help`    | List commands                                 |
 | `/compact` | Force context compaction                      |
 | `/about`   | Meet Bubo, the freecode owl                    |
