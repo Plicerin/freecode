@@ -16,7 +16,7 @@ import { closest } from "../utils/fuzzy";
 import { resolveVerify, resolveQuickVerify, runVerify } from "../agent/verify";
 import { newSession, appendEvent, listSessions, resumeSession, readSession, type Session } from "../session/manager";
 import { makeTheme } from "../tui/theme";
-import { Mascot } from "../tui/mascot";
+import { Mascot, OWL_MICRO } from "../tui/mascot";
 import { debug } from "../utils/debug";
 import type { Tool } from "../tools/types";
 import type { ChatMessage } from "../providers/types";
@@ -746,7 +746,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       ) : (
         <Box borderStyle="round" borderColor={theme.border} paddingX={1} marginTop={1}>
           <Text>
-            <Text color={theme.user}>› </Text>
+            <Text color={theme.hex.assistant}>{OWL_MICRO} </Text>
             <Text>{input.slice(0, cursor)}</Text>
             <Text inverse>{input.slice(cursor, cursor + 1) || " "}</Text>
             <Text>{input.slice(cursor + 1)}</Text>
