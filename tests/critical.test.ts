@@ -10,6 +10,7 @@ import { buildToolRegistry } from "../src/tools/registry";
 import { runAgentLoop, type AgentEvent } from "../src/agent/loop";
 import type { ChatMessage } from "../src/providers/types";
 import { createPermissionEngine } from "../src/permissions/modes";
+import { z } from "zod";
 
 const tools = buildToolRegistry();
 const tool = (n: string) => tools.find((t) => t.name === n)!;
@@ -81,5 +82,26 @@ describe("CRITICAL — file mutations", () => {
     await runLoop(provider, dir);
     expect(existsSync(join(dir, "one.txt"))).toBe(true);
     expect(existsSync(join(dir, "two.txt"))).toBe(true);
+  });
+});
+
+describe("CRITICAL — safety", () => {
+  test("a denied tool does NOT execute (permission is a real gate, not advisory)", async () => {
+    let ran = false;
+    const dangerTool = {
+      name: "Bash", description: "", schema: z.object({ command: z.string() }), permission: "danger" as const,
+      run: async () => { ran = true; return { ok: true, output: "DID RUN" }; },
+    };
+    const events: AgentEvent[] = [];
+    await runAgentLoop({
+      provider: scripted([[call("Bash", { command: "rm -rf /" })], [{ type: "text_delta", delta: "k" }]]) as never,
+      tools: [dangerTool] as never,
+      permission: createPermissionEngine("manual", (async () => "deny") as never),
+      promptUser: (async () => "deny") as never,
+      model: "x", prompt: "wipe everything", history: [], onEvent: (e: AgentEvent) => events.push(e), maxTurns: 5,
+    } as never);
+    expect(ran).toBe(false); // the dangerous tool was never run
+    const result = events.find((e) => e.type === "tool_result") as { result?: { output?: string } } | undefined;
+    expect((result?.result?.output ?? "").toLowerCase()).toMatch(/denied/);
   });
 });
