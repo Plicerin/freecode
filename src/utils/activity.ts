@@ -6,6 +6,7 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import os from "node:os";
+import { redactSecrets } from "./redact";
 
 let enabled = false;
 let logPath = join(os.homedir(), ".freecode", "activity.log");
@@ -31,7 +32,9 @@ export function logActivity(line: string): void {
   if (!enabled) return;
   try {
     mkdirSync(dirname(logPath), { recursive: true });
-    appendFileSync(logPath, `${new Date().toISOString()}  ${line}\n`);
+    // Redact secrets from EVERY line — a pasted key in a USER prompt or a tool
+    // arg must never land in the log on disk.
+    appendFileSync(logPath, `${new Date().toISOString()}  ${redactSecrets(line).text}\n`);
   } catch {
     /* never let logging break a run */
   }

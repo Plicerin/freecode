@@ -25,3 +25,14 @@ test("appends timestamped lines when enabled, and reports its path", () => {
   expect(text.split("\n").filter(Boolean).every((l) => /^\d{4}-\d\d-\d\dT/.test(l))).toBe(true);
   setActivityLog(false); // leave global state off for other tests
 });
+
+test("redacts secrets in any logged line (a pasted key never hits disk)", () => {
+  const { mkdtempSync, readFileSync } = require("node:fs");
+  const p = require("node:path").join(mkdtempSync(require("node:path").join(require("node:os").tmpdir(), "fc-act-")), "redact.log");
+  setActivityLog(true, p);
+  logActivity("USER Here's the key sk-proj-" + "x".repeat(40));
+  const text = readFileSync(p, "utf8");
+  expect(text).not.toMatch(/sk-proj-x{10}/);
+  expect(text).toMatch(/\[REDACTED:openai-key\]/);
+  setActivityLog(false);
+});
