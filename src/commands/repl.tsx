@@ -42,7 +42,7 @@ interface UiMessage {
   ok?: boolean;
 }
 
-const SLASH_COMMANDS = ["/model", "/new", "/resume", "/rename", "/context", "/provider", "/plan", "/verify", "/bench", "/log", "/mcp", "/help", "/compact", "/about", "/exit"];
+const SLASH_COMMANDS = ["/model", "/new", "/resume", "/rename", "/context", "/cost", "/config", "/doctor", "/diff", "/provider", "/plan", "/verify", "/bench", "/log", "/mcp", "/help", "/compact", "/about", "/exit"];
 
 // Braille spinner frames — proof of life while a turn runs.
 const SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
@@ -65,6 +65,10 @@ const COMMAND_DESC: Record<string, string> = {
   "/provider": "show or switch provider",
   "/mcp": "MCP servers and tools",
   "/plan": "toggle read-only plan mode",
+  "/cost": "session token usage + cost",
+  "/config": "show the resolved configuration",
+  "/doctor": "diagnose setup (provider, key, git, env)",
+  "/diff": "show the working-tree git diff",
   "/verify": "run the project's checks",
   "/bench": "race the performance ghost",
   "/log": "toggle the verification activity log",
@@ -664,6 +668,58 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       case "/context": {
         const u = trackerRef.current["usage"];
         setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Tokens: in=${u.input} out=${u.output} cacheRead=${u.cacheRead} cacheWrite=${u.cacheWrite} thinking=${u.thinking}\nCost: $${costUsd.toFixed(4)}` }]);
+        break;
+      }
+      case "/cost": {
+        const u = trackerRef.current["usage"];
+        const tot = u.input + u.output + u.cacheRead + u.cacheWrite;
+        setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Session cost: $${costUsd.toFixed(4)}  (${model} · ${config.provider})\nTokens: ${tot} total — in ${u.input}, out ${u.output}, cache ${u.cacheRead}r/${u.cacheWrite}w, thinking ${u.thinking}` }]);
+        break;
+      }
+      case "/config": {
+        const lines = [
+          `provider     ${config.provider}`,
+          `model        ${model}`,
+          `endpoint     ${defaultEndpoint(config.provider, config.baseUrl)}`,
+          `key          ${config.apiKey ? "set" : "none"}`,
+          `permission   ${config.permissionMode}`,
+          `verifyMode   ${config.verifyMode}`,
+          `theme        ${config.theme}`,
+          `maxTurns     ${config.maxTurns}`,
+          `webSearch    ${config.webSearchProvider}`,
+          `promptCache  ${config.enablePromptCache}`,
+        ];
+        setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: lines.join("\n") }]);
+        break;
+      }
+      case "/doctor": {
+        const { execSync } = await import("node:child_process");
+        const tryExec = (cmd: string): string | null => { try { return execSync(cmd, { cwd: process.cwd(), encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { return null; } };
+        const local = ["ollama", "lmstudio", "mock"].includes(config.provider);
+        const lines = [
+          "freecode doctor",
+          `  cwd          ${process.cwd()}`,
+          `  git          ${tryExec("git rev-parse --is-inside-work-tree") === "true" ? "repo ✓" : "not a git repo"}`,
+          `  provider     ${config.provider}`,
+          `  key          ${config.apiKey ? "set ✓" : local ? "n/a (local)" : "MISSING ✗ — freecode auth add " + config.provider}`,
+          `  model        ${model}`,
+          `  runtime      bun ${(globalThis as { Bun?: { version?: string } }).Bun?.version ?? "?"}`,
+          `  verifyMode   ${config.verifyMode}`,
+        ];
+        setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: lines.join("\n") }]);
+        break;
+      }
+      case "/diff": {
+        const { execSync } = await import("node:child_process");
+        try {
+          const stat = execSync("git diff --stat", { cwd: process.cwd(), encoding: "utf8" }).trim();
+          if (!stat) { setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "No unstaged changes." }]); break; }
+          const diff = execSync("git diff", { cwd: process.cwd(), encoding: "utf8" });
+          const body = diff.length > 6000 ? diff.slice(0, 6000) + "\n… (diff truncated)" : diff;
+          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `${stat}\n\n${body}` }]);
+        } catch (err) {
+          setErrorLine(`git diff failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
         break;
       }
       case "/provider": {
