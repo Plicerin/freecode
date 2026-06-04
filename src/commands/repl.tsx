@@ -42,7 +42,7 @@ interface UiMessage {
   ok?: boolean;
 }
 
-const SLASH_COMMANDS = ["/model", "/new", "/resume", "/rename", "/context", "/cost", "/config", "/doctor", "/diff", "/provider", "/plan", "/verify", "/bench", "/log", "/mcp", "/help", "/compact", "/about", "/exit"];
+const SLASH_COMMANDS = ["/model", "/new", "/resume", "/rename", "/context", "/cost", "/config", "/doctor", "/diff", "/commit", "/provider", "/plan", "/verify", "/bench", "/log", "/mcp", "/help", "/compact", "/about", "/exit"];
 
 // Braille spinner frames — proof of life while a turn runs.
 const SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
@@ -69,6 +69,7 @@ const COMMAND_DESC: Record<string, string> = {
   "/config": "show the resolved configuration",
   "/doctor": "diagnose setup (provider, key, git, env)",
   "/diff": "show the working-tree git diff",
+  "/commit": "stage all changes and commit (/commit <message>)",
   "/verify": "run the project's checks",
   "/bench": "race the performance ghost",
   "/log": "toggle the verification activity log",
@@ -719,6 +720,22 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `${stat}\n\n${body}` }]);
         } catch (err) {
           setErrorLine(`git diff failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        break;
+      }
+      case "/commit": {
+        const { execSync } = await import("node:child_process");
+        try {
+          const status = execSync("git status --short", { cwd: process.cwd(), encoding: "utf8" }).trim();
+          if (!status) { setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "Nothing to commit — working tree clean." }]); break; }
+          if (!arg.trim()) { setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Changes to commit:\n${status}\n\nUsage: /commit <message>` }]); break; }
+          execSync("git add -A", { cwd: process.cwd() });
+          // -F - reads the message from stdin, avoiding any shell-quoting issues.
+          execSync("git commit -F -", { cwd: process.cwd(), input: arg.trim() });
+          const head = execSync("git log -1 --oneline", { cwd: process.cwd(), encoding: "utf8" }).trim();
+          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `✓ Committed: ${head}` }]);
+        } catch (err) {
+          setErrorLine(`commit failed: ${err instanceof Error ? err.message : String(err)}`);
         }
         break;
       }
