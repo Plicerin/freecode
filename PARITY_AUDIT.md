@@ -4,7 +4,7 @@
 **Auditor:** Claude (code-verified, not assumed)
 **Parity target:** `SPEC.md` (freecode's design spec = the Claude Code / OpenClaude feature surface it was built to match).
 
-> ⚠️ **Caveat on "vs OpenClaude":** OpenClaude's source is not available in this workspace (no upstream git remote, no local checkout). This audit is therefore against **`SPEC.md`**, freecode's own documented parity target — a strong proxy, but **not** a line-by-line diff of OpenClaude. To upgrade this to a true OpenClaude comparison, point me at the OpenClaude repo (URL or path) and I'll re-run it as a real diff.
+> ⚠️ **Caveat on "vs OpenClaude":** OpenClaude's source could not be located. `freecode` is **not** a GitHub fork (`isFork:false, parent:null`), there is **no `openclaude` repo under the owner's account**, and public "openclaude" results are unrelated projects by other authors (it's a generic name). I will not audit against a stranger's repo and call it parity. **This audit is therefore against `SPEC.md`** — freecode's own documented parity target (the Claude Code feature surface it was built to match) — a strong proxy, but **not** a line-by-line OpenClaude diff. To upgrade it, provide *the* OpenClaude source (local path or the specific repo).
 
 ---
 

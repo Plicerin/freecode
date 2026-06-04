@@ -63,6 +63,12 @@ async function main(): Promise<void> {
     await runBenchCommand(process.argv.slice(3));
     return;
   }
+  // `freecode resume <session-id>` — SPEC §I subcommand form of --resume.
+  if (process.argv[2] === "resume") {
+    const { startRepl } = await import("./commands/repl");
+    await startRepl({ resumeId: process.argv[3], flags: {} });
+    return;
+  }
   await program.parseAsync(process.argv);
   const opts = program.opts<ParsedArgs>();
   const flags: CliFlags = {

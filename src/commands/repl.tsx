@@ -375,14 +375,20 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     if (!busy && !pending) setSettled(messages.length);
   }, [busy, pending, messages.length]);
 
+  // Honor reduced-motion: FREECODE_NO_ANIMATION / NO_ANIMATION → static indicators
+  // instead of the spinner/eye animation (the CLI analog of prefersReducedMotion).
+  const reducedMotion = process.env.FREECODE_NO_ANIMATION === "1" || process.env.NO_ANIMATION === "1";
+
   // One clock while a turn runs: ticks the spinner (~90ms) and, every few ticks,
-  // Bubo's eyes; also marks the start so we can show elapsed time.
+  // Bubo's eyes; also marks the start so we can show elapsed time. Skipped under
+  // reduced motion (we still mark the start for the elapsed counter).
   useEffect(() => {
     if (!busy) { setTick(0); return; }
     busyStartRef.current = Date.now();
+    if (reducedMotion) return;
     const id = setInterval(() => setTick((t) => t + 1), 90);
     return () => clearInterval(id);
-  }, [busy]);
+  }, [busy, reducedMotion]);
 
   // Record session context once (no-op unless the activity log is enabled).
   useEffect(() => {
@@ -945,7 +951,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           ))}
           {busy && (
             <Text color={theme.hex.warning}>
-              {SPINNER[tick % SPINNER.length]} Working… <Text dimColor>({Math.max(0, Math.floor((Date.now() - busyStartRef.current) / 1000))}s · esc to interrupt)</Text>
+              {reducedMotion ? "•" : SPINNER[tick % SPINNER.length]} Working… <Text dimColor>({Math.max(0, Math.floor((Date.now() - busyStartRef.current) / 1000))}s · esc to interrupt)</Text>
             </Text>
           )}
           {errorLine && <Text color={theme.hex.error}>! {errorLine}</Text>}
@@ -975,7 +981,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       {/* Bubo perches at the top-right of the input cluster — always visible,
           eyes darting while a turn runs. */}
       <Box paddingX={1} justifyContent="flex-end">
-        <Text color={theme.hex.assistant}>{busy ? OWL_FRAMES[Math.floor(tick / 3) % OWL_FRAMES.length] : OWL_MICRO}</Text>
+        <Text color={theme.hex.assistant}>{busy && !reducedMotion ? OWL_FRAMES[Math.floor(tick / 3) % OWL_FRAMES.length] : OWL_MICRO}</Text>
       </Box>
       {pending ? (
         <Box flexDirection="column" borderStyle="round" borderColor={theme.hex.warning} paddingX={1} marginTop={1}>
