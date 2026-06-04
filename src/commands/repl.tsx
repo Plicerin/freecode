@@ -44,6 +44,9 @@ interface UiMessage {
 
 const SLASH_COMMANDS = ["/model", "/new", "/resume", "/rename", "/context", "/provider", "/plan", "/verify", "/bench", "/log", "/mcp", "/help", "/compact", "/about", "/exit"];
 
+// Braille spinner frames — proof of life while a turn runs.
+const SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
+
 // Compact relative time for the session picker.
 function relTime(ms: number): string {
   const s = Math.max(0, (Date.now() - ms) / 1000);
@@ -348,7 +351,8 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   const [errorLine, setErrorLine] = useState<string | null>(null);
   const [costUsd, setCostUsd] = useState(0);
   const [confidence, setConfidence] = useState<Confidence>("unchecked");
-  const [eyeFrame, setEyeFrame] = useState(0); // Bubo's eye-dart animation while working
+  const [tick, setTick] = useState(0); // drives the spinner + Bubo's eyes while working
+  const busyStartRef = useRef(0);
   const [pending, setPending] = useState<ApprovalRequest | null>(null);
   // Interactive resume picker: when open, ↑/↓ choose and Enter resumes.
   const [picker, setPicker] = useState<{ items: SessionMeta[]; idx: number } | null>(null);
@@ -371,10 +375,12 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     if (!busy && !pending) setSettled(messages.length);
   }, [busy, pending, messages.length]);
 
-  // Animate Bubo's eyes only while a turn is running; reset to forward when idle.
+  // One clock while a turn runs: ticks the spinner (~90ms) and, every few ticks,
+  // Bubo's eyes; also marks the start so we can show elapsed time.
   useEffect(() => {
-    if (!busy) { setEyeFrame(0); return; }
-    const id = setInterval(() => setEyeFrame((f) => (f + 1) % OWL_FRAMES.length), 200);
+    if (!busy) { setTick(0); return; }
+    busyStartRef.current = Date.now();
+    const id = setInterval(() => setTick((t) => t + 1), 90);
     return () => clearInterval(id);
   }, [busy]);
 
@@ -937,7 +943,11 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           {messages.slice(settled).filter((m) => m.id).map((m, i) => (
             <MessageLine key={`${m.id}:${settled + i}`} m={m} theme={theme} />
           ))}
-          {busy && <Text color={theme.hex.warning}>· Working…</Text>}
+          {busy && (
+            <Text color={theme.hex.warning}>
+              {SPINNER[tick % SPINNER.length]} Working… <Text dimColor>({Math.max(0, Math.floor((Date.now() - busyStartRef.current) / 1000))}s · esc to interrupt)</Text>
+            </Text>
+          )}
           {errorLine && <Text color={theme.hex.error}>! {errorLine}</Text>}
         </Box>
         {showTasks && (
@@ -965,7 +975,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       {/* Bubo perches at the top-right of the input cluster — always visible,
           eyes darting while a turn runs. */}
       <Box paddingX={1} justifyContent="flex-end">
-        <Text color={theme.hex.assistant}>{busy ? OWL_FRAMES[eyeFrame] : OWL_MICRO}</Text>
+        <Text color={theme.hex.assistant}>{busy ? OWL_FRAMES[Math.floor(tick / 3) % OWL_FRAMES.length] : OWL_MICRO}</Text>
       </Box>
       {pending ? (
         <Box flexDirection="column" borderStyle="round" borderColor={theme.hex.warning} paddingX={1} marginTop={1}>
