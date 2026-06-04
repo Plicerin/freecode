@@ -40,9 +40,11 @@ export function logActivity(line: string): void {
   if (!enabled) return;
   try {
     mkdirSync(dirname(logPath), { recursive: true });
-    // Redact secrets from EVERY line — a pasted key in a USER prompt or a tool
-    // arg must never land in the log on disk.
-    appendFileSync(logPath, `${new Date().toISOString()}  ${redactSecrets(line).text}\n`);
+    // Redact secrets from EVERY line, and collapse embedded newlines to ↵ so a
+    // multi-line command can't split one event across several physical lines
+    // (which makes the log unparseable/misleading).
+    const safe = redactSecrets(line).text.replace(/\r?\n/g, " ↵ ");
+    appendFileSync(logPath, `${new Date().toISOString()}  ${safe}\n`);
   } catch {
     /* never let logging break a run */
   }
