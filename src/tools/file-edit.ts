@@ -25,6 +25,37 @@ function countOccurrences(haystack: string, needle: string): number {
   return count;
 }
 
+const toLF = (s: string): string => s.replace(/\r\n/g, "\n");
+
+// Strip a FileRead-style line-number gutter ("   12\t…") IF every non-empty line
+// has one — the model sometimes copies numbered output into oldText verbatim.
+function stripGutter(s: string): string {
+  const gutter = /^\s*\d+\t/;
+  const lines = s.split("\n");
+  const nonEmpty = lines.filter((l) => l.trim().length > 0);
+  if (nonEmpty.length === 0 || !nonEmpty.every((l) => gutter.test(l))) return s;
+  return lines.map((l) => l.replace(gutter, "")).join("\n");
+}
+
+// Literal single replace (no $-pattern interpretation, unlike String.replace).
+function replaceOnce(haystack: string, needle: string, repl: string): string {
+  const i = haystack.indexOf(needle);
+  return i < 0 ? haystack : haystack.slice(0, i) + repl + haystack.slice(i + needle.length);
+}
+
+/**
+ * Find oldText in the file, tolerating the two things that make exact matching
+ * fail in the real world: CRLF vs LF line endings (every multi-line edit on a
+ * Windows file) and a copied line-number gutter. Matching is done in LF space;
+ * the caller re-applies the file's real line endings on write.
+ */
+function locateOldText(fileLF: string, oldText: string): string | null {
+  for (const cand of [toLF(oldText), stripGutter(toLF(oldText))]) {
+    if (cand && fileLF.includes(cand)) return cand;
+  }
+  return null;
+}
+
 export const FileEditTool: Tool<z.infer<typeof ArgsSchema>> = {
   name: "FileEdit",
   description: "Edit a file. Two modes: (1) oldText + newText string replace (oldText must be unique unless replaceAll is set), (2) unifiedDiff patch (from `diff -u`).",
@@ -38,23 +69,28 @@ export const FileEditTool: Tool<z.infer<typeof ArgsSchema>> = {
     const original = readFileSync(abs, "utf8");
 
     if (args.oldText !== undefined && args.newText !== undefined) {
-      const matches = countOccurrences(original, args.oldText);
-      if (matches === 0) {
-        return { ok: false, output: "", error: "oldText not found in file (no match)" };
+      // Match in LF space (tolerating CRLF files + a copied line-number gutter),
+      // then restore the file's real line endings on write.
+      const eol = original.includes("\r\n") ? "\r\n" : "\n";
+      const fileLF = toLF(original);
+      const newLF = toLF(args.newText);
+      const oldLF = locateOldText(fileLF, args.oldText);
+      if (oldLF === null) {
+        return { ok: false, output: "", error: "oldText not found in file (no match). Copy the exact text from the file (line endings are handled for you; do not include the line-number prefix from FileRead)." };
       }
+      const matches = countOccurrences(fileLF, oldLF);
       if (matches > 1 && !args.replaceAll) {
         return { ok: false, output: "", error: `oldText is not unique (${matches} matches). Add surrounding context to make it unique, or set replaceAll: true.` };
       }
-      const updated = args.replaceAll
-        ? original.split(args.oldText).join(args.newText)
-        : original.replace(args.oldText, args.newText);
+      const updatedLF = args.replaceAll ? fileLF.split(oldLF).join(newLF) : replaceOnce(fileLF, oldLF, newLF);
+      const updated = eol === "\r\n" ? updatedLF.replace(/\n/g, "\r\n") : updatedLF;
       try {
         writeFileSync(abs, updated, "utf8");
       } catch (err) {
         return { ok: false, output: "", error: `Write failed: ${String(err)}` };
       }
-      const diff = createTwoFilesPatch(args.path, args.path, original, updated, "before", "after");
-      return { ok: true, output: diff, metadata: { mode: "replace", replacements: args.replaceAll ? matches : 1 } };
+      const diff = createTwoFilesPatch(args.path, args.path, fileLF, updatedLF, "before", "after");
+      return { ok: true, output: diff, metadata: { mode: "replace", replacements: args.replaceAll ? matches : 1, eol: eol === "\r\n" ? "crlf" : "lf" } };
     }
 
     if (args.unifiedDiff) {
