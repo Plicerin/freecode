@@ -1,20 +1,28 @@
-// Opt-in activity log for auditing verification against real-world runs. When
-// enabled, freecode appends a timestamped line for each command, verify run,
-// provenance ledger, and confidence transition — a readable trail of "what did
-// it do, and what did it actually confirm." Toggle with /log (or the
-// FREECODE_ACTIVITY_LOG env var = "1" for the default path, or a path).
+// Activity log for auditing verification against real-world runs. Appends a
+// timestamped, secret-redacted line for each command, verify run, provenance
+// ledger, and confidence transition — a readable trail of "what did it do, and
+// what did it actually confirm." ON by default during active development;
+// toggle with /log, or set FREECODE_ACTIVITY_LOG=0 (or false/off) to disable,
+// =<path> to redirect.
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import os from "node:os";
 import { redactSecrets } from "./redact";
 
-let enabled = false;
+// On by default for real runs (redacted; toggle with /log), but OFF under the
+// test runner so the suite never writes to the user's real activity log.
+let enabled = process.env.NODE_ENV !== "test";
 let logPath = join(os.homedir(), ".freecode", "activity.log");
 
 const envVal = process.env.FREECODE_ACTIVITY_LOG;
-if (envVal) {
-  enabled = true;
-  if (envVal !== "1" && envVal.toLowerCase() !== "true") logPath = envVal;
+if (envVal !== undefined) {
+  const v = envVal.toLowerCase();
+  if (v === "0" || v === "false" || v === "off") {
+    enabled = false;
+  } else {
+    enabled = true;
+    if (envVal !== "1" && v !== "true") logPath = envVal;
+  }
 }
 
 export function setActivityLog(on: boolean, path?: string): { on: boolean; path: string } {
