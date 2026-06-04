@@ -1,59 +1,69 @@
-# freecode — Feature Parity Audit
+# freecode vs OpenClaude — Feature Parity Audit (true diff)
 
 **Date:** 2026-06-04
-**Auditor:** Claude (code-verified, not assumed)
-**Parity target:** `SPEC.md` (freecode's design spec = the Claude Code / OpenClaude feature surface it was built to match).
-
-> ⚠️ **Caveat on "vs OpenClaude":** OpenClaude's source could not be located. `freecode` is **not** a GitHub fork (`isFork:false, parent:null`), there is **no `openclaude` repo under the owner's account**, and public "openclaude" results are unrelated projects by other authors (it's a generic name). I will not audit against a stranger's repo and call it parity. **This audit is therefore against `SPEC.md`** — freecode's own documented parity target (the Claude Code feature surface it was built to match) — a strong proxy, but **not** a line-by-line OpenClaude diff. To upgrade it, provide *the* OpenClaude source (local path or the specific repo).
+**OpenClaude:** `Gitlawb/openclaude` v0.16.1 (cloned and inspected)
+**Method:** direct comparison of both codebases — command surface, subsystems, providers.
 
 ---
 
-## Verdict
+## Verdict: freecode is NOT at feature parity with OpenClaude.
 
-freecode **meets or exceeds** the spec on the core agent loop, providers, tools, sessions, permissions, context, and TUI. The parity gaps are concentrated in **four** areas, only one of which is substantial (gRPC `serve`). It also ships a large amount of functionality **beyond** the spec.
+This isn't "near parity with a few gaps." The scale tells the story:
 
----
+| | OpenClaude v0.16.1 | freecode |
+|---|---|---|
+| Source files | **2,485** | **60** (~40× smaller) |
+| Slash commands | **119** | **16** |
+| Major subsystems | plugins, integrations, hooks, bridge, SDK, remote, gRPC, agents, LSP, memory, screens, migrations, keybindings, output styles… | core loop + REPL |
 
-## ❌ Parity gaps (missing / stub vs SPEC)
-
-| # | Spec item | Status | Severity |
-|---|---|---|---|
-| 1 | **gRPC `serve`** — T26, V10, §I `svc: Chat` | **Placeholder.** `serve.ts` binds an HTTP port returning `{name,status,grpc:true}`; there is **no** proto loader, bidirectional `Chat` stream, session reconnect, or approval-as-events. Comment admits "placeholder… replace with @grpc/grpc-js + proto-loader." The grpc deps are installed but unused. | **High** — a whole spec'd interface is non-functional. |
-| 2 | **AWS Bedrock (T6) + Google Vertex (T7) providers** | **Unimplemented stubs** — `registry.ts` routes both to `UnimplementedProvider` (returns a clear "not implemented" error). So **7 of 9** spec'd providers are real. | **Medium** — honest, but 2 providers short of the "9 providers" spec. |
-| 3 | **Tasks sidebar (Ctrl+T, part of T19)** | **Stub.** Toggles a panel that always reads "Tasks / (no active tasks)" — no task/todo tracking behind it. | **Low** — cosmetic; no real feature. |
-| 4 | **Spinner `prefersReducedMotion` → static (V19)** | **Missing.** A spinner exists (V20 ✓) but there is no reduced-motion fallback to a static indicator. | **Low.** |
-
-Minor: §I lists `freecode resume <id>` as a subcommand; only `--resume <id>` (flag) exists. Functionally equivalent, cosmetically off-spec.
+freecode is a **lean reimplementation of OpenClaude's core** — the agent loop, basic tools, a handful of providers, a REPL. It covers roughly **15–20% of OpenClaude's surface**, plus its own verification-first features that OpenClaude lacks. Closing to true 1:1 parity means rebuilding a 2,485-file platform — not a fixable "gap list."
 
 ---
 
-## ✅ At parity (code-verified)
+## What freecode is MISSING (by category)
 
-- **Providers (7/9):** Anthropic, OpenAI-compat (covers OpenAI/GitHub Models/LM Studio/NIM), Gemini, Ollama + explicit Mock (V11 zero-config). Streaming + tool calls live-verified earlier.
-- **Tools (T10–T17):** Bash (allow/denylist V4), FileRead, FileWrite, FileEdit, Glob, Grep, WebSearch (DuckDuckGo default + Tavily/Exa/Firecrawl), WebFetch→markdown.
-- **Sessions (T9/V6):** append-only JSONL, `/new`, `/resume`, list. (Path is `~/.freecode/projects/…` not `~/.claude/…` — an intentional, correct divergence.)
-- **Permissions (T18):** manual / auto / bypass, per-session denial memory (V3, V18).
-- **Settings (T2):** priority chain (V5), JSONC (V16), **hot-reload watcher present** (chokidar in `settings-jsonc.ts`, V13).
-- **Context (T24):** token tracking (V2), prompt-cache markers (V7), auto-compaction (V14), extended thinking tracked separately (V15).
-- **Retries (T28):** exp backoff + jitter, `CLAUDE_CODE_UNATTENDED_RETRY` ∞ (V8).
-- **Errors (T29):** friendly map (V1).
-- **TUI (T19), themes (T21), slash commands (T20), headless `--print` (T25), keybinds.**
+**Slash commands — 16 vs 119.** freecode has: `/model /new /resume /rename /context /provider /plan /verify /bench /log /mcp /help /compact /about /exit`. OpenClaude additionally has ~100, including the high-value ones:
+- **Git/PR workflow:** `commit`, `commit-push-pr`, `review`, `security-review`, `diff`, `pr_comments`, `branch`, `tag`, `issue`, `autofix-pr`
+- **Cost/usage/insight:** `cost`, `usage`, `stats`, `insights`, `extra-usage`, `rate-limit-options`
+- **Agents/automation:** `agents`, `agents-platform`, `bughunter`, `advisor`, `proactive`, `passes`, `ultraplan`
+- **Config/diagnostics:** `config`, `doctor`, `env`, `permissions`, `effort`, `statusline`
+- **Editor/tooling:** `ide`, `lsp`, `vim`, `chrome`, `desktop`, `mobile`, `voice`, `sandbox-toggle`
+- **Auth/integrations:** `login`/`logout`, `oauth-refresh`, `onboard-github`, `install-github-app`, `install-slack-app`
+- **Memory/knowledge:** `memory`, `knowledge`, `wiki`, `rewind`, `thinkback`, `session`, `export`, `share`, `summary`
+- **Plugins/skills:** `plugin`, `reload-plugins`, `skills`, `output-style`, `theme`, `color`
+- **Remote:** `remote-env`, `remote-setup`, `teleport`
+- …plus `upgrade`, `feedback`, `doctor`, `privacy-settings`, `release-notes`, etc.
+
+**Whole subsystems freecode has nothing equivalent to:**
+- **integrations/ (83 files)** — Slack, GitHub App, IDE/VS Code extension launch integration
+- **hooks/ (108 files)** — a deep hooks platform (freecode has 3 lifecycle hooks total)
+- **plugins/ + reload-plugins** — a plugin architecture (freecode: none)
+- **entrypoints/ SDK (23 files)** — a programmatic SDK (`openclaude/sdk`); freecode is CLI-only
+- **agents / agents-platform** — sub-agents / agent orchestration; freecode is single-agent
+- **remote/ + teleport + sandbox** — remote execution / sandboxed runs
+- **real gRPC + proto/** — OpenClaude ships a working gRPC server; freecode's `serve` is a port-binding placeholder
+- **lsp** — language-server integration; freecode has none
+- **memory / memdir (9 files) / knowledge / wiki** — persistent project memory; freecode has none
+- **migrations/ (11 files)** — versioned config migrations
+- **keybindings/ (15 files)** — user-customizable keybindings (freecode: fixed)
+- **screens/ (11 files), outputStyles, statusline, stickers, themes, voice, vim mode** — TUI breadth
+- **Codex OAuth, Atomic Chat, Hicap, OpenRouter/DeepSeek/Groq/Mistral routing, "200+ models"** — provider breadth + OAuth flows
+
+**Providers:** freecode = 7 real (Anthropic, OpenAI-compat, Gemini, GitHub Models, Ollama, LM Studio, NIM) + Bedrock/Vertex stubbed. OpenClaude = OpenAI-compat (+ OpenRouter/DeepSeek/Groq/Mistral), Gemini, GitHub Models, Codex/Codex-OAuth, Atomic Chat, Hicap, Ollama → "200+ models". (Notably freecode *adds* first-class **Anthropic**, which OpenClaude's headline doesn't emphasize.)
 
 ---
 
-## ➕ Beyond spec (freecode exceeds OpenClaude's surface)
+## What freecode has that OpenClaude does NOT
 
-Encrypted API-key vault + first-run onboarding · MCP client (stdio) · verification gate + provenance ledger + earned-confidence badge · lifecycle hooks (PreToolUse/PostToolUse/Stop) · plan mode · custom slash commands · fuzzy command/@path matching · secret redaction across tool output + logs · repeated-failure circuit-breaker · performance "ghost" ledger (`/bench`) · activity log (`/log`) · `/about` `/rename` `/exit` · branding (Bubo, blue/grey identity).
+freecode's verification-first identity is genuinely net-new: the **verify gate + provenance ledger + earned-confidence badge**, the **encrypted key vault**, **secret redaction** across tool output and logs, the **repeated-failure circuit-breaker**, the **performance "ghost" ledger** (`/bench`), and the **activity log** (`/log`). OpenClaude has none of these. So freecode is not strictly a subset — it trades breadth for a correctness/trust focus.
 
 ---
 
-## Recommended punch-list (to close SPEC parity)
+## Honest recommendation
 
-1. **gRPC `serve`** — implement real `@grpc/grpc-js` + proto-loader bidirectional `Chat` (deps already present). *Biggest gap; most effort.*
-2. **Bedrock + Vertex** — real SigV4 (Bedrock) and service-account (Vertex) auth, or formally de-scope them from the spec.
-3. **Tasks sidebar** — either wire a real task/todo model or remove the Ctrl+T stub.
-4. **`prefersReducedMotion`** — static spinner fallback (small).
-5. **`resume` subcommand** — add `freecode resume <id>` to match §I (small).
+**"Ensure feature parity" with OpenClaude = rebuild a 2,485-file platform.** That is not a task I can or should complete autonomously, and I won't claim it done when it isn't. The realistic path is to **decide whether parity is even the goal**:
 
-## Open item for a *true* OpenClaude diff
-Provide the OpenClaude repo and I'll diff command-for-command, tool-for-tool, and flag any behavior freecode implements *differently* (not just missing) — which SPEC-based auditing can't catch.
+- **If freecode stays lean (recommended):** don't chase 119 commands. Pick the highest-value OpenClaude features to port and own them well. Suggested order: (1) git/PR workflow commands (`/commit`, `/review`, `/diff`), (2) `/cost` + `/usage`, (3) `/config` + `/doctor`, (4) real gRPC `serve`, (5) sub-agents. Each is a discrete, verifiable unit.
+- **If true parity is the goal:** it's a multi-month port of plugins, integrations, SDK, remote, LSP, memory, OAuth, and ~100 commands — scoped as its own roadmap, not a single pass.
+
+Either way, the answer to "what's missing" is now concrete and on the table. Tell me which direction, and I'll start closing real, verifiable units — not pretend the 40× gap is closed.
