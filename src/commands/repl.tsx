@@ -15,6 +15,7 @@ import { loadCustomCommands, expandCommand } from "./custom-commands";
 import { executeBench, formatBenchPlain } from "./bench";
 import { previewToolResult } from "../tui/preview";
 import { type Confidence, nextConfidence } from "../tui/confidence";
+import { MarkdownBody } from "../tui/markdown-render";
 import { logActivity, setActivityLog, activityState } from "../utils/activity";
 import { closest } from "../utils/fuzzy";
 import { resolveVerify, resolveQuickVerify, runVerify } from "../agent/verify";
@@ -226,10 +227,14 @@ function Intro({ provider, model, endpoint, isLocal, providerNote, hasKey, theme
 // One transcript line. Shared between the Static scrollback (settled turns)
 // and the live region (the turn in flight) so both render identically.
 function MessageLine({ m, theme }: { m: UiMessage; theme: ReturnType<typeof makeTheme> }): JSX.Element {
+  // Assistant output gets markdown-aware rendering: fenced code blocks are
+  // syntax-highlighted and inline `code` is coloured (instead of flat white).
+  if (m.role === "assistant") {
+    return <MarkdownBody text={m.text} theme={theme} marker={<Text color={theme.hex.assistant}>● </Text>} />;
+  }
   return (
     <Text>
       {m.role === "user" && <Text color={theme.user}>› </Text>}
-      {m.role === "assistant" && <Text color={theme.hex.assistant}>● </Text>}
       {m.role === "tool" && <Text color={theme.tool}>⚙ </Text>}
       {m.role === "system" && <Text color={theme.dim}>· </Text>}
       <Text color={m.role === "ledger" ? theme.dim : undefined} dimColor={m.role === "ledger"}>{m.text}</Text>
