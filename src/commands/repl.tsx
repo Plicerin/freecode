@@ -43,7 +43,7 @@ interface UiMessage {
   ok?: boolean;
 }
 
-const SLASH_COMMANDS = ["/model", "/new", "/resume", "/rename", "/context", "/cost", "/config", "/doctor", "/diff", "/commit", "/provider", "/plan", "/verify", "/bench", "/log", "/mcp", "/help", "/compact", "/about", "/exit"];
+const SLASH_COMMANDS = ["/model", "/new", "/resume", "/rename", "/context", "/cost", "/config", "/doctor", "/diff", "/commit", "/review", "/provider", "/plan", "/verify", "/bench", "/log", "/mcp", "/help", "/compact", "/about", "/exit"];
 
 // Braille spinner frames — proof of life while a turn runs.
 const SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
@@ -71,6 +71,7 @@ const COMMAND_DESC: Record<string, string> = {
   "/doctor": "diagnose setup (provider, key, git, env)",
   "/diff": "show the working-tree git diff",
   "/commit": "stage all changes and commit (/commit <message>)",
+  "/review": "review your working-tree changes for bugs",
   "/verify": "run the project's checks",
   "/bench": "race the performance ghost",
   "/log": "toggle the verification activity log",
@@ -724,6 +725,15 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         } catch (err) {
           setErrorLine(`commit failed: ${err instanceof Error ? err.message : String(err)}`);
         }
+        break;
+      }
+      case "/review": {
+        // Hand the working-tree changes to the agent for a focused review,
+        // through the normal loop (it has the provider + Bash to read the diff).
+        void submit(
+          "Review my current working-tree changes for a code review. Run `git diff` (and `git diff --staged`) to see them, then report correctness bugs, risky edits, and concrete improvements — concise, specific, cite file:line. If there are no changes, say so plainly." +
+          (arg.trim() ? `\n\nFocus: ${arg.trim()}` : ""),
+        );
         break;
       }
       case "/provider": {
