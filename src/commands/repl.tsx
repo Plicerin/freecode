@@ -1038,11 +1038,6 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         </Box>
       )}
 
-      {/* Bubo perches at the top-right of the input cluster — always visible,
-          eyes darting while a turn runs. */}
-      <Box paddingX={1} justifyContent="flex-end">
-        <Text color={theme.hex.assistant}>{busy && !reducedMotion ? OWL_FRAMES[Math.floor(tick / 3) % OWL_FRAMES.length] : OWL_MICRO}</Text>
-      </Box>
       {pending ? (
         <Box flexDirection="column" borderStyle="round" borderColor={theme.hex.warning} paddingX={1} marginTop={1}>
           <Text>
@@ -1067,13 +1062,15 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           <Text dimColor>  ↑/↓ select · Enter resume · Esc cancel</Text>
         </Box>
       ) : (
-        <Box borderStyle="round" borderColor={theme.border} paddingX={1} marginTop={1}>
+        <Box borderStyle="round" borderColor={theme.border} paddingX={1} marginTop={1} justifyContent="space-between">
           <Text>
             <Text color={theme.user}>› </Text>
             <Text>{input.slice(0, cursor)}</Text>
             <Text inverse>{input.slice(cursor, cursor + 1) || " "}</Text>
             <Text>{input.slice(cursor + 1)}</Text>
           </Text>
+          {/* Bubo sits on the right edge of the input line — eyes dart while working. */}
+          <Text color={theme.hex.assistant}>{busy && !reducedMotion ? OWL_FRAMES[Math.floor(tick / 3) % OWL_FRAMES.length] : OWL_MICRO}</Text>
         </Box>
       )}
       <Box paddingX={1} flexDirection="row" justifyContent="space-between">
