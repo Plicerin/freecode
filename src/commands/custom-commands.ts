@@ -1,12 +1,13 @@
 import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { APP_DIR } from "../utils/paths";
+import { pluginDirs } from "../plugins";
 
 export interface CustomCommand {
   name: string;
   description?: string;
   body: string;
-  source: "user" | "project";
+  source: "user" | "project" | "plugin";
 }
 
 function parseFile(text: string): { description?: string; body: string } {
@@ -37,6 +38,7 @@ function loadDir(dir: string, source: CustomCommand["source"], into: Map<string,
 export function loadCustomCommands(cwd: string): Map<string, CustomCommand> {
   const map = new Map<string, CustomCommand>();
   loadDir(join(APP_DIR, "commands"), "user", map);
+  for (const d of pluginDirs(cwd, "commands")) loadDir(d, "plugin", map);
   loadDir(join(cwd, ".freecode", "commands"), "project", map);
   return map;
 }

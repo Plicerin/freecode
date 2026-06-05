@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { APP_DIR } from "../utils/paths";
 import { runSubAgent, type SubAgentContext } from "./subagent";
 import { getAgentType } from "./agent-types";
+import { pluginDirs } from "../plugins";
 
 export const WorkflowTaskSchema = z.object({
   agent: z.string().optional(), // a subagent_type; omitted = general
@@ -34,7 +35,7 @@ export interface Workflow {
   name: string;
   description: string;
   stages: WorkflowStage[];
-  source: "user" | "project";
+  source: "user" | "project" | "plugin";
   path: string;
 }
 
@@ -56,6 +57,7 @@ function loadWorkflowDir(dir: string, source: Workflow["source"], into: Map<stri
 export function resolveWorkflows(cwd: string): Workflow[] {
   const map = new Map<string, Workflow>();
   loadWorkflowDir(join(APP_DIR, "workflows"), "user", map);
+  for (const d of pluginDirs(cwd, "workflows")) loadWorkflowDir(d, "plugin", map);
   loadWorkflowDir(join(cwd, ".freecode", "workflows"), "project", map);
   return [...map.values()];
 }

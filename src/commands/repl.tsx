@@ -13,6 +13,7 @@ import { resolveSkills } from "../agent/skills";
 import { resolveWorkflows, getWorkflow, runWorkflow } from "../agent/workflow";
 import { filterChatModels, pickerWindow } from "../tui/model-picker";
 import { matchCommands, resolveSubmit } from "../tui/slash-complete";
+import { resolvePlugins, setPluginEnabled } from "../plugins";
 import { ContextTracker } from "../agent/context";
 import { priceFor, contextWindowFor } from "../agent/pricing";
 import { extractAttachments } from "../agent/attachments";
@@ -51,7 +52,7 @@ interface UiMessage {
   ok?: boolean;
 }
 
-const SLASH_COMMANDS = ["/model", "/models", "/new", "/resume", "/rename", "/context", "/cost", "/config", "/doctor", "/diff", "/commit", "/commit-push-pr", "/branch", "/issue", "/pr-comments", "/review", "/security-review", "/autofix-pr", "/agents", "/skills", "/workflows", "/provider", "/plan", "/verify", "/bench", "/log", "/mcp", "/help", "/compact", "/about", "/exit"];
+const SLASH_COMMANDS = ["/model", "/models", "/new", "/resume", "/rename", "/context", "/cost", "/config", "/doctor", "/diff", "/commit", "/commit-push-pr", "/branch", "/issue", "/pr-comments", "/review", "/security-review", "/autofix-pr", "/explore", "/agents", "/skills", "/workflows", "/plugins", "/provider", "/plan", "/verify", "/bench", "/log", "/mcp", "/help", "/compact", "/about", "/exit"];
 
 // Braille spinner frames — proof of life while a turn runs.
 const SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
@@ -86,9 +87,11 @@ const COMMAND_DESC: Record<string, string> = {
   "/review": "review your working-tree changes for bugs",
   "/security-review": "audit your working-tree changes for security issues",
   "/autofix-pr": "address the open PR's review comments and CI failures",
+  "/explore": "dispatch a read-only explore sub-agent (/explore <task>)",
   "/agents": "list available sub-agent types",
   "/skills": "list available project skills",
   "/workflows": "list or run a multi-agent workflow (/workflows [name] [input])",
+  "/plugins": "list plugins, or enable/disable (/plugins [enable|disable <name>])",
   "/verify": "run the project's checks",
   "/bench": "race the performance ghost",
   "/log": "toggle the verification activity log",
@@ -355,6 +358,13 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     [input, slashNames, customCommands],
   );
   useEffect(() => { setMenuIdx(0); }, [input]); // reset highlight as the query changes
+  // Guard against duplicate Enter events before React clears the input. On Windows,
+  // a single physical Enter can emit \r + \n as two separate stdin events; both
+  // arrive while the closure still sees the previous `input`, so without the guard
+  // the same command runs twice (or more). The ref resets automatically once React
+  // commits the cleared input (the `[input]` effect above).
+  const submitGuard = useRef(false);
+  useEffect(() => { submitGuard.current = false; }, [input]);
   const historyRef = useRef<string[]>([]); // submitted prompts, oldest first
   const [historyIdx, setHistoryIdx] = useState<number | null>(null); // null = editing live input
   const draftRef = useRef(""); // live input saved while browsing history
@@ -807,6 +817,14 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         );
         break;
       }
+      case "/explore": {
+        if (!arg.trim()) {
+          setErrorLine("Usage: /explore <task>  — dispatches a read-only explore sub-agent (Glob, Grep, FileRead)");
+          break;
+        }
+        void submit(`Use the Agent tool with subagent_type "explore" to: ${arg.trim()}. Return its findings verbatim.`);
+        break;
+      }
       case "/agents": {
         const types = resolveAgentTypes(process.cwd());
         const lines = types.map((t) =>
@@ -828,6 +846,25 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         const lines = skills.map((s) => `  ${s.name} (${s.source}) — ${s.description}`);
         setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text:
           `Skills (the agent loads these on demand via the Skill tool):\n${lines.join("\n")}` }]);
+        break;
+      }
+      case "/plugins": {
+        const [sub, name] = arg.trim().split(/\s+/).filter(Boolean);
+        if (sub === "enable" || sub === "disable") {
+          if (!name) { setErrorLine(`Usage: /plugins ${sub} <name>`); break; }
+          setPluginEnabled(name, sub === "enable");
+          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `${sub === "enable" ? "Enabled" : "Disabled"} plugin "${name}". Active from your next message (restart for plugin commands).` }]);
+          break;
+        }
+        const plugins = resolvePlugins(process.cwd());
+        if (!plugins.length) {
+          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text:
+            "No plugins installed. Drop one at .freecode/plugins/<name>/ — a plugin.json (name, description, version) plus any of commands/ agents/ skills/ workflows/." }]);
+          break;
+        }
+        const lines = plugins.map((p) => `  ${p.enabled ? "●" : "○"} ${p.name}${p.version ? ` v${p.version}` : ""} (${p.source})${p.description ? ` — ${p.description}` : ""}`);
+        setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text:
+          `Plugins (● enabled · ○ disabled):\n${lines.join("\n")}\n\nToggle with /plugins enable|disable <name>.` }]);
         break;
       }
       case "/workflows": {
@@ -1100,6 +1137,8 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       return;
     }
     if (key.return) {
+      if (submitGuard.current) return; // block duplicate Enter events (Windows \r\n split)
+      submitGuard.current = true;
       // Slash-command palette: when the suggestion menu is open, Enter runs the
       // HIGHLIGHTED command, completing a partial (e.g. "/age" → "/agents"). Tab
       // instead fills it into the box (for commands that take arguments).

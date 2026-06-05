@@ -7,13 +7,14 @@
 import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { APP_DIR } from "../utils/paths";
+import { pluginDirs } from "../plugins";
 
 export interface AgentType {
   name: string;
   description: string; // when to use it — shown to the orchestrator and in /agents
   systemPrompt: string; // appended to the base sub-agent prompt ("" = no specialization)
   tools?: string[]; // optional allowlist of tool names; undefined = all available
-  source: "builtin" | "user" | "project";
+  source: "builtin" | "user" | "project" | "plugin";
 }
 
 export const BUILTIN_AGENTS: AgentType[] = [
@@ -51,7 +52,7 @@ function parseAgentFile(text: string): { description?: string; tools?: string[];
   return { description, tools, systemPrompt: text.slice(m[0].length).trim() };
 }
 
-function loadAgentDir(dir: string, source: "user" | "project", into: Map<string, AgentType>): void {
+function loadAgentDir(dir: string, source: "user" | "project" | "plugin", into: Map<string, AgentType>): void {
   if (!existsSync(dir)) return;
   for (const file of readdirSync(dir)) {
     if (!file.endsWith(".md")) continue;
@@ -71,6 +72,7 @@ export function resolveAgentTypes(cwd: string): AgentType[] {
   const map = new Map<string, AgentType>();
   for (const a of BUILTIN_AGENTS) map.set(a.name, a);
   loadAgentDir(join(APP_DIR, "agents"), "user", map);
+  for (const d of pluginDirs(cwd, "agents")) loadAgentDir(d, "plugin", map);
   loadAgentDir(join(cwd, ".freecode", "agents"), "project", map);
   return [...map.values()];
 }

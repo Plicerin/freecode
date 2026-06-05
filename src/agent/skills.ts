@@ -13,12 +13,13 @@
 import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { APP_DIR } from "../utils/paths";
+import { pluginDirs } from "../plugins";
 
 export interface Skill {
   name: string;
   description: string; // the trigger — surfaced in the prompt index
   body: string; // the instructions — loaded on demand
-  source: "user" | "project";
+  source: "user" | "project" | "plugin";
   path: string;
 }
 
@@ -57,6 +58,7 @@ function loadSkillDir(dir: string, source: Skill["source"], into: Map<string, Sk
 export function resolveSkills(cwd: string): Skill[] {
   const map = new Map<string, Skill>();
   loadSkillDir(join(APP_DIR, "skills"), "user", map);
+  for (const d of pluginDirs(cwd, "skills")) loadSkillDir(d, "plugin", map);
   loadSkillDir(join(cwd, ".freecode", "skills"), "project", map);
   return [...map.values()];
 }
