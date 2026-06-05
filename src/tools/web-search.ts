@@ -26,9 +26,14 @@ function pickBackend(opts: WebSearchOptions, requested?: string): "duckduckgo" |
 export function createWebSearchTool(opts: WebSearchOptions = {}): Tool<z.infer<typeof ArgsSchema>> {
   return {
     name: "WebSearch",
-    description: "Search the public web. Default backend is DuckDuckGo (no key). Override with backend='tavily'/'exa'/'firecrawl' if those keys are set.",
+    description:
+      "Search the public web for factual information. " +
+      "Use ONLY when the user explicitly asks you to search or look something up online, " +
+      "or when you need current/external data that is clearly not in the local codebase. " +
+      "Do NOT use for tasks that only require reading local files, running commands, or reasoning. " +
+      "Default backend is DuckDuckGo (no key). Override with backend='tavily'/'exa'/'firecrawl' if those keys are set.",
     schema: ArgsSchema,
-    permission: "safe",
+    permission: "ask",
     async run(args) {
       const backend = pickBackend(opts, args.backend);
       try {
