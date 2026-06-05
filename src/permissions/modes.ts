@@ -19,6 +19,17 @@ export interface PermissionEngine {
 
 const SAFE_TOOLS = new Set(["FileRead", "Glob", "Grep", "WebSearch", "WebFetch"]);
 
+/** Map an approval keypress to a decision. Convention (matches other CLIs):
+ *  y = yes (allow once), a = always (allow this tool from now on), n/d/esc = deny.
+ *  Returns null for any other key so the handler ignores it. */
+export function approvalDecisionForKey(input: string | undefined, escape: boolean): ApprovalDecision | null {
+  const k = input?.trim().toLowerCase();
+  if (k === "y") return "allow";
+  if (k === "a") return "allow-always";
+  if (k === "n" || k === "d" || escape) return "deny";
+  return null;
+}
+
 export function createPermissionEngine(mode: PermissionMode, prompt: ApprovalCallback): PermissionEngine {
   const denied = new Set<string>();
   const allowedTools = new Set<string>();

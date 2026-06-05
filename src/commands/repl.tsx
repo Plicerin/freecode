@@ -4,13 +4,15 @@ import { Box, Static, Text, useApp, useInput } from "ink";
 import { loadConfig, type CliFlags } from "../config/loader";
 import { buildProvider } from "../providers/registry";
 import { buildToolRegistry, toolListToSystemPrompt } from "../tools/registry";
-import { createPermissionEngine, type ApprovalCallback, type ApprovalDecision, type ApprovalRequest } from "../permissions/modes";
+import { createPermissionEngine, approvalDecisionForKey, type ApprovalCallback, type ApprovalDecision, type ApprovalRequest } from "../permissions/modes";
 import { runAgentLoop } from "../agent/loop";
 import { branch as gitBranch, commitPushPr, issue as ghIssue, prComments } from "./git-workflow";
 import { createAgentTool } from "../tools/agent";
 import { resolveAgentTypes } from "../agent/agent-types";
 import { resolveSkills } from "../agent/skills";
 import { resolveWorkflows, getWorkflow, runWorkflow } from "../agent/workflow";
+import { filterChatModels, pickerWindow } from "../tui/model-picker";
+import { matchCommands, resolveSubmit } from "../tui/slash-complete";
 import { ContextTracker } from "../agent/context";
 import { priceFor, contextWindowFor } from "../agent/pricing";
 import { extractAttachments } from "../agent/attachments";
@@ -49,7 +51,7 @@ interface UiMessage {
   ok?: boolean;
 }
 
-const SLASH_COMMANDS = ["/model", "/new", "/resume", "/rename", "/context", "/cost", "/config", "/doctor", "/diff", "/commit", "/commit-push-pr", "/branch", "/issue", "/pr-comments", "/review", "/security-review", "/autofix-pr", "/agents", "/skills", "/workflows", "/provider", "/plan", "/verify", "/bench", "/log", "/mcp", "/help", "/compact", "/about", "/exit"];
+const SLASH_COMMANDS = ["/model", "/models", "/new", "/resume", "/rename", "/context", "/cost", "/config", "/doctor", "/diff", "/commit", "/commit-push-pr", "/branch", "/issue", "/pr-comments", "/review", "/security-review", "/autofix-pr", "/agents", "/skills", "/workflows", "/provider", "/plan", "/verify", "/bench", "/log", "/mcp", "/help", "/compact", "/about", "/exit"];
 
 // Braille spinner frames — proof of life while a turn runs.
 const SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
@@ -138,6 +140,7 @@ function defaultEndpoint(provider: string, baseUrl?: string): string {
     case "ollama": return "http://localhost:11434/v1";
     case "lmstudio": return "http://127.0.0.1:1234/v1";
     case "nim": return "https://integrate.api.nvidia.com/v1";
+    case "openrouter": return "https://openrouter.ai/api/v1";
     default: return "(default)";
   }
 }
@@ -347,13 +350,10 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   const input = editor.text;
   const cursor = editor.cursor;
   // Live slash-command suggestions: shown while typing a command name (no space yet).
-  const menuMatches = useMemo(() => {
-    if (!input.startsWith("/") || input.includes(" ")) return [] as Array<{ name: string; desc: string }>;
-    return slashNames
-      .filter((n) => n.startsWith(input))
-      .slice(0, 8)
-      .map((n) => ({ name: n, desc: COMMAND_DESC[n] ?? customCommands.get(n.slice(1))?.description ?? "" }));
-  }, [input, slashNames, customCommands]);
+  const menuMatches = useMemo(
+    () => matchCommands(input, slashNames).map((n) => ({ name: n, desc: COMMAND_DESC[n] ?? customCommands.get(n.slice(1))?.description ?? "" })),
+    [input, slashNames, customCommands],
+  );
   useEffect(() => { setMenuIdx(0); }, [input]); // reset highlight as the query changes
   const historyRef = useRef<string[]>([]); // submitted prompts, oldest first
   const [historyIdx, setHistoryIdx] = useState<number | null>(null); // null = editing live input
@@ -368,6 +368,8 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   const [pending, setPending] = useState<ApprovalRequest | null>(null);
   // Interactive resume picker: when open, ↑/↓ choose and Enter resumes.
   const [picker, setPicker] = useState<{ items: SessionMeta[]; idx: number } | null>(null);
+  // Interactive model picker: when open, ↑/↓ choose and Enter switches.
+  const [modelPicker, setModelPicker] = useState<{ items: string[]; idx: number } | null>(null);
   const approvalResolver = useRef<((d: ApprovalDecision) => void) | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const streamIdRef = useRef<string | null>(null); // id of the assistant bubble currently streaming
@@ -617,25 +619,26 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     const [name, ...rest] = cmd.split(/\s+/);
     const arg = rest.join(" ");
     switch (name) {
+      case "/models": // alias
       case "/model": {
         if (arg) {
           setModel(arg);
           trackerRef.current.setPricing(priceFor(arg, config.provider));
           setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Model switched to ${arg} (provider: ${config.provider}). Active from your next message.` }]);
         } else {
+          // No arg: open the interactive arrow-key picker (↑/↓ select, Enter
+          // switch). `/model <name>` above still switches directly.
           setBusy(true);
-          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "Fetching available models…" }]);
           try {
             const all = await provider.models();
-            // Hide obvious non-chat models (embeddings, audio, image, legacy) so the
-            // list is useful — but any name still works via /model <name>.
-            const nonChat = /embedding|whisper|\btts\b|text-to-speech|audio|dall-?e|imagen|\bimage\b|moderation|realtime|transcrib|babbage|davinci|\bsearch\b/i;
-            const chat = all.filter((m) => !nonChat.test(m));
-            const show = chat.length ? chat : all;
-            const hidden = all.length - show.length;
-            const lines = show.map((m) => `  ${m === model ? "→" : " "} ${m}`).join("\n");
-            const note = hidden > 0 ? `\n\n(${hidden} non-chat models hidden — /model <name> still works for any.)` : "";
-            setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Models for ${config.provider} (${show.length}${hidden ? ` of ${all.length}` : ""}, → = current):\n${lines}${note}\n\nSwitch with /model <name>.` }]);
+            const { show } = filterChatModels(all);
+            const list = show.length ? show : all;
+            if (!list.length) {
+              setErrorLine("Provider returned no models.");
+            } else {
+              const cur = list.indexOf(model);
+              setModelPicker({ items: list, idx: cur >= 0 ? cur : 0 });
+            }
           } catch (err) {
             setErrorLine(err instanceof Error ? err.message : String(err));
           } finally {
@@ -866,7 +869,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         break;
       }
       case "/provider": {
-        const KNOWN = ["anthropic", "openai", "gemini", "github-models", "bedrock", "vertex", "ollama", "lmstudio", "nim", "mock"];
+        const KNOWN = ["anthropic", "openai", "gemini", "github-models", "openrouter", "bedrock", "vertex", "ollama", "lmstudio", "nim", "mock"];
         if (arg) {
           if (!KNOWN.includes(arg)) {
             const suggestion = closest(arg, KNOWN, 4);
@@ -1018,12 +1021,27 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       if (key.escape) { setPicker(null); return; }
       return; // swallow everything else while picking
     }
+    // While the model picker is open, ↑/↓ choose, Enter switches, Esc cancels.
+    if (modelPicker) {
+      if (key.upArrow) { setModelPicker((p) => (p ? { ...p, idx: Math.max(0, p.idx - 1) } : p)); return; }
+      if (key.downArrow) { setModelPicker((p) => (p ? { ...p, idx: Math.min(p.items.length - 1, p.idx + 1) } : p)); return; }
+      if (key.return) {
+        const sel = modelPicker.items[modelPicker.idx];
+        setModelPicker(null);
+        if (sel) {
+          setModel(sel);
+          trackerRef.current.setPricing(priceFor(sel, config.provider));
+          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Model switched to ${sel} (provider: ${config.provider}). Active from your next message.` }]);
+        }
+        return;
+      }
+      if (key.escape) { setModelPicker(null); return; }
+      return; // swallow everything else while picking
+    }
     // While a tool-approval prompt is open, keys select a decision and nothing else.
     if (pending) {
-      const lower = input2?.toLowerCase();
-      if (lower === "a") approvalResolver.current?.("allow");
-      else if (lower === "y") approvalResolver.current?.("allow-always");
-      else if (lower === "d" || key.escape) approvalResolver.current?.("deny");
+      const decision = approvalDecisionForKey(input2, key.escape);
+      if (decision) approvalResolver.current?.(decision);
       return;
     }
     // esc interrupts a running turn.
@@ -1082,7 +1100,10 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       return;
     }
     if (key.return) {
-      const value = input;
+      // Slash-command palette: when the suggestion menu is open, Enter runs the
+      // HIGHLIGHTED command, completing a partial (e.g. "/age" → "/agents"). Tab
+      // instead fills it into the box (for commands that take arguments).
+      const value = resolveSubmit(input, menuMatches.map((m) => m.name), menuIdx);
       if (value.trim()) {
         const h = historyRef.current;
         if (h[h.length - 1] !== value) h.push(value);
@@ -1173,7 +1194,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
               </Text>
             );
           })}
-          <Text dimColor>  ↑/↓ select · Tab complete</Text>
+          <Text dimColor>  ↑/↓ select · Enter run · Tab fill (for args)</Text>
         </Box>
       )}
 
@@ -1190,6 +1211,31 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
             <Text dimColor>?</Text>
           </Text>
           <Text dimColor>{pending.argsSummary}</Text>
+        </Box>
+      ) : modelPicker ? (
+        <Box flexDirection="column" borderStyle="round" borderColor={theme.user} paddingX={1} marginTop={1}>
+          <Text bold color={theme.user}>Select a model — {config.provider}</Text>
+          {(() => {
+            const height = 12;
+            const { slice, offset } = pickerWindow(modelPicker.items, modelPicker.idx, height);
+            const tail = modelPicker.items.length - offset - slice.length;
+            return (
+              <>
+                {offset > 0 && <Text dimColor>{`  ↑ ${offset} more`}</Text>}
+                {slice.map((m, i) => {
+                  const sel = offset + i === modelPicker.idx;
+                  const isCurrent = m === model;
+                  return (
+                    <Text key={m} color={sel ? theme.user : undefined} dimColor={!sel}>
+                      {sel ? "❯ " : "  "}{isCurrent ? "→ " : "  "}{m}
+                    </Text>
+                  );
+                })}
+                {tail > 0 && <Text dimColor>{`  ↓ ${tail} more`}</Text>}
+              </>
+            );
+          })()}
+          <Text dimColor>  ↑/↓ select · Enter switch · Esc cancel</Text>
         </Box>
       ) : picker ? (
         <Box flexDirection="column" borderStyle="round" borderColor={theme.user} paddingX={1} marginTop={1}>
@@ -1217,7 +1263,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       )}
       <Box paddingX={1} flexDirection="row" justifyContent="space-between">
         {pending ? (
-          <Text dimColor>[a] allow once · [y] allow always · [d] deny (esc)</Text>
+          <Text dimColor>[y] allow once · [a] allow always · [n] deny (esc)</Text>
         ) : busy ? (
           <Text dimColor>esc to interrupt</Text>
         ) : (
