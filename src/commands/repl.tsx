@@ -54,8 +54,14 @@ interface UiMessage {
 
 const SLASH_COMMANDS = ["/model", "/models", "/new", "/resume", "/rename", "/context", "/cost", "/config", "/doctor", "/diff", "/commit", "/commit-push-pr", "/branch", "/issue", "/pr-comments", "/review", "/security-review", "/autofix-pr", "/explore", "/agents", "/skills", "/workflows", "/plugins", "/provider", "/plan", "/verify", "/bench", "/log", "/mcp", "/help", "/compact", "/about", "/exit"];
 
-// Braille spinner frames — proof of life while a turn runs.
-const SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
+// Spinner frames — proof of life while a turn runs. Not the braille snake every
+// other CLI ships: this is Bubo's eye. He holds your gaze, glances right, glances
+// left, then blinks (upper lid down ◓ → shut ─ → up ◓) — a watchful eye scanning,
+// fitting a tool whose whole identity is checking before it says "done".
+// Swap-in alternatives (same render path):
+//   iris pulse:  ["◌","◍","◉","●","◉","◍"]
+//   scan sweep:  ["◴","◵","◶","◷"]
+const SPINNER_FRAMES = ["◉", "◑", "◉", "◐", "◉", "◓", "─", "◓"];
 
 // Compact relative time for the session picker.
 function relTime(ms: number): string {
@@ -1247,7 +1253,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           ))}
           {busy && (
             <Text color={theme.hex.warning}>
-              {reducedMotion ? "•" : SPINNER[tick % SPINNER.length]} Working… <Text dimColor>({Math.max(0, Math.floor((Date.now() - busyStartRef.current) / 1000))}s · esc to interrupt)</Text>
+              {reducedMotion ? "•" : SPINNER_FRAMES[tick % SPINNER_FRAMES.length]} Working… <Text dimColor>({Math.max(0, Math.floor((Date.now() - busyStartRef.current) / 1000))}s · esc to interrupt)</Text>
             </Text>
           )}
           {errorLine && <Text color={theme.hex.error}>! {errorLine}</Text>}
