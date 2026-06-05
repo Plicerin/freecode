@@ -13,7 +13,7 @@ export const WebFetchTool: Tool<z.infer<typeof ArgsSchema>> = {
   name: "WebFetch",
   description: "Fetch a URL and return its content as markdown. Use only when the user provides or references a specific URL, or explicitly asks you to fetch a page. Do not fabricate URLs or fetch pages speculatively.",
   schema: ArgsSchema,
-  permission: "ask",
+  permission: "confirm",
   async run(args) {
     const cap = args.maxBytes ?? 1_000_000;
     let resp: Response;

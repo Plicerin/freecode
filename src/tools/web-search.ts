@@ -33,7 +33,7 @@ export function createWebSearchTool(opts: WebSearchOptions = {}): Tool<z.infer<t
       "Do NOT use for tasks that only require reading local files, running commands, or reasoning. " +
       "Default backend is DuckDuckGo (no key). Override with backend='tavily'/'exa'/'firecrawl' if those keys are set.",
     schema: ArgsSchema,
-    permission: "ask",
+    permission: "confirm",
     async run(args) {
       const backend = pickBackend(opts, args.backend);
       try {

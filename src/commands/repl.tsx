@@ -13,7 +13,7 @@ import { resolveSkills } from "../agent/skills";
 import { resolveWorkflows, getWorkflow, runWorkflow } from "../agent/workflow";
 import { filterChatModels, pickerWindow } from "../tui/model-picker";
 import { matchCommands, resolveSubmit } from "../tui/slash-complete";
-import { resolvePlugins, setPluginEnabled } from "../plugins";
+import { resolvePlugins, setPluginEnabled, installPlugin, uninstallPlugin } from "../plugins";
 import { ContextTracker } from "../agent/context";
 import { priceFor, contextWindowFor } from "../agent/pricing";
 import { extractAttachments } from "../agent/attachments";
@@ -91,7 +91,7 @@ const COMMAND_DESC: Record<string, string> = {
   "/agents": "list available sub-agent types",
   "/skills": "list available project skills",
   "/workflows": "list or run a multi-agent workflow (/workflows [name] [input])",
-  "/plugins": "list plugins, or enable/disable (/plugins [enable|disable <name>])",
+  "/plugins": "list/install/uninstall/enable/disable plugins (/plugins install <git-url|path>)",
   "/verify": "run the project's checks",
   "/bench": "race the performance ghost",
   "/log": "toggle the verification activity log",
@@ -848,23 +848,60 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           `Skills (the agent loads these on demand via the Skill tool):\n${lines.join("\n")}` }]);
         break;
       }
+      case "/plugin": // singular alias
       case "/plugins": {
-        const [sub, name] = arg.trim().split(/\s+/).filter(Boolean);
+        // Split off the first token as the subcommand; keep the REST intact so a
+        // git URL or path (which never splits cleanly on spaces) survives whole.
+        const trimmed = arg.trim();
+        const sp = trimmed.search(/\s/);
+        const sub = sp === -1 ? trimmed : trimmed.slice(0, sp);
+        const rest = sp === -1 ? "" : trimmed.slice(sp + 1).trim();
         if (sub === "enable" || sub === "disable") {
+          const name = rest.split(/\s+/)[0];
           if (!name) { setErrorLine(`Usage: /plugins ${sub} <name>`); break; }
           setPluginEnabled(name, sub === "enable");
           setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `${sub === "enable" ? "Enabled" : "Disabled"} plugin "${name}". Active from your next message (restart for plugin commands).` }]);
           break;
         }
+        if (sub === "install") {
+          if (!rest) { setErrorLine("Usage: /plugins install <git-url|local-path>"); break; }
+          setBusy(true);
+          try {
+            const p = await installPlugin(rest, process.cwd());
+            const contribs = (Object.keys(p.contributions) as Array<keyof typeof p.contributions>)
+              .filter((k) => p.contributions[k].length)
+              .map((k) => `  ${k}: ${p.contributions[k].join(", ")}`);
+            setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text:
+              `✓ Installed "${p.name}"${p.version ? ` v${p.version}` : ""}${p.description ? ` — ${p.description}` : ""}\n` +
+              (contribs.length ? contribs.join("\n") + "\n" : "  (no commands/agents/skills/workflows found)\n") +
+              "Active from your next message (restart for plugin commands)." }]);
+          } catch (err) {
+            setErrorLine(err instanceof Error ? err.message : String(err));
+          } finally {
+            setBusy(false);
+          }
+          break;
+        }
+        if (sub === "uninstall" || sub === "remove") {
+          const name = rest.split(/\s+/)[0];
+          if (!name) { setErrorLine("Usage: /plugins uninstall <name>"); break; }
+          try {
+            uninstallPlugin(name);
+            setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Uninstalled "${name}".` }]);
+          } catch (err) {
+            setErrorLine(err instanceof Error ? err.message : String(err));
+          }
+          break;
+        }
         const plugins = resolvePlugins(process.cwd());
         if (!plugins.length) {
           setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text:
-            "No plugins installed. Drop one at .freecode/plugins/<name>/ — a plugin.json (name, description, version) plus any of commands/ agents/ skills/ workflows/." }]);
+            "No plugins installed. Install one with /plugins install <git-url|path>, or drop a bundle at .freecode/plugins/<name>/ — a plugin.json plus any of commands/ agents/ skills/ workflows/." }]);
           break;
         }
         const lines = plugins.map((p) => `  ${p.enabled ? "●" : "○"} ${p.name}${p.version ? ` v${p.version}` : ""} (${p.source})${p.description ? ` — ${p.description}` : ""}`);
         setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text:
-          `Plugins (● enabled · ○ disabled):\n${lines.join("\n")}\n\nToggle with /plugins enable|disable <name>.` }]);
+          `Plugins (● enabled · ○ disabled):\n${lines.join("\n")}\n\ninstall <git-url|path> · uninstall <name> · enable|disable <name>.` }]);
         break;
       }
       case "/workflows": {
