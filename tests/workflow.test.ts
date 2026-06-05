@@ -5,8 +5,10 @@ import { test, expect, describe } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { z } from "zod";
 import { resolveWorkflows, getWorkflow, runWorkflow, composeWorkflow, type Workflow, type WorkflowEvent } from "../src/agent/workflow";
 import { createPermissionEngine, type ApprovalCallback } from "../src/permissions/modes";
+import type { Tool } from "../src/tools/types";
 
 const allow = (async () => "allow") as ApprovalCallback;
 const perm = () => createPermissionEngine("bypass", allow);
@@ -86,6 +88,40 @@ describe("runWorkflow engine", () => {
       "stage_start", "task_done", "task_done", "stage_done",
       "stage_start", "task_done", "stage_done",
     ]);
+  });
+
+  test("a sub-agent's tool calls surface as task_activity (live progress)", async () => {
+    // A provider scripted to use a tool on turn 1, then report on turn 2 — so the
+    // sub-agent's interior tool call must bubble up as a task_activity event.
+    let turn = 0;
+    const toolProvider = {
+      name: "tp", id: "tp", models: () => ["x"],
+      async *stream() {
+        if (turn++ === 0) {
+          yield { type: "tool_call", call: { id: "Grep-1", name: "Grep", arguments: {} } };
+          yield { type: "end", reason: "tool_use" };
+        } else {
+          yield { type: "text_delta", delta: "found it" };
+          yield { type: "end", reason: "end_turn" };
+        }
+      },
+    };
+    const grep: Tool = {
+      name: "Grep", description: "stub", permission: "safe",
+      schema: z.object({}).passthrough(),
+      async run() { return { ok: true, output: "match" }; },
+    };
+    const wf: Workflow = {
+      name: "t", description: "d", source: "dynamic", path: "(dynamic)",
+      stages: [{ name: "look", tasks: [{ agent: "explore", prompt: "search {{input}}" }] }],
+    };
+    const activity: string[] = [];
+    await runWorkflow(wf, {
+      provider: toolProvider as never, model: "x", tools: [grep], permission: perm(), promptUser: allow,
+      input: "X", cwd: process.cwd(),
+      onEvent: (e: WorkflowEvent) => { if (e.type === "task_activity") activity.push(e.label); },
+    });
+    expect(activity).toContain("→ Grep");
   });
 });
 

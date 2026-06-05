@@ -67,7 +67,8 @@ const SPINNER_FRAMES = ["◉", "◑", "◉", "◐", "◉", "◓", "─", "◓"];
 // /workflows and /ultraplan so both show live per-stage / per-task progress.
 function workflowEventLine(e: WorkflowEvent): string | null {
   if (e.type === "stage_start") return `  ◐ stage ${e.index + 1}${e.name ? ` (${e.name})` : ""} — ${e.tasks} task${e.tasks > 1 ? "s" : ""} running…`;
-  if (e.type === "task_done") return `     ${e.ok ? "✓" : "✗"} ${e.agent ?? "general"}`;
+  if (e.type === "task_activity") return `       ${e.agent ?? "general"} ${e.label}`;
+  if (e.type === "task_done") return `     ${e.ok ? "✓" : "✗"} ${e.agent ?? "general"} done`;
   return null; // stage_done is implied by the next stage_start or the final output
 }
 
@@ -969,6 +970,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "◓ Composing a workflow…" }]);
         try {
           const wf = await composeWorkflow(provider, model, task, process.cwd(), controller.signal);
+          logActivity(`ULTRAPLAN composed ${wf.stages.length} stage(s), ${wf.stages.reduce((n, s) => n + s.tasks.length, 0)} task(s) for: ${task.slice(0, 80)}`);
           const plan = wf.stages
             .map((s, i) => `  ${i + 1}. ${s.name ?? `stage ${i + 1}`} — ${s.tasks.map((t) => t.agent ?? "general").join(" ∥ ")}`)
             .join("\n");

@@ -77,6 +77,7 @@ export interface StageResult {
  *  in a stage resolves (so a slow task doesn't hide its faster siblings). */
 export type WorkflowEvent =
   | { type: "stage_start"; index: number; name?: string; tasks: number }
+  | { type: "task_activity"; stage: number; task: number; agent?: string; label: string }
   | { type: "task_done"; stage: number; task: number; agent?: string; ok: boolean }
   | { type: "stage_done"; index: number; result: StageResult };
 
@@ -108,7 +109,14 @@ export async function runWorkflow(
           .replace(/\{\{\s*input\s*\}\}/g, input)
           .replace(/\{\{\s*previous\s*\}\}/g, previous);
         const agentType = task.agent ? getAgentType(task.agent, ctx.cwd) : undefined;
-        const r = await runSubAgent({ ...base, prompt, description: stage.name ?? `stage ${i + 1}`, agentType, signal: ctx.signal });
+        const r = await runSubAgent({
+          ...base, prompt, description: stage.name ?? `stage ${i + 1}`, agentType, signal: ctx.signal,
+          // Surface the sub-agent's interior as live progress so a multi-turn
+          // task visibly moves instead of sitting silent behind the spinner.
+          onEvent: (e) => {
+            if (e.type === "tool_call" && e.call) onEvent?.({ type: "task_activity", stage: i, task: ti, agent: task.agent, label: `→ ${e.call.name}` });
+          },
+        });
         onEvent?.({ type: "task_done", stage: i, task: ti, agent: task.agent, ok: r.ok });
         return { agent: task.agent, output: r.output, ok: r.ok };
       }),
