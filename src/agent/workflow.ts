@@ -14,8 +14,9 @@ import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { APP_DIR } from "../utils/paths";
 import { runSubAgent, type SubAgentContext } from "./subagent";
-import { getAgentType } from "./agent-types";
+import { getAgentType, resolveAgentTypes } from "./agent-types";
 import { pluginDirs } from "../plugins";
+import type { Provider } from "../providers/types";
 
 export const WorkflowTaskSchema = z.object({
   agent: z.string().optional(), // a subagent_type; omitted = general
@@ -35,7 +36,7 @@ export interface Workflow {
   name: string;
   description: string;
   stages: WorkflowStage[];
-  source: "user" | "project" | "plugin";
+  source: "user" | "project" | "plugin" | "dynamic";
   path: string;
 }
 
@@ -71,6 +72,14 @@ export interface StageResult {
   outputs: { agent?: string; output: string; ok: boolean }[];
 }
 
+/** Fine-grained progress so the UI can stream a workflow as it runs, rather than
+ *  only ticking once per finished stage. `task_done` fires as each parallel task
+ *  in a stage resolves (so a slow task doesn't hide its faster siblings). */
+export type WorkflowEvent =
+  | { type: "stage_start"; index: number; name?: string; tasks: number }
+  | { type: "task_done"; stage: number; task: number; agent?: string; ok: boolean }
+  | { type: "stage_done"; index: number; result: StageResult };
+
 /** Execute a workflow stage by stage (barrier between stages, parallel within),
  *  returning every stage's results plus the final stage's combined output. */
 export async function runWorkflow(
@@ -80,27 +89,102 @@ export async function runWorkflow(
     cwd: string;
     signal?: AbortSignal;
     onStage?: (index: number, stage: WorkflowStage, result: StageResult) => void;
+    onEvent?: (e: WorkflowEvent) => void;
   },
 ): Promise<{ stages: StageResult[]; output: string }> {
+  // The workflow-only fields (input/onStage/onEvent) must NOT flow into runSubAgent
+  // — it has its own onEvent of a different shape. Keep them as locals and pass
+  // only the sub-agent context (`base`) down.
+  const { input, onStage, onEvent, ...base } = ctx;
   const results: StageResult[] = [];
   let previous = "";
   for (let i = 0; i < wf.stages.length; i++) {
     if (ctx.signal?.aborted) break;
     const stage = wf.stages[i]!;
+    onEvent?.({ type: "stage_start", index: i, name: stage.name, tasks: stage.tasks.length });
     const outputs = await Promise.all(
-      stage.tasks.map(async (task) => {
+      stage.tasks.map(async (task, ti) => {
         const prompt = task.prompt
-          .replace(/\{\{\s*input\s*\}\}/g, ctx.input)
+          .replace(/\{\{\s*input\s*\}\}/g, input)
           .replace(/\{\{\s*previous\s*\}\}/g, previous);
         const agentType = task.agent ? getAgentType(task.agent, ctx.cwd) : undefined;
-        const r = await runSubAgent({ ...ctx, prompt, description: stage.name ?? `stage ${i + 1}`, agentType, signal: ctx.signal });
+        const r = await runSubAgent({ ...base, prompt, description: stage.name ?? `stage ${i + 1}`, agentType, signal: ctx.signal });
+        onEvent?.({ type: "task_done", stage: i, task: ti, agent: task.agent, ok: r.ok });
         return { agent: task.agent, output: r.output, ok: r.ok };
       }),
     );
     const result: StageResult = { name: stage.name, outputs };
     results.push(result);
-    ctx.onStage?.(i, stage, result);
+    onEvent?.({ type: "stage_done", index: i, result });
+    onStage?.(i, stage, result);
     previous = outputs.map((o, j) => `### ${o.agent ?? `task ${j + 1}`}\n${o.output}`).join("\n\n");
   }
   return { stages: results, output: previous };
+}
+
+// ── Dynamic composition (/ultraplan) ────────────────────────────────────────
+// Instead of reading a hand-written JSON file, freecode asks the model to DESIGN
+// a workflow for an arbitrary task — which stages, which sub-agents run in
+// parallel, how the synthesis stage combines them — then runs that plan through
+// the very same engine above. The model only emits a declarative spec (no code),
+// so it's validated by the same Zod schema as a file-based workflow.
+
+/** Pull the first JSON object out of a model reply (tolerates ``` fences + prose). */
+function extractJsonObject(text: string): unknown {
+  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(text);
+  const body = fenced?.[1] ?? text;
+  const start = body.indexOf("{");
+  const end = body.lastIndexOf("}");
+  if (start === -1 || end === -1 || end < start) throw new Error("the planner returned no JSON object");
+  return JSON.parse(body.slice(start, end + 1));
+}
+
+/** Ask the model to compose a workflow for `task`, validated into a runnable
+ *  Workflow (source: "dynamic"). Throws if the model can't produce a valid spec. */
+export async function composeWorkflow(
+  provider: Provider,
+  model: string,
+  task: string,
+  cwd: string,
+  signal?: AbortSignal,
+): Promise<Workflow> {
+  const typeList = resolveAgentTypes(cwd).map((a) => `  - ${a.name}: ${a.description}`).join("\n");
+  const system = [
+    "You are freecode's workflow planner. Decompose the user's task into a multi-agent workflow and output it as JSON ONLY — no prose, no markdown fences.",
+    "",
+    "Shape: { \"description\": string, \"stages\": [ { \"name\": string, \"tasks\": [ { \"agent\"?: string, \"prompt\": string } ] } ] }",
+    "",
+    "Rules:",
+    "- Stages run SEQUENTIALLY (a barrier between them); tasks WITHIN a stage run in PARALLEL. Put independent work in parallel tasks; use a later stage to combine/synthesize.",
+    "- Each task.prompt may interpolate {{input}} (the original task) and {{previous}} (the prior stage's combined output). A synthesis stage almost always references {{previous}}.",
+    "- \"agent\" must be one of the available sub-agent types below (omit it for a general agent). Read-only investigation → explore; reviewing code → code-reviewer.",
+    "- Keep it tight and purposeful: usually 2 stages (a parallel fan-out, then a single general-agent synthesis). 1–4 tasks per stage. Never exceed 4 stages.",
+    "",
+    "Available sub-agent types:",
+    typeList,
+  ].join("\n");
+
+  let text = "";
+  for await (const e of provider.stream({
+    model,
+    system,
+    messages: [{ role: "user", content: `Task to decompose into a workflow:\n\n${task}` }],
+    stream: true,
+    maxTokens: 2048,
+    signal,
+  })) {
+    if (e.type === "text_delta") text += e.delta;
+  }
+
+  let parsedJson: unknown;
+  try {
+    parsedJson = extractJsonObject(text);
+  } catch (err) {
+    throw new Error(`could not compose a workflow — ${err instanceof Error ? err.message : String(err)}`);
+  }
+  const parsed = WorkflowFileSchema.safeParse(parsedJson);
+  if (!parsed.success) {
+    throw new Error(`the composed workflow was invalid: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`);
+  }
+  return { name: "ultraplan", ...parsed.data, source: "dynamic", path: "(dynamic)" };
 }

@@ -5,7 +5,7 @@ import { test, expect, describe } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolveWorkflows, getWorkflow, runWorkflow, type Workflow } from "../src/agent/workflow";
+import { resolveWorkflows, getWorkflow, runWorkflow, composeWorkflow, type Workflow, type WorkflowEvent } from "../src/agent/workflow";
 import { createPermissionEngine, type ApprovalCallback } from "../src/permissions/modes";
 
 const allow = (async () => "allow") as ApprovalCallback;
@@ -66,5 +66,74 @@ describe("runWorkflow engine", () => {
     expect(res.output).toContain("summarize:");
     expect(res.output).toContain("Q1 about FOO");
     expect(seen).toEqual([0, 1]); // onStage fired once per stage, in order
+  });
+
+  test("onEvent streams stage_start, per-task task_done, and stage_done in order", async () => {
+    const wf: Workflow = {
+      name: "t", description: "d", source: "project", path: "",
+      stages: [
+        { name: "fan", tasks: [{ prompt: "a" }, { prompt: "b" }] },
+        { name: "join", tasks: [{ prompt: "c {{previous}}" }] },
+      ],
+    };
+    const types: string[] = [];
+    await runWorkflow(wf, {
+      provider: echo as never, model: "x", tools: [], permission: perm(), promptUser: allow,
+      input: "X", cwd: process.cwd(), onEvent: (e: WorkflowEvent) => types.push(e.type),
+    });
+    // Stage 1: start, two task_done (parallel), done. Stage 2: start, one task_done, done.
+    expect(types).toEqual([
+      "stage_start", "task_done", "task_done", "stage_done",
+      "stage_start", "task_done", "stage_done",
+    ]);
+  });
+});
+
+// A provider that ignores its input and returns a fixed reply — lets us feed
+// composeWorkflow() a canned "plan" and assert how it's parsed/validated.
+function planner(reply: string) {
+  return {
+    name: "p", id: "p", models: () => ["x"],
+    async *stream() {
+      yield { type: "text_delta", delta: reply };
+      yield { type: "end", reason: "end_turn" };
+    },
+  };
+}
+
+describe("composeWorkflow (dynamic /ultraplan)", () => {
+  test("parses a clean JSON plan into a runnable dynamic workflow", async () => {
+    const reply = JSON.stringify({
+      description: "investigate then summarize",
+      stages: [
+        { name: "look", tasks: [{ agent: "explore", prompt: "find {{input}}" }] },
+        { name: "sum", tasks: [{ prompt: "summarize {{previous}}" }] },
+      ],
+    });
+    const wf = await composeWorkflow(planner(reply) as never, "x", "how does auth work?", process.cwd());
+    expect(wf.source).toBe("dynamic");
+    expect(wf.name).toBe("ultraplan");
+    expect(wf.stages.length).toBe(2);
+    expect(wf.stages[0]!.tasks[0]!.agent).toBe("explore");
+  });
+
+  test("tolerates code fences and surrounding prose around the JSON", async () => {
+    const reply = "Here is the plan:\n```json\n" +
+      JSON.stringify({ description: "x", stages: [{ tasks: [{ prompt: "do {{input}}" }] }] }) +
+      "\n```\nThat should work.";
+    const wf = await composeWorkflow(planner(reply) as never, "x", "task", process.cwd());
+    expect(wf.stages.length).toBe(1);
+    expect(wf.description).toBe("x");
+  });
+
+  test("throws when the model returns no JSON object", async () => {
+    await expect(composeWorkflow(planner("I cannot help with that.") as never, "x", "t", process.cwd()))
+      .rejects.toThrow(/no JSON object|could not compose/);
+  });
+
+  test("throws when the composed JSON fails the schema (missing stages)", async () => {
+    const reply = JSON.stringify({ description: "no stages here" });
+    await expect(composeWorkflow(planner(reply) as never, "x", "t", process.cwd()))
+      .rejects.toThrow(/invalid/);
   });
 });

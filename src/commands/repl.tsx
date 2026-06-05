@@ -10,7 +10,7 @@ import { branch as gitBranch, commitPushPr, issue as ghIssue, prComments } from 
 import { createAgentTool } from "../tools/agent";
 import { resolveAgentTypes } from "../agent/agent-types";
 import { resolveSkills } from "../agent/skills";
-import { resolveWorkflows, getWorkflow, runWorkflow } from "../agent/workflow";
+import { resolveWorkflows, getWorkflow, runWorkflow, composeWorkflow, type WorkflowEvent } from "../agent/workflow";
 import { filterChatModels, pickerWindow } from "../tui/model-picker";
 import { matchCommands, resolveSubmit } from "../tui/slash-complete";
 import { resolvePlugins, setPluginEnabled, installPlugin, uninstallPlugin } from "../plugins";
@@ -52,7 +52,7 @@ interface UiMessage {
   ok?: boolean;
 }
 
-const SLASH_COMMANDS = ["/model", "/models", "/new", "/resume", "/rename", "/context", "/cost", "/config", "/doctor", "/diff", "/commit", "/commit-push-pr", "/branch", "/issue", "/pr-comments", "/review", "/security-review", "/autofix-pr", "/explore", "/agents", "/skills", "/workflows", "/plugins", "/provider", "/plan", "/verify", "/bench", "/log", "/mcp", "/help", "/compact", "/about", "/exit"];
+const SLASH_COMMANDS = ["/model", "/models", "/new", "/resume", "/rename", "/context", "/cost", "/config", "/doctor", "/diff", "/commit", "/commit-push-pr", "/branch", "/issue", "/pr-comments", "/review", "/security-review", "/autofix-pr", "/explore", "/agents", "/skills", "/workflows", "/ultraplan", "/plugins", "/provider", "/plan", "/verify", "/bench", "/log", "/mcp", "/help", "/compact", "/about", "/exit"];
 
 // Spinner frames — proof of life while a turn runs. Not the braille snake every
 // other CLI ships: this is Bubo's eye. He holds your gaze, glances right, glances
@@ -62,6 +62,14 @@ const SLASH_COMMANDS = ["/model", "/models", "/new", "/resume", "/rename", "/con
 //   iris pulse:  ["◌","◍","◉","●","◉","◍"]
 //   scan sweep:  ["◴","◵","◶","◷"]
 const SPINNER_FRAMES = ["◉", "◑", "◉", "◐", "◉", "◓", "─", "◓"];
+
+// A streamed workflow event → one status line (or null to swallow it). Shared by
+// /workflows and /ultraplan so both show live per-stage / per-task progress.
+function workflowEventLine(e: WorkflowEvent): string | null {
+  if (e.type === "stage_start") return `  ◐ stage ${e.index + 1}${e.name ? ` (${e.name})` : ""} — ${e.tasks} task${e.tasks > 1 ? "s" : ""} running…`;
+  if (e.type === "task_done") return `     ${e.ok ? "✓" : "✗"} ${e.agent ?? "general"}`;
+  return null; // stage_done is implied by the next stage_start or the final output
+}
 
 // Compact relative time for the session picker.
 function relTime(ms: number): string {
@@ -97,6 +105,7 @@ const COMMAND_DESC: Record<string, string> = {
   "/agents": "list available sub-agent types",
   "/skills": "list available project skills",
   "/workflows": "list or run a multi-agent workflow (/workflows [name] [input])",
+  "/ultraplan": "freecode composes a multi-agent workflow for a task and runs it (/ultraplan <task>)",
   "/plugins": "list/install/uninstall/enable/disable plugins (/plugins install <git-url|path>)",
   "/verify": "run the project's checks",
   "/bench": "race the performance ghost",
@@ -935,14 +944,56 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
             provider, model, tools, permission, promptUser,
             hooks: config.hooks, contextWindow: contextWindowFor(model),
             input: rest.join(" "), cwd: process.cwd(), signal: controller.signal,
-            onStage: (i, stage, result) => {
-              setMessages((prev) => [...prev, { id: `s-${Date.now()}-${i}`, role: "system", text:
-                `  ✓ stage ${i + 1}${stage.name ? ` (${stage.name})` : ""} — ${result.outputs.length} agent(s)${result.outputs.some((o) => !o.ok) ? ", some incomplete" : ""}` }]);
+            onEvent: (e) => {
+              const line = workflowEventLine(e);
+              if (line) setMessages((prev) => [...prev, { id: `wf-${Date.now()}-${prev.length}`, role: "system", text: line }]);
             },
           });
           setMessages((prev) => [...prev, { id: `a-${Date.now()}`, role: "assistant", text: res.output || "(workflow produced no output)" }]);
         } catch (err) {
           setErrorLine(`workflow failed: ${err instanceof Error ? err.message : String(err)}`);
+        } finally {
+          setBusy(false);
+        }
+        break;
+      }
+      case "/ultraplan": {
+        const task = arg.trim();
+        if (!task) {
+          setErrorLine("Usage: /ultraplan <task> — freecode composes a multi-agent workflow for the task and runs it.");
+          break;
+        }
+        const controller = new AbortController();
+        abortRef.current = controller;
+        setBusy(true);
+        setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "◓ Composing a workflow…" }]);
+        try {
+          const wf = await composeWorkflow(provider, model, task, process.cwd(), controller.signal);
+          const plan = wf.stages
+            .map((s, i) => `  ${i + 1}. ${s.name ?? `stage ${i + 1}`} — ${s.tasks.map((t) => t.agent ?? "general").join(" ∥ ")}`)
+            .join("\n");
+          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text:
+            `Plan: ${wf.description}\n${plan}\n▶ Running ${wf.stages.length} stage${wf.stages.length > 1 ? "s" : ""}… (esc to abort)` }]);
+          const res = await runWorkflow(wf, {
+            provider, model, tools, permission, promptUser,
+            hooks: config.hooks, contextWindow: contextWindowFor(model),
+            input: task, cwd: process.cwd(), signal: controller.signal,
+            onEvent: (e) => {
+              const line = workflowEventLine(e);
+              if (line) setMessages((prev) => [...prev, { id: `wf-${Date.now()}-${prev.length}`, role: "system", text: line }]);
+            },
+          });
+          const output = res.output || "(workflow produced no output)";
+          setMessages((prev) => [...prev, { id: `a-${Date.now()}`, role: "assistant", text: output }]);
+          // Thread the result into the conversation so the user can follow up on it.
+          conversationRef.current = [...conversationRef.current,
+            { role: "user", content: `/ultraplan ${task}` },
+            { role: "assistant", content: output }];
+          appendEvent(sessionRef.current, { kind: "user", text: `/ultraplan ${task}`, ts: new Date().toISOString() });
+          appendEvent(sessionRef.current, { kind: "assistant", text: output, ts: new Date().toISOString() });
+        } catch (err) {
+          if (controller.signal.aborted) setMessages((prev) => [...prev, { id: `int-${Date.now()}`, role: "system", text: "⏹ Aborted." }]);
+          else setErrorLine(`ultraplan failed: ${err instanceof Error ? err.message : String(err)}`);
         } finally {
           setBusy(false);
         }
