@@ -60,6 +60,16 @@ export function buildProvider(config: ResolvedConfig): Provider {
         defaultModel: model,
         authHeader: "bearer",
       });
+    case "openrouter":
+      // Unified OpenAI-compatible gateway to 300+ models (model slugs are
+      // namespaced, e.g. "anthropic/claude-3.7-sonnet", "openai/gpt-4o").
+      return new OpenAICompatProvider("openrouter", "OpenRouter", {
+        apiKey,
+        baseUrl: baseUrl ?? "https://openrouter.ai/api/v1",
+        providerName: "openrouter",
+        defaultModel: model,
+        authHeader: "bearer",
+      });
     case "gemini":
       return new GeminiProvider({ apiKey, baseUrl });
     case "bedrock":

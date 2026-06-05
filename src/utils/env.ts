@@ -22,6 +22,7 @@ export type ProviderId =
   | "openai"
   | "gemini"
   | "github-models"
+  | "openrouter"
   | "bedrock"
   | "vertex"
   | "ollama"
@@ -33,6 +34,7 @@ const ENV_FLAGS: Record<ProviderId, string> = {
   openai: "CLAUDE_CODE_USE_OPENAI",
   gemini: "CLAUDE_CODE_USE_GEMINI",
   "github-models": "CLAUDE_CODE_USE_GITHUB_MODELS",
+  openrouter: "CLAUDE_CODE_USE_OPENROUTER",
   bedrock: "CLAUDE_CODE_USE_BEDROCK",
   vertex: "CLAUDE_CODE_USE_VERTEX",
   ollama: "CLAUDE_CODE_USE_OLLAMA",
@@ -47,6 +49,7 @@ export function detectProviderFromEnv(): ProviderId | undefined {
   if (getEnv("ANTHROPIC_API_KEY")) return "anthropic";
   if (getEnv("OPENAI_API_KEY")) return "openai";
   if (getEnv("GEMINI_API_KEY")) return "gemini";
+  if (getEnv("OPENROUTER_API_KEY")) return "openrouter";
   if (getEnv("GITHUB_TOKEN")) return "github-models";
   if (getEnv("AWS_ACCESS_KEY_ID") && getEnv("AWS_SECRET_ACCESS_KEY")) return "bedrock";
   if (getEnv("GOOGLE_APPLICATION_CREDENTIALS")) return "vertex";

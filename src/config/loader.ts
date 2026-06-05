@@ -84,6 +84,7 @@ function providerEnvKey(p: ProviderId): string | undefined {
     case "openai": return "OPENAI_API_KEY";
     case "gemini": return "GEMINI_API_KEY";
     case "github-models": return "GITHUB_TOKEN";
+    case "openrouter": return "OPENROUTER_API_KEY";
     case "bedrock": return "AWS_ACCESS_KEY_ID";
     case "vertex": return "GOOGLE_APPLICATION_CREDENTIALS";
     case "ollama": return "OLLAMA_HOST";
@@ -106,7 +107,7 @@ function hasUsableKey(p: ProviderId): boolean {
 }
 
 function firstProviderWithKey(): ProviderId | undefined {
-  const order: ProviderId[] = ["anthropic", "openai", "gemini", "github-models", "nim"];
+  const order: ProviderId[] = ["anthropic", "openai", "gemini", "openrouter", "github-models", "nim"];
   let vaultProviders: string[] = [];
   try {
     if (Vault.exists()) vaultProviders = Vault.load().list();
@@ -125,6 +126,7 @@ function providerBaseUrl(p: ProviderId): string | undefined {
     case "openai": return getEnv("OPENAI_BASE_URL");
     case "gemini": return getEnv("GEMINI_BASE_URL");
     case "github-models": return "https://models.inference.ai.azure.com";
+    case "openrouter": return getEnv("OPENROUTER_BASE_URL") ?? "https://openrouter.ai/api/v1";
     case "bedrock": return undefined;
     case "vertex": return getEnv("VERTEX_BASE_URL");
     case "ollama": return getEnv("OLLAMA_HOST") ?? "http://127.0.0.1:11434";
@@ -140,6 +142,7 @@ function defaultModelFor(p: ProviderId): string {
     case "openai": return "gpt-4o";
     case "gemini": return "gemini-2.5-flash";
     case "github-models": return "gpt-4o";
+    case "openrouter": return "anthropic/claude-3.7-sonnet";
     case "bedrock": return "anthropic.claude-sonnet-4-5-20250929";
     case "vertex": return "gemini-2.5-flash";
     case "ollama": return "llama3.2";

@@ -5,6 +5,7 @@ export const ProviderIdSchema = z.enum([
   "openai",
   "gemini",
   "github-models",
+  "openrouter",
   "bedrock",
   "vertex",
   "ollama",
