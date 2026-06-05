@@ -2,6 +2,7 @@ import type { ChatMessage, ChatRequest, Provider, StreamEvent, TokenUsage, ToolD
 import { friendlyError, makeError } from "./friendly-errors";
 import { zodToJsonSchema } from "./schema-util";
 import { debug } from "../utils/debug";
+import { createStallTimeout, streamIdleMs } from "./stall-timeout";
 
 interface GeminiPart { text?: string; functionCall?: { name: string; args?: Record<string, unknown> }; functionResponse?: unknown; inlineData?: { mimeType: string; data: string } }
 interface GeminiContent { role: "user" | "model"; parts: GeminiPart[] }
@@ -113,18 +114,25 @@ export class GeminiProvider implements Provider {
     if (req.system) body.systemInstruction = { parts: [{ text: req.system }] };
     if (req.tools && req.tools.length > 0) body.tools = toGeminiTools(req.tools);
     debug.log("gemini request", { url, model: req.model });
+    // Idle watchdog — abort if the stream goes silent (see stall-timeout.ts).
+    const idleMs = streamIdleMs();
+    const watchdog = createStallTimeout(req.signal, idleMs);
+    const timeoutError = (): Error =>
+      makeError("gemini", `Gemini stream timed out (no data for ${Math.round(idleMs / 1000)}s)`, "timeout", true);
     let resp: Response;
     try {
       resp = await fetch(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
-        signal: req.signal,
+        signal: watchdog.signal,
       });
     } catch (err) {
-      throw friendlyError(err, "gemini");
+      watchdog.clear();
+      throw watchdog.timedOut() ? timeoutError() : friendlyError(err, "gemini");
     }
     if (!resp.ok || !resp.body) {
+      watchdog.clear();
       const text = await resp.text().catch(() => "");
       const err = new Error(`${resp.status} ${text}`) as Error & { status?: number };
       err.status = resp.status;
@@ -135,8 +143,16 @@ export class GeminiProvider implements Provider {
     let buffer = "";
     let totalInput = 0;
     let totalOutput = 0;
+    try {
     while (true) {
-      const { value, done } = await reader.read();
+      let value: Uint8Array | undefined;
+      let done: boolean;
+      try {
+        ({ value, done } = await reader.read());
+      } catch (err) {
+        throw watchdog.timedOut() ? timeoutError() : friendlyError(err, "gemini");
+      }
+      watchdog.reset();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
@@ -165,6 +181,9 @@ export class GeminiProvider implements Provider {
           // skip malformed
         }
       }
+    }
+    } finally {
+      watchdog.clear();
     }
     const usage: TokenUsage = { input: totalInput, output: totalOutput, cacheRead: 0, cacheWrite: 0, thinking: 0 };
     yield { type: "usage", usage };

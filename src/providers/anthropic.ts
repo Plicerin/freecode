@@ -2,6 +2,7 @@ import type { ChatMessage, ChatRequest, Provider, StreamEvent, TokenUsage, ToolD
 import { friendlyError, makeError } from "./friendly-errors";
 import { zodToJsonSchema } from "./schema-util";
 import { debug } from "../utils/debug";
+import { createStallTimeout, streamIdleMs } from "./stall-timeout";
 
 interface AnthropicBlock { type: string; [k: string]: unknown }
 
@@ -150,6 +151,11 @@ export class AnthropicProvider implements Provider {
     const url = `${this.baseUrl}/v1/messages`;
     const body = buildAnthropicBody(req);
     debug.log("anthropic request", { url, model: req.model });
+    // Idle watchdog — abort if the stream goes silent (see stall-timeout.ts).
+    const idleMs = streamIdleMs();
+    const watchdog = createStallTimeout(req.signal, idleMs);
+    const timeoutError = (): Error =>
+      makeError("anthropic", `Anthropic stream timed out (no data for ${Math.round(idleMs / 1000)}s)`, "timeout", true);
     let resp: Response;
     try {
       resp = await fetch(url, {
@@ -160,12 +166,14 @@ export class AnthropicProvider implements Provider {
           "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify(body),
-        signal: req.signal,
+        signal: watchdog.signal,
       });
     } catch (err) {
-      throw friendlyError(err, "anthropic");
+      watchdog.clear();
+      throw watchdog.timedOut() ? timeoutError() : friendlyError(err, "anthropic");
     }
     if (!resp.ok || !resp.body) {
+      watchdog.clear();
       const text = await resp.text().catch(() => "");
       const err = new Error(`${resp.status} ${text}`) as Error & { status?: number };
       err.status = resp.status;
@@ -177,8 +185,16 @@ export class AnthropicProvider implements Provider {
     let buffer = "";
     const toolCalls = new Map<number, { id?: string; name?: string; inputJson: string }>();
 
+    try {
     while (true) {
-      const { value, done } = await reader.read();
+      let value: Uint8Array | undefined;
+      let done: boolean;
+      try {
+        ({ value, done } = await reader.read());
+      } catch (err) {
+        throw watchdog.timedOut() ? timeoutError() : friendlyError(err, "anthropic");
+      }
+      watchdog.reset();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
@@ -253,6 +269,9 @@ export class AnthropicProvider implements Provider {
           return;
         }
       }
+    }
+    } finally {
+      watchdog.clear();
     }
     yield { type: "end", reason: "end_turn" };
   }

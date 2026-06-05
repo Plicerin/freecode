@@ -2,6 +2,7 @@ import type { Provider, ChatRequest, ChatMessage, ToolCall, TokenUsage, ImagePar
 import type { Tool } from "../tools/types";
 import type { PermissionEngine, ApprovalCallback } from "../permissions/modes";
 import { withRetry, isRateLimitError } from "../utils/retry";
+import { isRetryable } from "../providers/friendly-errors";
 import { debug } from "../utils/debug";
 import { toolListToSystemPrompt } from "../tools/registry";
 import { ContextTracker } from "./context";
@@ -196,7 +197,9 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
           }
         }
       },
-      { shouldRetry: (err) => !emitted && isRateLimitError(err) },
+      // Retry only BEFORE the first event (a 429 or a connect/stall timeout at
+      // connection time). Once tokens are flowing we don't re-run a partial stream.
+      { shouldRetry: (err) => !emitted && (isRateLimitError(err) || isRetryable(err)) },
     );
 
     messages.push({ role: "assistant", content: turnText, toolCalls: turnToolCalls });

@@ -49,6 +49,23 @@ Agent loop + streaming · tools: Bash, Read/Write/Edit, Glob, Grep, ViewImage, W
 - [ ] `/usage` · `/insights` · `/status` · `/effort` · `/fast` · `/feedback` · `/release-notes`
 - [ ] TUI niceties — thinking-block collapse, tool-output collapse, word-level diff rendering, OSC-8 hyperlinks, copy-on-select, jump-to-bottom
 
+## Tier R — reliability & hardening (NOT parity — robustness of what already exists)
+*Added 2026-06-05. The parity tiers above track features to match; this tier tracks making them not break. Every serious bug this session lived here, not in a missing feature.*
+- [~] **Provider robustness** — streaming calls had no timeout (a stalled connection hung forever — the `/ultraplan` hour-long hang). 
+  - [x] approval queue so parallel sub-agents can't deadlock on a single prompt slot (`src/tui/approval-queue.ts`).
+  - [x] **stall timeout** on all three streaming providers (`src/providers/stall-timeout.ts`): idle watchdog aborts if no bytes for `FREECODE_STREAM_TIMEOUT_MS` (default 120s); resets per chunk so long valid streams survive; timeouts are retryable before the first token.
+  - [ ] concurrency cap on sub-agent fan-out (`/ultraplan` can spawn unbounded); per-run cost ceiling.
+- [ ] **Agent-behavior evals** — a scripted regression harness for *behavior*, not just units (e.g. "this prompt must NOT call WebSearch"). Every bug this session was found in production, not by a test.
+- [ ] **Loop/repetition guards** — detect an agent repeating an identical failing call or spamming a tool (the WebSearch("the next") class).
+- [ ] **Prompt-injection defense** — WebFetch/WebSearch/FileRead pull untrusted text into context; nothing guards against "ignore previous instructions" in fetched content.
+- [ ] **Plugin install trust** — `/plugins install <git-url>` clones arbitrary repos with no signing/review/allowlist.
+- [ ] **Windows correctness** — several bugs were `\r\n`/PowerShell-specific (duplicate-submit, etc.); no cross-platform test pass.
+
+## Tier I — identity (freecode's own thesis, beyond catching up)
+*The user's 3-phase plan is parity → enhancements → identity. Parity is ~80% done; this tier is deliberately thin and needs its own design pass. Today only the "net-new" list below exists.*
+- [ ] articulate the differentiator (verify-gate + provenance ledger as a first-class "trust" model, not a footnote) and build it out as the headline feature.
+- [ ] skills **self-authoring** (already noted under Skills) belongs here too — freecode that grows its own capabilities.
+
 ## Tier D — out of scope for a lean CLI (named and set aside)
 IDE extensions (VS Code/JetBrains) · voice mode · Chrome connector · Remote Control/mobile · Desktop app · Agent SDK (Node/Python libs) · auto-update · OTEL telemetry · enterprise managed settings · multi-platform sandbox (bwrap/socat)
 
@@ -69,3 +86,5 @@ Verify gate · provenance ledger · `/log` activity audit · secret redaction ac
 - **2026-06-05 — Plugin install/uninstall** (`src/plugins.ts`, tested): `/plugins install <git-url|local-path>` clones (git, depth 1) or copies a bundle into the user plugins dir — staged in a hidden temp dir on the same volume, manifest-validated, then atomically `rename`d into place as `<name>`; refuses to clobber an existing plugin; reports contributions per kind. `/plugins uninstall <name>` removes it + clears any stale disabled flag. `/plugin` accepted as a singular alias. Install moves files only — nothing executes. `resolvePlugins` now skips hidden dirs (staging/.git). 6 tests (local install, name derivation, clobber guard, no-manifest reject, uninstall, uninstall-missing).
 - **2026-06-05 — Dynamic workflows + streaming** (`src/agent/workflow.ts`, tested): `composeWorkflow()` asks the model to decompose a task into a declarative workflow spec (stages → parallel sub-agent tasks, agent types, `{{input}}`/`{{previous}}`), tolerant JSON extraction (fences/prose), validated by the same `WorkflowFileSchema`, run through the same engine (`source: "dynamic"`). `/ultraplan <task>` composes → shows the plan → runs it (abortable, result threaded into the conversation + session). `runWorkflow` now emits a `WorkflowEvent` stream (`stage_start`/`task_done`/`stage_done`); both `/workflows` and `/ultraplan` render live per-task progress. 5 new tests (clean parse, fence/prose tolerance, no-JSON reject, schema reject, event ordering).
 - **2026-06-05 — Web tools require approval** (`src/tools/web-search.ts`, `src/tools/web-fetch.ts`): both were `permission: "safe"` (auto-run) and fired on stray text fragments; now `permission: "confirm"` with tightened descriptions + a strict web-tool policy in the system prompt (`src/tools/registry.ts`).
+- **2026-06-05 — Approval queue (deadlock fix)** (`src/tui/approval-queue.ts`, tested): a single resolver slot let parallel sub-agents clobber each other's approval prompt, orphaning a promise so a workflow stage hung forever. Now serialised: one prompt at a time, `esc` aborts + denies the whole batch, exit flushes. 4 tests.
+- **2026-06-05 — Stream stall timeout (hang fix) + Tier R** (`src/providers/stall-timeout.ts`, tested): streaming providers had no timeout, so a silent socket sat in `reader.read()` forever (the `/ultraplan` hour-long hang). New idle watchdog aborts after `FREECODE_STREAM_TIMEOUT_MS` (default 120s) of silence, resets per chunk (long valid streams survive), and surfaces a retryable timeout error; `loop.ts` retries connect/stall timeouts before the first token. Applied to openai-compat/anthropic/gemini. 5 tests. Added Tier R (reliability/hardening) + Tier I (identity) to the roadmap.

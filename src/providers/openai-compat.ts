@@ -2,6 +2,7 @@ import type { ChatMessage, ChatRequest, Provider, StreamEvent, TokenUsage } from
 import { friendlyError, makeError } from "./friendly-errors";
 import { zodToJsonSchema } from "./schema-util";
 import { debug } from "../utils/debug";
+import { createStallTimeout, streamIdleMs } from "./stall-timeout";
 
 interface OpenAICompatOptions {
   apiKey?: string;
@@ -117,13 +118,21 @@ export class OpenAICompatProvider implements Provider {
       }));
     }
     debug.log("openai-compat request", { url, model: req.model, provider: this.id });
+    // Idle watchdog: abort if the stream goes silent (no headers, or no bytes for
+    // streamIdleMs). Without this a stalled socket hangs in reader.read() forever.
+    const idleMs = streamIdleMs();
+    const watchdog = createStallTimeout(req.signal, idleMs);
+    const timeoutError = (): Error =>
+      makeError(this.id, `${this.opts.providerName} stream timed out (no data for ${Math.round(idleMs / 1000)}s)`, "timeout", true);
     let resp: Response;
     try {
-      resp = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal: req.signal });
+      resp = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal: watchdog.signal });
     } catch (err) {
-      throw friendlyError(err, this.id);
+      watchdog.clear();
+      throw watchdog.timedOut() ? timeoutError() : friendlyError(err, this.id);
     }
     if (!resp.ok || !resp.body) {
+      watchdog.clear();
       const text = await resp.text().catch(() => "");
       const err = new Error(`${resp.status} ${text}`) as Error & { status?: number };
       err.status = resp.status;
@@ -135,8 +144,16 @@ export class OpenAICompatProvider implements Provider {
     let buffer = "";
     const toolAcc = new Map<number, { id?: string; name?: string; args: string }>();
 
+    try {
     while (true) {
-      const { value, done } = await reader.read();
+      let value: Uint8Array | undefined;
+      let done: boolean;
+      try {
+        ({ value, done } = await reader.read());
+      } catch (err) {
+        throw watchdog.timedOut() ? timeoutError() : friendlyError(err, this.id);
+      }
+      watchdog.reset(); // got bytes (or clean EOF) — restart the idle clock
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
@@ -195,6 +212,9 @@ export class OpenAICompatProvider implements Provider {
           yield { type: "usage", usage };
         }
       }
+    }
+    } finally {
+      watchdog.clear();
     }
     yield { type: "end", reason: "end_turn" };
   }
