@@ -6,6 +6,11 @@ import { buildProvider } from "../providers/registry";
 import { buildToolRegistry, toolListToSystemPrompt } from "../tools/registry";
 import { createPermissionEngine, type ApprovalCallback, type ApprovalDecision, type ApprovalRequest } from "../permissions/modes";
 import { runAgentLoop } from "../agent/loop";
+import { branch as gitBranch, commitPushPr, issue as ghIssue, prComments } from "./git-workflow";
+import { createAgentTool } from "../tools/agent";
+import { resolveAgentTypes } from "../agent/agent-types";
+import { resolveSkills } from "../agent/skills";
+import { resolveWorkflows, getWorkflow, runWorkflow } from "../agent/workflow";
 import { ContextTracker } from "../agent/context";
 import { priceFor, contextWindowFor } from "../agent/pricing";
 import { extractAttachments } from "../agent/attachments";
@@ -44,7 +49,7 @@ interface UiMessage {
   ok?: boolean;
 }
 
-const SLASH_COMMANDS = ["/model", "/new", "/resume", "/rename", "/context", "/cost", "/config", "/doctor", "/diff", "/commit", "/review", "/provider", "/plan", "/verify", "/bench", "/log", "/mcp", "/help", "/compact", "/about", "/exit"];
+const SLASH_COMMANDS = ["/model", "/new", "/resume", "/rename", "/context", "/cost", "/config", "/doctor", "/diff", "/commit", "/commit-push-pr", "/branch", "/issue", "/pr-comments", "/review", "/security-review", "/autofix-pr", "/agents", "/skills", "/workflows", "/provider", "/plan", "/verify", "/bench", "/log", "/mcp", "/help", "/compact", "/about", "/exit"];
 
 // Braille spinner frames — proof of life while a turn runs.
 const SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
@@ -72,7 +77,16 @@ const COMMAND_DESC: Record<string, string> = {
   "/doctor": "diagnose setup (provider, key, git, env)",
   "/diff": "show the working-tree git diff",
   "/commit": "stage all changes and commit (/commit <message>)",
+  "/commit-push-pr": "commit, push, and open a PR (/commit-push-pr <title>)",
+  "/branch": "list branches, or switch/create (/branch [name])",
+  "/issue": "list open issues, or open one (/issue [title])",
+  "/pr-comments": "show review comments on the current PR",
   "/review": "review your working-tree changes for bugs",
+  "/security-review": "audit your working-tree changes for security issues",
+  "/autofix-pr": "address the open PR's review comments and CI failures",
+  "/agents": "list available sub-agent types",
+  "/skills": "list available project skills",
+  "/workflows": "list or run a multi-agent workflow (/workflows [name] [input])",
   "/verify": "run the project's checks",
   "/bench": "race the performance ghost",
   "/log": "toggle the verification activity log",
@@ -491,7 +505,16 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     streamIdRef.current = null;
     try {
       // Plan mode: read-only tools (permission=safe) + a plan-only system prompt.
-      const activeTools = planMode ? tools.filter((t) => t.permission === "safe") : tools;
+      const baseTools = planMode ? tools.filter((t) => t.permission === "safe") : tools;
+      // Sub-agents (Tier A): offer the Agent tool outside plan mode. The getter
+      // reads the live provider/model so a mid-session switch is honoured; the
+      // sub-agent's toolset is baseTools (no Agent) — recursion-safe by design.
+      const activeTools = planMode
+        ? baseTools
+        : [...baseTools, createAgentTool(() => ({
+            provider, model, tools: baseTools, permission, promptUser,
+            hooks: config.hooks, contextWindow: contextWindowFor(model),
+          }))];
       const systemPrompt = planMode ? toolListToSystemPrompt(activeTools) + PLAN_MODE_NOTE : undefined;
       // Auto-verify gate: skip in plan mode (nothing changes). on = quick checks; strict = full.
       const vmode = planMode ? "off" : config.verifyMode;
@@ -739,6 +762,107 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           "Review my current working-tree changes for a code review. Run `git diff` (and `git diff --staged`) to see them, then report correctness bugs, risky edits, and concrete improvements — concise, specific, cite file:line. If there are no changes, say so plainly." +
           (arg.trim() ? `\n\nFocus: ${arg.trim()}` : ""),
         );
+        break;
+      }
+      case "/branch": {
+        const r = gitBranch(process.cwd(), arg.trim() || undefined);
+        if (r.ok) setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: r.text }]);
+        else setErrorLine(r.text);
+        break;
+      }
+      case "/commit-push-pr": {
+        if (!arg.trim()) { setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "Usage: /commit-push-pr <title>" }]); break; }
+        setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "Committing, pushing, and opening a PR…" }]);
+        const r = commitPushPr(process.cwd(), arg.trim());
+        if (r.ok) setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: r.text }]);
+        else setErrorLine(r.text);
+        break;
+      }
+      case "/issue": {
+        const r = ghIssue(process.cwd(), arg.trim() || undefined);
+        if (r.ok) setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: r.text }]);
+        else setErrorLine(r.text);
+        break;
+      }
+      case "/pr-comments": {
+        const r = prComments(process.cwd());
+        if (r.ok) setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: r.text }]);
+        else setErrorLine(r.text);
+        break;
+      }
+      case "/security-review": {
+        void submit(
+          "Perform a SECURITY review of my current working-tree changes. Run `git diff` (and `git diff --staged`) to see them, then look specifically for: injection (shell/SQL/path), secret/credential exposure, missing authz/authn checks, unsafe deserialization, SSRF, path traversal, and unvalidated input reaching a sink. Report each finding with file:line, the concrete risk, and a fix. If the changes have no security-relevant surface, say so plainly." +
+          (arg.trim() ? `\n\nFocus: ${arg.trim()}` : ""),
+        );
+        break;
+      }
+      case "/autofix-pr": {
+        void submit(
+          "Address the open pull request for the current branch. Use the `gh` CLI: run `gh pr view --comments` to read review comments and `gh pr checks` to find failing CI. Then make the concrete code changes needed to resolve the review comments and fix the failing checks, verifying as you go. If there is no open PR or `gh` is unavailable, say so plainly and stop." +
+          (arg.trim() ? `\n\nFocus: ${arg.trim()}` : ""),
+        );
+        break;
+      }
+      case "/agents": {
+        const types = resolveAgentTypes(process.cwd());
+        const lines = types.map((t) =>
+          `  ${t.name}${t.source !== "builtin" ? ` (${t.source})` : ""} — ${t.description}` +
+          (t.tools ? `  [tools: ${t.tools.join(", ")}]` : ""),
+        );
+        setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text:
+          `Sub-agent types (the Agent tool dispatches these):\n${lines.join("\n")}\n\n` +
+          "Define your own in .freecode/agents/<name>.md — frontmatter `description:` and optional `tools:`, body is the agent's prompt." }]);
+        break;
+      }
+      case "/skills": {
+        const skills = resolveSkills(process.cwd());
+        if (!skills.length) {
+          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text:
+            "No skills defined. Add one at .freecode/skills/<name>.md — frontmatter `description:` (the trigger), body is the instructions. The agent loads it on demand when a task matches." }]);
+          break;
+        }
+        const lines = skills.map((s) => `  ${s.name} (${s.source}) — ${s.description}`);
+        setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text:
+          `Skills (the agent loads these on demand via the Skill tool):\n${lines.join("\n")}` }]);
+        break;
+      }
+      case "/workflows": {
+        const wfs = resolveWorkflows(process.cwd());
+        const [name, ...rest] = arg.trim().split(/\s+/).filter(Boolean);
+        if (!name) {
+          if (!wfs.length) {
+            setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text:
+              "No workflows defined. Add one at .freecode/workflows/<name>.json — `{ description, stages: [{ name, tasks: [{ agent, prompt }] }] }`. Tasks in a stage run in parallel; prompts can use {{input}} and {{previous}}." }]);
+            break;
+          }
+          const lines = wfs.map((w) => `  ${w.name} (${w.source}) — ${w.description} [${w.stages.length} stage${w.stages.length > 1 ? "s" : ""}]`);
+          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text:
+            `Workflows (run with /workflows <name> [input]):\n${lines.join("\n")}` }]);
+          break;
+        }
+        const wf = getWorkflow(name, process.cwd());
+        if (!wf) { setErrorLine(`Unknown workflow "${name}". Run /workflows to list them.`); break; }
+        const controller = new AbortController();
+        abortRef.current = controller;
+        setBusy(true);
+        setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `▶ Running workflow "${wf.name}" (${wf.stages.length} stage${wf.stages.length > 1 ? "s" : ""})…` }]);
+        try {
+          const res = await runWorkflow(wf, {
+            provider, model, tools, permission, promptUser,
+            hooks: config.hooks, contextWindow: contextWindowFor(model),
+            input: rest.join(" "), cwd: process.cwd(), signal: controller.signal,
+            onStage: (i, stage, result) => {
+              setMessages((prev) => [...prev, { id: `s-${Date.now()}-${i}`, role: "system", text:
+                `  ✓ stage ${i + 1}${stage.name ? ` (${stage.name})` : ""} — ${result.outputs.length} agent(s)${result.outputs.some((o) => !o.ok) ? ", some incomplete" : ""}` }]);
+            },
+          });
+          setMessages((prev) => [...prev, { id: `a-${Date.now()}`, role: "assistant", text: res.output || "(workflow produced no output)" }]);
+        } catch (err) {
+          setErrorLine(`workflow failed: ${err instanceof Error ? err.message : String(err)}`);
+        } finally {
+          setBusy(false);
+        }
         break;
       }
       case "/provider": {

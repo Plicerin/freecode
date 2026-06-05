@@ -10,6 +10,8 @@ import { createGrepTool, type GrepOptions } from "./grep";
 import { createWebSearchTool, type WebSearchOptions } from "./web-search";
 import { WebFetchTool } from "./web-fetch";
 import { ViewImageTool } from "./view-image";
+import { SkillTool } from "./skill";
+import { resolveSkills, skillsIndex } from "../agent/skills";
 
 export interface RegistryOptions {
   bash?: BashToolOptions;
@@ -28,6 +30,7 @@ export function buildToolRegistry(opts: RegistryOptions = {}): Tool[] {
     createWebSearchTool(opts.webSearch),
     WebFetchTool,
     ViewImageTool,
+    SkillTool,
   ];
 }
 
@@ -114,5 +117,7 @@ export function toolListToSystemPrompt(tools: Tool[]): string {
     lines.push(`Project context (from ${ctx.file}) — follow these project-specific instructions:`);
     lines.push(ctx.content);
   }
+  const index = skillsIndex(resolveSkills(cwd));
+  if (index) lines.push(index);
   return lines.join("\n");
 }

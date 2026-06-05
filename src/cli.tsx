@@ -138,6 +138,14 @@ async function runPrint({ prompt, flags }: { prompt: string; flags: CliFlags }):
   appendEvent(session, { kind: "user", text: prompt, ts: new Date().toISOString() });
   const permission = createPermissionEngine(config.permissionMode, (async () => "allow") as ApprovalCallback);
 
+  // Sub-agents (Tier A): the headless run can dispatch them too.
+  const { createAgentTool } = await import("./tools/agent");
+  const headlessPromptUser = (async () => "allow") as ApprovalCallback;
+  tools.push(createAgentTool(() => ({
+    provider, model: config.model, tools, permission, promptUser: headlessPromptUser,
+    hooks: config.hooks, contextWindow: contextWindowFor(config.model),
+  })));
+
   try {
     await runAgentLoop({
       provider,

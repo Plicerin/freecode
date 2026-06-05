@@ -1,0 +1,27 @@
+{
+  "description": "Parallel correctness + security review of the working-tree diff, then one synthesized, de-duplicated report.",
+  "stages": [
+    {
+      "name": "review",
+      "tasks": [
+        {
+          "agent": "code-reviewer",
+          "prompt": "Review the current working-tree changes for CORRECTNESS. Run `git diff` (and `git diff --staged`) to see them, then report bugs, risky edits, and concrete improvements — specific, cited as path:line, ordered by severity. If there are no changes, say so. {{input}}"
+        },
+        {
+          "agent": "code-reviewer",
+          "prompt": "Review the current working-tree changes for SECURITY. Run `git diff` (and `git diff --staged`) to see them, then look for injection (shell/SQL/path), secret exposure, missing authz, unsafe deserialization, SSRF, and unvalidated input reaching a sink — each with path:line, the risk, and a fix. If there's no security-relevant surface, say so. {{input}}"
+        }
+      ]
+    },
+    {
+      "name": "synthesize",
+      "tasks": [
+        {
+          "agent": "general",
+          "prompt": "Combine the two reviews below into ONE prioritized report: de-duplicate overlapping findings, order most-severe first, keep every path:line citation, and drop noise. Output only the report.\n\n{{previous}}"
+        }
+      ]
+    }
+  ]
+}
