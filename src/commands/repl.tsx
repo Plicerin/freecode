@@ -13,6 +13,7 @@ import { resolveSkills } from "../agent/skills";
 import { resolveWorkflows, getWorkflow, runWorkflow, composeWorkflow, type WorkflowEvent } from "../agent/workflow";
 import { filterChatModels, pickerWindow } from "../tui/model-picker";
 import { matchCommands, resolveSubmit } from "../tui/slash-complete";
+import { createApprovalQueue } from "../tui/approval-queue";
 import { resolvePlugins, setPluginEnabled, installPlugin, uninstallPlugin } from "../plugins";
 import { ContextTracker } from "../agent/context";
 import { priceFor, contextWindowFor } from "../agent/pricing";
@@ -396,7 +397,12 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   const [picker, setPicker] = useState<{ items: SessionMeta[]; idx: number } | null>(null);
   // Interactive model picker: when open, ↑/↓ choose and Enter switches.
   const [modelPicker, setModelPicker] = useState<{ items: string[]; idx: number } | null>(null);
-  const approvalResolver = useRef<((d: ApprovalDecision) => void) | null>(null);
+  // Approval prompts are QUEUED, not held in a single slot. Parallel sub-agents
+  // (a workflow fan-out) can each need approval at the same instant; a lone
+  // resolver let the second prompt clobber the first, orphaning its promise so
+  // the stage's Promise.all waited forever (the /ultraplan "hang"). The queue
+  // serialises them: one shows at a time (driving `pending`), the rest wait.
+  const approvalQueue = useRef(createApprovalQueue(setPending)).current;
   const abortRef = useRef<AbortController | null>(null);
   const streamIdRef = useRef<string | null>(null); // id of the assistant bubble currently streaming
 
@@ -405,6 +411,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   // the runtime alive and the process appears to hang after the UI closes.
   const exitNow = (): void => {
     abortRef.current?.abort();
+    approvalQueue.flush(); // unblock any sub-agents parked on a prompt so the process can die
     exit();
   };
 
@@ -461,15 +468,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     setMessages([...restored, { id: `s-${Date.now()}`, role: "system", text: `Resumed (${conversationRef.current.length} messages of context)` }]);
   }
 
-  const promptUser: ApprovalCallback = (req) =>
-    new Promise<ApprovalDecision>((resolve) => {
-      setPending(req);
-      approvalResolver.current = (decision) => {
-        approvalResolver.current = null;
-        setPending(null);
-        resolve(decision);
-      };
-    });
+  const promptUser: ApprovalCallback = (req) => approvalQueue.enqueue(req);
 
   useEffect(() => {
     const cwd = process.cwd();
@@ -1173,8 +1172,11 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     }
     // While a tool-approval prompt is open, keys select a decision and nothing else.
     if (pending) {
-      const decision = approvalDecisionForKey(input2, key.escape);
-      if (decision) approvalResolver.current?.(decision);
+      // esc = bail out: abort the run AND deny the whole queue, so a fan-out of
+      // blocked sub-agents unwinds on a single keypress.
+      if (key.escape) { abortRef.current?.abort(); approvalQueue.flush(); return; }
+      const decision = approvalDecisionForKey(input2, false);
+      if (decision) approvalQueue.resolveHead(decision);
       return;
     }
     // esc interrupts a running turn.
