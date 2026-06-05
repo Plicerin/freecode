@@ -91,7 +91,18 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
   let changed = false; // a file-mutating tool succeeded this task
   let verifyAttempts = 0;
   let verifyFailed = false;
-  let verifiedCommands: string[] = []; // checks that actually passed
+  let verifiedCommands: string[] = []; // checks that actually passed (auto-gate)
+  // Checks the AGENT ran itself (build/test/typecheck/lint) that passed. These
+  // are real verification too — not just freecode's auto-gate — so nested or
+  // monorepo projects, whose checks live in a subdir the gate's cwd can't see,
+  // still earn a verified badge. Cleared on every file change so a passing check
+  // only credits the state that existed AFTER the last edit (no stale green).
+  // A check's MOST RECENT outcome wins: passing adds it here and clears any prior
+  // failure; failing removes it here and records the failure below. Without this,
+  // an earlier `tests PASS` would mask a later `tests FAIL` and report a false
+  // green — the one thing the confidence signal must never do.
+  const agentChecks = new Set<string>();
+  const agentCheckFailures = new Set<string>();
   // Circuit-breaker: stop flailing if tools keep failing with no progress.
   const MAX_TOOL_FAILURES = 8;
   let consecutiveFailures = 0;
@@ -268,13 +279,29 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
         (red.count > 0 ? `\n[freecode redacted ${red.count} secret(s) from this output]` : "");
       if (result.ok) consecutiveFailures = 0;
       else { consecutiveFailures += 1; lastFailureMsg = `${tool.name}: ${result.error ?? result.output.slice(0, 160)}`; }
-      if (result.ok && (tool.name === "FileWrite" || tool.name === "FileEdit")) changed = true;
+      if (result.ok && (tool.name === "FileWrite" || tool.name === "FileEdit")) {
+        changed = true;
+        // A new edit invalidates any earlier check outcome — the state it
+        // measured no longer exists, so don't carry stale green OR red forward.
+        agentChecks.clear();
+        agentCheckFailures.clear();
+      }
       // Record the action for the provenance ledger (facts, not the model's prose).
       const a = parsed.data as { path?: string; command?: string };
       if (tool.name === "FileWrite" && result.ok) led.wrote.push(a.path ?? "?");
       else if (tool.name === "FileEdit" && result.ok) led.edited.push(a.path ?? "?");
       else if (tool.name === "FileRead") led.read += 1;
-      else if (tool.name === "Bash") led.ran.push(String(a.command ?? "").slice(0, 40));
+      else if (tool.name === "Bash") {
+        const cmd = String(a.command ?? "");
+        led.ran.push(cmd.slice(0, 40));
+        // Credit a check the agent ran itself toward confidence — but only if it
+        // actually passed (exit 0). A failing check is real signal the other way.
+        const check = recognizeCheckCommand(cmd);
+        if (check) {
+          if (result.ok) { agentChecks.add(check); agentCheckFailures.delete(check); logActivity(`CHECK ${check} → PASS (agent-run)`); }
+          else { agentChecks.delete(check); agentCheckFailures.add(check); logActivity(`CHECK ${check} → FAIL (agent-run)`); }
+        }
+      }
       else if (tool.name === "Glob" || tool.name === "Grep") led.searched += 1;
       else if (tool.name === "ViewImage") led.viewed += 1;
       else led.other.push(tool.name);
@@ -333,13 +360,25 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
     if (led.viewed) observed.push(`viewed ${led.viewed} image(s)`);
     if (led.other.length) observed.push(`used ${[...new Set(led.other)].join(", ")}`);
 
-    const verified = verifiedCommands.map((c) => `${c} passed`);
+    // Verified = checks that actually passed, from EITHER freecode's auto-gate or
+    // the agent's own run. Agent-run ones are labelled so provenance stays honest.
+    const ownChecks = [...agentChecks].filter((c) => !verifiedCommands.includes(c));
+    const verified = [
+      ...verifiedCommands.map((c) => `${c} passed`),
+      ...ownChecks.map((c) => `${c} passed (agent-run)`),
+    ];
+    const someCheckPassed = verifiedCommands.length > 0 || ownChecks.length > 0;
+    // A failing check (gate OR agent-run) dominates: even if a sibling check
+    // passed, the code is in a failing state, so the badge must read failing —
+    // never green. nextConfidence treats a "failing" believed entry as decisive.
+    const anyFailed = verifyFailed || agentCheckFailures.size > 0;
     const believed: string[] = [];
     const changedCount = led.wrote.length + led.edited.length;
-    if (changedCount > 0 && verifiedCommands.length === 0 && !verifyFailed) {
+    if (anyFailed) {
+      believed.push("checks failing — changes unconfirmed");
+    } else if (changedCount > 0 && !someCheckPassed) {
       believed.push(`changed ${changedCount} file(s) without running checks — unverified`);
     }
-    if (verifyFailed) believed.push("checks failing — changes unconfirmed");
 
     if (observed.length || verified.length || believed.length) {
       logActivity(`LEDGER verified=[${verified.join("; ")}] observed=[${observed.join("; ")}] believed=[${believed.join("; ")}]`);
@@ -350,6 +389,32 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
   await runHooks("Stop", opts.hooks, { event: "Stop", turns, aborted, cwd: process.cwd() }, undefined, opts.signal);
   opts.onEvent({ type: "done", reason: aborted ? "aborted" : turns >= opts.maxTurns ? "max_turns" : "end_turn" });
   return { turns, usage: total, aborted, messages };
+}
+
+// Recognize a command the agent ran itself that constitutes a real check — a
+// build / test / typecheck / lint / static-analysis run. Returns a short label
+// if it looks like one, else null. Deliberately conservative: it must clearly be
+// a verification command (not `npm run dev`/`start`, not a one-off script) so a
+// passing run can be honestly credited toward the confidence badge.
+export function recognizeCheckCommand(raw: string): string | null {
+  const cmd = raw.trim().toLowerCase();
+  if (!cmd) return null;
+  // Package-manager script runs: npm/pnpm/yarn/bun [run] <build|test|typecheck|lint|check|verify|tsc>
+  const pm = /\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:build|test|typecheck|type-check|lint|check|verify|tsc)\b/.exec(cmd);
+  if (pm) return pm[0];
+  // Bare tools / runners.
+  if (/(^|\s)tsc(\s|$)/.test(cmd)) return "tsc";
+  if (/\b(vitest|jest|playwright|mocha|ava)\b/.test(cmd)) return "tests";
+  if (/\bpytest\b/.test(cmd) || /\bpython\s+-m\s+pytest\b/.test(cmd)) return "pytest";
+  if (/\b(mypy|ruff|flake8|pylint)\b/.test(cmd)) return "lint";
+  if (/\beslint\b/.test(cmd)) return "eslint";
+  const cargo = /\bcargo\s+(check|test|build|clippy)\b/.exec(cmd);
+  if (cargo) return `cargo ${cargo[1]}`;
+  const goc = /\bgo\s+(test|build|vet)\b/.exec(cmd);
+  if (goc) return `go ${goc[1]}`;
+  const make = /\bmake\s+(test|check|lint|build|ci)\b/.exec(cmd);
+  if (make) return `make ${make[1]}`;
+  return null;
 }
 
 function sumUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
