@@ -11,3 +11,9 @@ bun.lockb
 freecode.exe
 openclaude.exe
 opencode.exe
+
+# Unrelated projects living in this folder (excluded from freecode + its index)
+livebench/
+dubai-luxury-travel/
+organizer/
+.gitnexus/
