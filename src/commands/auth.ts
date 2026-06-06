@@ -109,7 +109,49 @@ export async function runAuth(args: string[]): Promise<void> {
       await runOnboarding();
       break;
     }
+    case "login": {
+      // Currently only OpenAI ("Sign in with ChatGPT"). Default to it.
+      const target = provider ?? "openai";
+      if (target !== "openai") fail(`OAuth login is only supported for "openai" right now (got "${target}").`);
+      const { loginOpenAI } = await import("../auth/login");
+      try {
+        await loginOpenAI();
+      } catch (err) {
+        fail(`Login failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      break;
+    }
+    case "refresh": {
+      const { refreshOpenAI } = await import("../auth/login");
+      try {
+        await refreshOpenAI();
+        process.stdout.write("✓ Refreshed the OpenAI key from your ChatGPT session.\n");
+      } catch (err) {
+        fail(`Refresh failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      break;
+    }
+    case "logout": {
+      const target = provider ?? "openai";
+      const { logoutOpenAI } = await import("../auth/login");
+      if (target === "openai") logoutOpenAI();
+      process.stdout.write(`✓ Signed out of ${target} (OAuth tokens cleared). Remove a stored API key with: freecode auth remove ${target}\n`);
+      break;
+    }
+    case "status": {
+      const { hasTokens, loadTokens } = await import("../auth/store");
+      const vault = open();
+      const oauth = hasTokens("openai", vault);
+      const key = !!vault.get("openai");
+      process.stdout.write(`OpenAI: ${oauth ? "signed in with ChatGPT (OAuth)" : key ? "API key set" : "not configured"}.\n`);
+      if (oauth) {
+        const t = loadTokens("openai", vault);
+        const exp = t?.expiresAt ? new Date(t.expiresAt).toISOString() : "n/a";
+        process.stdout.write(`  access token expires: ${exp}; refresh token: ${t?.refreshToken ? "present" : "none"}\n`);
+      }
+      break;
+    }
     default:
-      process.stdout.write("Usage: freecode auth <set|list|remove|onboard> [provider]\nKeys are stored encrypted in ~/.freecode/vault.json (auto-unlocks via ~/.freecode/vault.key).\n");
+      process.stdout.write("Usage: freecode auth <set|list|remove|login|logout|status|onboard> [provider]\n  login [openai]   Sign in with ChatGPT (OAuth) and store a minted API key\n  status           Show OpenAI auth state\nKeys are stored encrypted in ~/.freecode/vault.json (auto-unlocks via ~/.freecode/vault.key).\n");
   }
 }
