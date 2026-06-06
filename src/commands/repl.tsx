@@ -19,6 +19,7 @@ import { startBackground } from "../background/runner";
 import { reapJobs } from "../background/registry";
 import { formatJobLine } from "./background-cli";
 import { analyzeSession, applyProposal, dedupeProposals, transcriptFromMessages, type Proposal } from "../agent/self-improve";
+import { ensureStat, listStats, decayCandidates, verifyTrend, pruneArtifact } from "../agent/learn-stats";
 import { readFileSync as readFileForLearn } from "node:fs";
 import { ContextTracker } from "../agent/context";
 import { priceFor, contextWindowFor } from "../agent/pricing";
@@ -114,7 +115,7 @@ const COMMAND_DESC: Record<string, string> = {
   "/workflows": "list or run a multi-agent workflow (/workflows [name] [input])",
   "/ultraplan": "freecode composes a multi-agent workflow for a task and runs it (/ultraplan <task>)",
   "/bg": "run a prompt as a detached background job, or list jobs (/bg [prompt])",
-  "/learn": "propose durable improvements from this session (/learn, then /learn save <n|all>)",
+  "/learn": "self-improvement: propose (/learn), save (/learn save <n|all>), score (/learn stats), prune",
   "/plugins": "list/install/uninstall/enable/disable plugins (/plugins install <git-url|path>)",
   "/verify": "run the project's checks",
   "/bench": "race the performance ghost",
@@ -874,6 +875,41 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       }
       case "/learn": {
         const sub = arg.trim();
+        // /learn stats — the scorecards: which learned artifacts earn their keep.
+        if (sub === "stats" || sub === "score") {
+          const stats = listStats(process.cwd());
+          if (!stats.length) { setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "No learned artifacts yet. Teach freecode with /learn." }]); break; }
+          const ageDays = (iso: string): number => Math.floor((Date.now() - Date.parse(iso)) / 86_400_000);
+          const lines = stats.map((s) => {
+            const fired = s.fires > 0 ? `${s.fires}× (last ${s.lastFiredAt ? ageDays(s.lastFiredAt) + "d ago" : "?"})` : "never fired";
+            return `  ${s.fires > 0 ? "✓" : "·"} [${s.kind}] ${s.name} — ${fired}, age ${ageDays(s.createdAt)}d`;
+          });
+          const decay = decayCandidates(stats, { asOf: Date.now() });
+          let trendLine = "";
+          try {
+            const st = activityState();
+            if (st.on) {
+              const t = verifyTrend(readFileForLearn(st.path, "utf8"));
+              const pct = (x: { sessions: number; passedFirst: number }) => (x.sessions ? Math.round((x.passedFirst / x.sessions) * 100) + "%" : "—");
+              if (t.before.sessions || t.after.sessions) trendLine = `\n\nVerify-first-try (correlational): before teaching ${pct(t.before)} · since ${pct(t.after)}`;
+            }
+          } catch { /* no log */ }
+          const decayLine = decay.length ? `\n\n${decay.length} never-fired artifact(s) old enough to prune: ${decay.map((d) => d.name).join(", ")} — /learn prune` : "";
+          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Learned-artifact scorecards:\n${lines.join("\n")}${trendLine}${decayLine}` }]);
+          break;
+        }
+        // /learn prune — remove never-fired artifacts that are old enough to judge.
+        if (sub === "prune") {
+          const decay = decayCandidates(listStats(process.cwd()), { asOf: Date.now() });
+          if (!decay.length) { setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "Nothing to prune — every learned artifact has fired or is too new to judge." }]); break; }
+          const done = decay.map((d) => {
+            const r = pruneArtifact(process.cwd(), d);
+            logActivity(`LEARN pruned ${d.kind} "${d.name}"`);
+            return `  ✗ ${d.kind} ${d.name}${d.kind === "rule" ? " (scorecard dropped — remove its line from FREECODE.md by hand)" : r.removedFile ? " (skill file removed)" : ""}`;
+          });
+          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Pruned ${decay.length} never-fired artifact(s):\n${done.join("\n")}` }]);
+          break;
+        }
         // /learn save <n|all> — apply previously-proposed artifacts.
         if (sub.startsWith("save")) {
           const pick = sub.slice(4).trim();
@@ -887,6 +923,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           for (const i of chosen) {
             try {
               const r = applyProposal(proposals[i]!, process.cwd());
+              ensureStat(process.cwd(), proposals[i]!.kind, proposals[i]!.name, new Date().toISOString());
               done.push(`  ✓ ${proposals[i]!.kind} → ${r.path}`);
               logActivity(`LEARN saved ${proposals[i]!.kind} "${proposals[i]!.name}"`);
             } catch (err) {

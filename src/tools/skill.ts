@@ -6,6 +6,8 @@ import { z } from "zod";
 import type { Tool } from "./types";
 import { getSkill, resolveSkills } from "../agent/skills";
 import { expandCommand } from "../commands/custom-commands";
+import { recordFire } from "../agent/learn-stats";
+import { logActivity } from "../utils/activity";
 
 const schema = z.object({
   name: z.string().min(1).describe("The skill to load (see the Skills list in your system prompt)"),
@@ -25,6 +27,10 @@ export const SkillTool: Tool = {
       const valid = resolveSkills(ctx.cwd).map((s) => s.name).join(", ") || "(none defined)";
       return { ok: false, output: "", error: `Unknown skill "${name}". Available: ${valid}` };
     }
+    // Phase-2 measurement: count the load as a "fire" so the scorecard can show
+    // which skills earn their keep (and which never fire → decay candidates).
+    recordFire(ctx.cwd, "skill", skill.name, new Date().toISOString());
+    logActivity(`LEARN-FIRE skill "${skill.name}"`);
     const body = skillArgs ? expandCommand(skill.body, skillArgs) : skill.body;
     return { ok: true, output: `# Skill: ${skill.name}\n\n${body}` };
   },
