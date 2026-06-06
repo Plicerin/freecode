@@ -56,6 +56,12 @@ describe("authorize URL", () => {
     expect(p.get("state")).toBe("STATE");
   });
 
+  test("encodes spaces in scope as %20, never '+' (OpenAI rejects '+')", () => {
+    const raw = buildAuthUrl({ ...cfg, scopes: ["openid", "profile", "offline_access"] }, { challenge: "C", state: "S" });
+    expect(raw).toContain("scope=openid%20profile%20offline_access");
+    expect(raw).not.toMatch(/scope=openid\+/);
+  });
+
   test("merges provider-specific extra params", () => {
     const url = new URL(buildAuthUrl({ ...cfg, extraAuthParams: { prompt: "login", id_token_add_organizations: "true" } }, { challenge: "C", state: "S" }));
     expect(url.searchParams.get("prompt")).toBe("login");

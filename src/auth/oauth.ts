@@ -23,19 +23,25 @@ export interface TokenSet {
   scope?: string;
 }
 
-/** Build the authorize URL the user opens in a browser. Pure → unit-tested. */
+/** Build the authorize URL the user opens in a browser. Pure → unit-tested.
+ *  IMPORTANT: encode with encodeURIComponent (space → %20), NOT URLSearchParams
+ *  (space → "+"). OpenAI's authorize endpoint treats "+" in `scope` as a literal
+ *  plus, garbling the scope list so required scopes read as missing
+ *  (error_code: missing_required_parameter). Codex encodes the same way
+ *  (urlencoding::encode), so this matches its working request byte-for-byte. */
 export function buildAuthUrl(cfg: OAuthConfig, opts: { challenge: string; state: string }): string {
-  const u = new URL(cfg.authorizeUrl);
-  const p = u.searchParams;
-  p.set("response_type", "code");
-  p.set("client_id", cfg.clientId);
-  p.set("redirect_uri", cfg.redirectUri);
-  p.set("scope", cfg.scopes.join(" "));
-  p.set("code_challenge", opts.challenge);
-  p.set("code_challenge_method", "S256");
-  p.set("state", opts.state);
-  for (const [k, v] of Object.entries(cfg.extraAuthParams ?? {})) p.set(k, v);
-  return u.toString();
+  const pairs: Array<[string, string]> = [
+    ["response_type", "code"],
+    ["client_id", cfg.clientId],
+    ["redirect_uri", cfg.redirectUri],
+    ["scope", cfg.scopes.join(" ")],
+    ["code_challenge", opts.challenge],
+    ["code_challenge_method", "S256"],
+    ["state", opts.state],
+    ...Object.entries(cfg.extraAuthParams ?? {}),
+  ];
+  const qs = pairs.map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
+  return `${cfg.authorizeUrl}?${qs}`;
 }
 
 /** Normalise a provider token-endpoint JSON response into our TokenSet. Pure. */
