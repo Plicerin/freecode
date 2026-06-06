@@ -62,14 +62,19 @@ export function waitForCallback(opts: { port: number; expectedState: string; tim
   });
 }
 
+/** The command to open a URL in the default browser, per platform. Pure so the
+ *  Windows case is regression-tested: it must NOT route through `cmd`, whose
+ *  `start` treats '&' as a command separator and truncates an OAuth URL at the
+ *  first '&' (dropping client_id et al). rundll32 passes the URL verbatim. */
+export function browserOpenCommand(platform: NodeJS.Platform, url: string): { cmd: string; args: string[] } {
+  if (platform === "win32") return { cmd: "rundll32.exe", args: ["url.dll,FileProtocolHandler", url] };
+  if (platform === "darwin") return { cmd: "open", args: [url] };
+  return { cmd: "xdg-open", args: [url] };
+}
+
 /** Best-effort open the URL in the user's default browser, cross-platform. */
 export function openBrowser(url: string): void {
-  const platform = process.platform;
-  const [cmd, args] = platform === "win32"
-    ? ["cmd", ["/c", "start", "", url]]
-    : platform === "darwin"
-      ? ["open", [url]]
-      : ["xdg-open", [url]];
+  const { cmd, args } = browserOpenCommand(process.platform, url);
   try {
     spawn(cmd, args, { stdio: "ignore", detached: true }).unref();
   } catch {
