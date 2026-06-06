@@ -18,6 +18,8 @@ import { resolvePlugins, setPluginEnabled, installPlugin, uninstallPlugin } from
 import { startBackground } from "../background/runner";
 import { reapJobs } from "../background/registry";
 import { formatJobLine } from "./background-cli";
+import { analyzeSession, applyProposal, dedupeProposals, transcriptFromMessages, type Proposal } from "../agent/self-improve";
+import { readFileSync as readFileForLearn } from "node:fs";
 import { ContextTracker } from "../agent/context";
 import { priceFor, contextWindowFor } from "../agent/pricing";
 import { extractAttachments } from "../agent/attachments";
@@ -56,7 +58,7 @@ interface UiMessage {
   ok?: boolean;
 }
 
-const SLASH_COMMANDS = ["/model", "/models", "/new", "/resume", "/rename", "/context", "/cost", "/config", "/doctor", "/diff", "/commit", "/commit-push-pr", "/branch", "/issue", "/pr-comments", "/review", "/security-review", "/autofix-pr", "/explore", "/agents", "/skills", "/workflows", "/ultraplan", "/bg", "/plugins", "/provider", "/plan", "/verify", "/bench", "/log", "/mcp", "/help", "/compact", "/about", "/exit"];
+const SLASH_COMMANDS = ["/model", "/models", "/new", "/resume", "/rename", "/context", "/cost", "/config", "/doctor", "/diff", "/commit", "/commit-push-pr", "/branch", "/issue", "/pr-comments", "/review", "/security-review", "/autofix-pr", "/explore", "/agents", "/skills", "/learn", "/workflows", "/ultraplan", "/bg", "/plugins", "/provider", "/plan", "/verify", "/bench", "/log", "/mcp", "/help", "/compact", "/about", "/exit"];
 
 // Spinner frames — proof of life while a turn runs. Not the braille snake every
 // other CLI ships: this is Bubo's eye. He holds your gaze, glances right, glances
@@ -112,6 +114,7 @@ const COMMAND_DESC: Record<string, string> = {
   "/workflows": "list or run a multi-agent workflow (/workflows [name] [input])",
   "/ultraplan": "freecode composes a multi-agent workflow for a task and runs it (/ultraplan <task>)",
   "/bg": "run a prompt as a detached background job, or list jobs (/bg [prompt])",
+  "/learn": "propose durable improvements from this session (/learn, then /learn save <n|all>)",
   "/plugins": "list/install/uninstall/enable/disable plugins (/plugins install <git-url|path>)",
   "/verify": "run the project's checks",
   "/bench": "race the performance ghost",
@@ -401,6 +404,8 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   const [picker, setPicker] = useState<{ items: SessionMeta[]; idx: number } | null>(null);
   // Interactive model picker: when open, ↑/↓ choose and Enter switches.
   const [modelPicker, setModelPicker] = useState<{ items: string[]; idx: number } | null>(null);
+  // Self-improvement: proposals from the last /learn, awaiting /learn save <n|all>.
+  const learnProposalsRef = useRef<Proposal[]>([]);
   // Approval prompts are QUEUED, not held in a single slot. Parallel sub-agents
   // (a workflow fan-out) can each need approval at the same instant; a lone
   // resolver let the second prompt clobber the first, orphaning its promise so
@@ -865,6 +870,63 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         const lines = skills.map((s) => `  ${s.name} (${s.source}) — ${s.description}`);
         setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text:
           `Skills (the agent loads these on demand via the Skill tool):\n${lines.join("\n")}` }]);
+        break;
+      }
+      case "/learn": {
+        const sub = arg.trim();
+        // /learn save <n|all> — apply previously-proposed artifacts.
+        if (sub.startsWith("save")) {
+          const pick = sub.slice(4).trim();
+          const proposals = learnProposalsRef.current;
+          if (!proposals.length) { setErrorLine("Nothing to save — run /learn first."); break; }
+          const chosen = pick === "all"
+            ? proposals.map((_, i) => i)
+            : pick.split(/[\s,]+/).map((n) => Number(n) - 1).filter((i) => i >= 0 && i < proposals.length);
+          if (!chosen.length) { setErrorLine("Usage: /learn save <n|all> (e.g. /learn save 1 3)"); break; }
+          const done: string[] = [];
+          for (const i of chosen) {
+            try {
+              const r = applyProposal(proposals[i]!, process.cwd());
+              done.push(`  ✓ ${proposals[i]!.kind} → ${r.path}`);
+              logActivity(`LEARN saved ${proposals[i]!.kind} "${proposals[i]!.name}"`);
+            } catch (err) {
+              done.push(`  ✗ ${proposals[i]!.name}: ${err instanceof Error ? err.message : String(err)}`);
+            }
+          }
+          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text:
+            `Saved:\n${done.join("\n")}\n\nActive next session (rules) / on demand (skills).` }]);
+          break;
+        }
+        // /learn — analyze this session and propose durable improvements.
+        const history = conversationRef.current;
+        if (history.length < 2) { setErrorLine("Not enough conversation yet to learn from."); break; }
+        setBusy(true);
+        setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "◓ Reviewing this session for durable improvements…" }]);
+        try {
+          const transcript = transcriptFromMessages(history);
+          let activityTail: string | undefined;
+          try {
+            const st = activityState();
+            if (st.on) activityTail = readFileForLearn(st.path, "utf8").split("\n").slice(-60).join("\n");
+          } catch { /* no log — fine */ }
+          const raw = await analyzeSession(provider, model, { transcript, activityTail });
+          const existing = resolveSkills(process.cwd()).map((s) => s.name);
+          const proposals = dedupeProposals(raw, existing);
+          learnProposalsRef.current = proposals;
+          if (!proposals.length) {
+            setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "Nothing worth saving from this session — no proposals. (That's a fine outcome.)" }]);
+            break;
+          }
+          const blocks = proposals.map((p, i) =>
+            `${i + 1}. [${p.kind}] ${p.name} — ${p.description}\n     ${p.body.replace(/\s+/g, " ").trim().slice(0, 160)}\n     evidence: ${p.evidence[0]?.slice(0, 100) ?? ""}`,
+          );
+          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text:
+            `freecode proposes ${proposals.length} improvement${proposals.length > 1 ? "s" : ""} (nothing is saved until you say so):\n\n${blocks.join("\n\n")}\n\nSave with /learn save <n|all> — e.g. /learn save 1` }]);
+        } catch (err) {
+          setErrorLine(`/learn failed: ${err instanceof Error ? err.message : String(err)}`);
+        } finally {
+          setBusy(false);
+        }
         break;
       }
       case "/plugin": // singular alias
