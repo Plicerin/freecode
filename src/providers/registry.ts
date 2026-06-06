@@ -6,6 +6,9 @@ import { GeminiProvider } from "./gemini";
 import { UnimplementedProvider } from "./unimplemented";
 import type { ResolvedConfig } from "../config/schema";
 import { debug } from "../utils/debug";
+import { loadTokens } from "../auth/store";
+import { ANTHROPIC_OAUTH_BETAS } from "../auth/anthropic-oauth";
+import { isExpired } from "../auth/oauth";
 
 /** OpenAI-compatible endpoints live under /v1; ensure the base URL has it. */
 function ensureV1(url: string): string {
@@ -18,8 +21,22 @@ export function buildProvider(config: ResolvedConfig): Provider {
   debug.log("building provider", { provider, baseUrl, hasKey: !!apiKey, model });
 
   switch (provider) {
-    case "anthropic":
+    case "anthropic": {
+      // Prefer a "Sign in with Claude" (Pro/Max subscription) token if present
+      // and no explicit API key was forced — Bearer + anthropic-beta, no x-api-key.
+      if (!apiKey) {
+        try {
+          const tokens = loadTokens("anthropic");
+          if (tokens?.accessToken) {
+            if (isExpired(tokens, Date.now())) {
+              debug.warn("anthropic OAuth token expired — run `freecode auth refresh anthropic`");
+            }
+            return new AnthropicProvider({ baseUrl, oauthToken: tokens.accessToken, betaHeader: ANTHROPIC_OAUTH_BETAS });
+          }
+        } catch { /* fall through to api-key mode */ }
+      }
       return new AnthropicProvider({ apiKey, baseUrl });
+    }
     case "openai":
       return new OpenAICompatProvider("openai", "OpenAI", {
         apiKey,

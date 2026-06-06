@@ -100,9 +100,19 @@ export function toAnthropicMessages(messages: ChatMessage[]): Array<{ role: "use
 interface AnthropicOptions {
   apiKey?: string;
   baseUrl?: string;
+  /** OAuth (Pro/Max subscription) access token. When set, the provider uses
+   *  `Authorization: Bearer` + `anthropic-beta` and omits x-api-key. */
+  oauthToken?: string;
+  /** Comma-separated anthropic-beta flags to send in OAuth mode. */
+  betaHeader?: string;
 }
 
 const DEFAULT_BASE = "https://api.anthropic.com";
+
+// OAuth (subscription) tokens are rejected unless the request identifies itself
+// as Claude Code — the system prompt must lead with this exact line. Harmless if
+// the requirement ever relaxes; fatal (401/403) if it's needed and absent.
+const CLAUDE_CODE_SYSTEM = "You are Claude Code, Anthropic's official CLI for Claude.";
 
 interface ApiEvent {
   type: string;
@@ -120,18 +130,32 @@ export class AnthropicProvider implements Provider {
   readonly name = "Anthropic";
   private readonly apiKey?: string;
   private readonly baseUrl: string;
+  private readonly oauthToken?: string;
+  private readonly betaHeader?: string;
 
   constructor(opts: AnthropicOptions = {}) {
     this.apiKey = opts.apiKey;
     this.baseUrl = (opts.baseUrl ?? DEFAULT_BASE).replace(/\/+$/, "");
+    this.oauthToken = opts.oauthToken;
+    this.betaHeader = opts.betaHeader;
+  }
+
+  /** Auth headers: Bearer + anthropic-beta in OAuth mode, else x-api-key. */
+  private authHeaders(): Record<string, string> {
+    if (this.oauthToken) {
+      const h: Record<string, string> = { authorization: `Bearer ${this.oauthToken}` };
+      if (this.betaHeader) h["anthropic-beta"] = this.betaHeader;
+      return h;
+    }
+    return this.apiKey ? { "x-api-key": this.apiKey } : {};
   }
 
   async models(): Promise<string[]> {
     const fallback = ["claude-sonnet-4-5", "claude-opus-4-1", "claude-haiku-4-5"];
-    if (!this.apiKey) return fallback;
+    if (!this.apiKey && !this.oauthToken) return fallback;
     try {
       const resp = await fetch(`${this.baseUrl}/v1/models?limit=1000`, {
-        headers: { "x-api-key": this.apiKey, "anthropic-version": "2023-06-01" },
+        headers: { ...this.authHeaders(), "anthropic-version": "2023-06-01" },
         signal: AbortSignal.timeout(8000),
       });
       if (!resp.ok) return fallback;
@@ -144,12 +168,17 @@ export class AnthropicProvider implements Provider {
   }
 
   async *stream(req: ChatRequest): AsyncIterable<StreamEvent> {
-    if (!this.apiKey) {
-      yield { type: "error", error: makeError("anthropic", "ANTHROPIC_API_KEY not set", "missing_api_key") };
+    if (!this.apiKey && !this.oauthToken) {
+      yield { type: "error", error: makeError("anthropic", "ANTHROPIC_API_KEY not set (or sign in: freecode auth login anthropic)", "missing_api_key") };
       return;
     }
     const url = `${this.baseUrl}/v1/messages`;
-    const body = buildAnthropicBody(req);
+    // OAuth (subscription) requires the Claude Code identity to lead the system
+    // prompt, or the token is rejected. Prepend it once, in OAuth mode only.
+    const effectiveReq = this.oauthToken
+      ? { ...req, system: req.system && req.system.startsWith(CLAUDE_CODE_SYSTEM) ? req.system : `${CLAUDE_CODE_SYSTEM}\n\n${req.system ?? ""}`.trimEnd() }
+      : req;
+    const body = buildAnthropicBody(effectiveReq);
     debug.log("anthropic request", { url, model: req.model });
     // Idle watchdog — abort if the stream goes silent (see stall-timeout.ts).
     const idleMs = streamIdleMs();
@@ -162,8 +191,8 @@ export class AnthropicProvider implements Provider {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          "x-api-key": this.apiKey,
           "anthropic-version": "2023-06-01",
+          ...this.authHeaders(),
         },
         body: JSON.stringify(body),
         signal: watchdog.signal,

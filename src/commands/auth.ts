@@ -75,6 +75,22 @@ function open(): Vault {
   }
 }
 
+/** Read one visible line from stdin (for pasting an OAuth code). */
+function promptLine(question: string): Promise<string> {
+  return new Promise((resolve) => {
+    process.stdout.write(question);
+    const stdin = process.stdin;
+    stdin.resume();
+    const onData = (chunk: Buffer): void => {
+      const line = chunk.toString("utf8").split(/[\r\n]/)[0] ?? "";
+      stdin.pause();
+      stdin.off("data", onData);
+      resolve(line.trim());
+    };
+    stdin.on("data", onData);
+  });
+}
+
 /** `freecode auth <set|list|remove> [provider]` */
 export async function runAuth(args: string[]): Promise<void> {
   const [action, provider] = args;
@@ -110,48 +126,55 @@ export async function runAuth(args: string[]): Promise<void> {
       break;
     }
     case "login": {
-      // Currently only OpenAI ("Sign in with ChatGPT"). Default to it.
-      const target = provider ?? "openai";
-      if (target !== "openai") fail(`OAuth login is only supported for "openai" right now (got "${target}").`);
-      const { loginOpenAI } = await import("../auth/login");
+      const target = provider ?? "anthropic"; // default to Sign in with Claude
+      const auth = await import("../auth/login");
       try {
-        await loginOpenAI();
+        if (target === "openai") await auth.loginOpenAI();
+        else if (target === "anthropic") await auth.loginAnthropic({ readCode: () => promptLine("Paste the authorization code: ") });
+        else fail(`OAuth login supports "anthropic" or "openai" (got "${target}").`);
       } catch (err) {
         fail(`Login failed: ${err instanceof Error ? err.message : String(err)}`);
       }
       break;
     }
     case "refresh": {
-      const { refreshOpenAI } = await import("../auth/login");
+      const target = provider ?? "anthropic";
+      const auth = await import("../auth/login");
       try {
-        await refreshOpenAI();
-        process.stdout.write("✓ Refreshed the OpenAI key from your ChatGPT session.\n");
+        if (target === "openai") { await auth.refreshOpenAI(); process.stdout.write("✓ Refreshed the OpenAI key.\n"); }
+        else if (target === "anthropic") { await auth.refreshAnthropic(); process.stdout.write("✓ Refreshed your Claude subscription token.\n"); }
+        else fail(`Refresh supports "anthropic" or "openai" (got "${target}").`);
       } catch (err) {
         fail(`Refresh failed: ${err instanceof Error ? err.message : String(err)}`);
       }
       break;
     }
     case "logout": {
-      const target = provider ?? "openai";
-      const { logoutOpenAI } = await import("../auth/login");
-      if (target === "openai") logoutOpenAI();
-      process.stdout.write(`✓ Signed out of ${target} (OAuth tokens cleared). Remove a stored API key with: freecode auth remove ${target}\n`);
+      const target = provider ?? "anthropic";
+      const auth = await import("../auth/login");
+      if (target === "openai") auth.logoutOpenAI();
+      else if (target === "anthropic") auth.logoutAnthropic();
+      else fail(`Logout supports "anthropic" or "openai" (got "${target}").`);
+      process.stdout.write(`✓ Signed out of ${target} (OAuth tokens cleared).\n`);
       break;
     }
     case "status": {
       const { hasTokens, loadTokens } = await import("../auth/store");
       const vault = open();
-      const oauth = hasTokens("openai", vault);
-      const key = !!vault.get("openai");
-      process.stdout.write(`OpenAI: ${oauth ? "signed in with ChatGPT (OAuth)" : key ? "API key set" : "not configured"}.\n`);
-      if (oauth) {
-        const t = loadTokens("openai", vault);
-        const exp = t?.expiresAt ? new Date(t.expiresAt).toISOString() : "n/a";
-        process.stdout.write(`  access token expires: ${exp}; refresh token: ${t?.refreshToken ? "present" : "none"}\n`);
+      for (const p of ["anthropic", "openai"]) {
+        const oauth = hasTokens(p, vault);
+        const key = !!vault.get(p);
+        const word = p === "anthropic" ? "Claude (Pro/Max)" : "ChatGPT";
+        process.stdout.write(`${p}: ${oauth ? `signed in with ${word} (OAuth)` : key ? "API key set" : "not configured"}.\n`);
+        if (oauth) {
+          const t = loadTokens(p, vault);
+          const exp = t?.expiresAt ? new Date(t.expiresAt).toISOString() : "n/a";
+          process.stdout.write(`  access token expires: ${exp}; refresh token: ${t?.refreshToken ? "present" : "none"}\n`);
+        }
       }
       break;
     }
     default:
-      process.stdout.write("Usage: freecode auth <set|list|remove|login|logout|status|onboard> [provider]\n  login [openai]   Sign in with ChatGPT (OAuth) and store a minted API key\n  status           Show OpenAI auth state\nKeys are stored encrypted in ~/.freecode/vault.json (auto-unlocks via ~/.freecode/vault.key).\n");
+      process.stdout.write("Usage: freecode auth <set|list|remove|login|logout|status|refresh|onboard> [provider]\n  login [anthropic|openai]   anthropic = Sign in with Claude (Pro/Max subscription); openai = Sign in with ChatGPT\n  status                     Show OAuth/key state for both\nKeys & tokens are stored encrypted in ~/.freecode/vault.json.\n");
   }
 }
