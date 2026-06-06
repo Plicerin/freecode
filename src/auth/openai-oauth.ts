@@ -30,7 +30,9 @@ export function openAiOAuthConfig(): OAuthConfig {
     tokenUrl: `${ISSUER}/oauth/token`,
     clientId,
     redirectUri: `http://localhost:${oauthPort()}/auth/callback`,
-    scopes: ["openid", "profile", "email", "offline_access"],
+    // Must match codex's registered scope set exactly — omitting the connectors
+    // scopes makes auth.openai.com reject the request (missing_required_parameter).
+    scopes: ["openid", "profile", "email", "offline_access", "api.connectors.read", "api.connectors.invoke"],
     extraAuthParams: {
       id_token_add_organizations: "true",
       codex_cli_simplified_flow: "true",
