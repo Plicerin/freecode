@@ -15,6 +15,9 @@ import { filterChatModels, pickerWindow } from "../tui/model-picker";
 import { matchCommands, resolveSubmit } from "../tui/slash-complete";
 import { createApprovalQueue } from "../tui/approval-queue";
 import { resolvePlugins, setPluginEnabled, installPlugin, uninstallPlugin } from "../plugins";
+import { startBackground } from "../background/runner";
+import { reapJobs } from "../background/registry";
+import { formatJobLine } from "./background-cli";
 import { ContextTracker } from "../agent/context";
 import { priceFor, contextWindowFor } from "../agent/pricing";
 import { extractAttachments } from "../agent/attachments";
@@ -53,7 +56,7 @@ interface UiMessage {
   ok?: boolean;
 }
 
-const SLASH_COMMANDS = ["/model", "/models", "/new", "/resume", "/rename", "/context", "/cost", "/config", "/doctor", "/diff", "/commit", "/commit-push-pr", "/branch", "/issue", "/pr-comments", "/review", "/security-review", "/autofix-pr", "/explore", "/agents", "/skills", "/workflows", "/ultraplan", "/plugins", "/provider", "/plan", "/verify", "/bench", "/log", "/mcp", "/help", "/compact", "/about", "/exit"];
+const SLASH_COMMANDS = ["/model", "/models", "/new", "/resume", "/rename", "/context", "/cost", "/config", "/doctor", "/diff", "/commit", "/commit-push-pr", "/branch", "/issue", "/pr-comments", "/review", "/security-review", "/autofix-pr", "/explore", "/agents", "/skills", "/workflows", "/ultraplan", "/bg", "/plugins", "/provider", "/plan", "/verify", "/bench", "/log", "/mcp", "/help", "/compact", "/about", "/exit"];
 
 // Spinner frames — proof of life while a turn runs. Not the braille snake every
 // other CLI ships: this is Bubo's eye. He holds your gaze, glances right, glances
@@ -108,6 +111,7 @@ const COMMAND_DESC: Record<string, string> = {
   "/skills": "list available project skills",
   "/workflows": "list or run a multi-agent workflow (/workflows [name] [input])",
   "/ultraplan": "freecode composes a multi-agent workflow for a task and runs it (/ultraplan <task>)",
+  "/bg": "run a prompt as a detached background job, or list jobs (/bg [prompt])",
   "/plugins": "list/install/uninstall/enable/disable plugins (/plugins install <git-url|path>)",
   "/verify": "run the project's checks",
   "/bench": "race the performance ghost",
@@ -998,6 +1002,28 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         } finally {
           setBusy(false);
         }
+        break;
+      }
+      case "/bg": {
+        const task = arg.trim();
+        if (task) {
+          try {
+            const job = startBackground(task, { provider: config.provider, model });
+            setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text:
+              `▷ Background job ${job.id} started (pid ${job.pid ?? "?"}). It runs detached — keep working.\n  /bg to list · freecode bg logs ${job.id} to follow.` }]);
+          } catch (err) {
+            setErrorLine(`Could not start background job: ${err instanceof Error ? err.message : String(err)}`);
+          }
+          break;
+        }
+        const jobs = reapJobs();
+        if (!jobs.length) {
+          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "No background jobs. Start one with /bg <prompt>." }]);
+          break;
+        }
+        const running = jobs.filter((j) => j.status === "running").length;
+        setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text:
+          `Background jobs (${jobs.length}, ${running} running):\n${jobs.map((j) => `  ${formatJobLine(j)}`).join("\n")}` }]);
         break;
       }
       case "/provider": {

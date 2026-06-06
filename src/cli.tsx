@@ -1,15 +1,6 @@
 import { Command } from "commander";
-import { loadConfig, type CliFlags } from "./config/loader";
-import { buildProvider } from "./providers/registry";
-import { buildToolRegistry } from "./tools/registry";
-import { createPermissionEngine } from "./permissions/modes";
-import { runAgentLoop } from "./agent/loop";
-import { contextWindowFor } from "./agent/pricing";
-import { resolveVerify, resolveQuickVerify } from "./agent/verify";
-import { newSession, appendEvent, resumeSession, type Session } from "./session/manager";
-import { type ApprovalCallback } from "./permissions/modes";
+import { type CliFlags } from "./config/loader";
 import { debug } from "./utils/debug";
-import { setTimeout as wait } from "node:timers/promises";
 
 interface ParsedArgs {
   prompt?: string;
@@ -27,6 +18,7 @@ interface ParsedArgs {
   webSearchProvider?: "duckduckgo" | "tavily" | "exa" | "firecrawl";
   thinking?: boolean;
   verifyMode?: "off" | "on" | "strict";
+  bg?: boolean;
 }
 
 const program = new Command();
@@ -48,7 +40,8 @@ program
   .option("--max-turns <n>", "Maximum agent loop turns", (v) => Number.parseInt(v, 10))
   .option("--web-search <provider>", "duckduckgo|tavily|exa|firecrawl")
   .option("--thinking", "Enable extended thinking / reasoning", false)
-  .option("--verify-mode <mode>", "off|on|strict (auto-verify after changes)");
+  .option("--verify-mode <mode>", "off|on|strict (auto-verify after changes)")
+  .option("--bg", "Run the prompt as a detached background job and exit", false);
 
 async function main(): Promise<void> {
   // `freecode auth …` manages the encrypted key vault (handled before commander).
@@ -68,6 +61,18 @@ async function main(): Promise<void> {
     const { startRepl } = await import("./commands/repl");
     await startRepl({ resumeId: process.argv[3], flags: {} });
     return;
+  }
+  // `freecode bg-exec <id>` — the hidden worker the detached background child re-enters.
+  if (process.argv[2] === "bg-exec") {
+    const { runBgExec } = await import("./commands/background-cli");
+    await runBgExec(process.argv.slice(3));
+    return;
+  }
+  // `freecode bg <run|list|logs|status|stop>` — manage background jobs.
+  if (process.argv[2] === "bg" || process.argv[2] === "agents") {
+    const { runBackgroundCommand } = await import("./commands/background-cli");
+    const code = await runBackgroundCommand(process.argv.slice(3), {});
+    process.exit(code);
   }
   await program.parseAsync(process.argv);
   const opts = program.opts<ParsedArgs>();
@@ -93,6 +98,18 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (opts.bg) {
+    const prompt = (opts.prompt ?? "").trim();
+    if (!prompt) {
+      console.error("--bg requires --prompt <text>");
+      process.exit(2);
+    }
+    const { startBackground } = await import("./background/runner");
+    const job = startBackground(prompt, flags);
+    console.log(`Started background job ${job.id} (pid ${job.pid ?? "?"}). Follow: freecode bg logs ${job.id}`);
+    return;
+  }
+
   if (opts.print) {
     const prompt = (opts.prompt ?? "").trim();
     if (!prompt) {
@@ -108,95 +125,13 @@ async function main(): Promise<void> {
 }
 
 async function runPrint({ prompt, flags }: { prompt: string; flags: CliFlags }): Promise<void> {
-  const config = loadConfig({ flags });
-  const provider = buildProvider(config);
-  const tools = buildToolRegistry({
-    webSearch: {
-      tavilyKey: process.env.TAVILY_API_KEY,
-      exaKey: process.env.EXA_API_KEY,
-      firecrawlKey: process.env.FIRECRAWL_API_KEY,
-      defaultBackend: config.webSearchProvider,
-    },
+  const { runHeadless } = await import("./agent/headless");
+  await runHeadless({
+    prompt,
+    flags,
+    sink: (chunk, stream) => (stream === "out" ? process.stdout : process.stderr).write(chunk),
   });
-
-  const { McpManager } = await import("./mcp/manager");
-  const mcp = new McpManager();
-  await mcp.startAll(config.mcpServers);
-  const summary = mcp.summary();
-  if (summary) process.stderr.write(`[${summary}]\n`);
-  tools.push(...mcp.tools);
-
-  const { extractAttachments } = await import("./agent/attachments");
-  const { images, files, notes } = extractAttachments(prompt, process.cwd());
-  for (const n of notes) process.stderr.write(`[attachment] ${n}\n`);
-  const effectivePrompt = files.length
-    ? prompt + "\n\n" + files.map((f) => `Contents of ${f.path}:\n\`\`\`\n${f.content}\n\`\`\``).join("\n\n")
-    : prompt;
-
-  const cwd = process.cwd();
-  const session: Session = opts_or_new(flags.resume, cwd);
-  appendEvent(session, { kind: "user", text: prompt, ts: new Date().toISOString() });
-  const permission = createPermissionEngine(config.permissionMode, (async () => "allow") as ApprovalCallback);
-
-  // Sub-agents (Tier A): the headless run can dispatch them too.
-  const { createAgentTool } = await import("./tools/agent");
-  const headlessPromptUser = (async () => "allow") as ApprovalCallback;
-  tools.push(createAgentTool(() => ({
-    provider, model: config.model, tools, permission, promptUser: headlessPromptUser,
-    hooks: config.hooks, contextWindow: contextWindowFor(config.model),
-  })));
-
-  try {
-    await runAgentLoop({
-      provider,
-      tools,
-      model: config.model,
-      maxTurns: config.maxTurns,
-      prompt: effectivePrompt,
-      images,
-      contextWindow: contextWindowFor(config.model),
-      contextThreshold: config.contextThreshold,
-      enablePromptCache: config.enablePromptCache,
-      enableExtendedThinking: config.enableExtendedThinking,
-      hooks: config.hooks,
-      verifyMode: config.verifyMode,
-      verifyPlan: config.verifyMode === "strict" ? resolveVerify(cwd, config.verify) : config.verifyMode === "on" ? resolveQuickVerify(cwd) : undefined,
-      permission,
-      promptUser: (async () => "allow") as ApprovalCallback,
-      onEvent: (e) => {
-        if (e.type === "text_delta" && e.text) {
-          process.stdout.write(e.text);
-        } else if (e.type === "tool_call" && e.call) {
-          process.stderr.write(`\n[tool] ${e.call.name}(${JSON.stringify(e.call.arguments).slice(0, 120)})\n`);
-        } else if (e.type === "tool_result" && e.result) {
-          process.stderr.write(`[result] ok=${e.result.ok} bytes=${e.result.output.length}\n`);
-        } else if (e.type === "compacted" && e.text) {
-          process.stderr.write(`\n[${e.text}]\n`);
-        } else if (e.type === "verify" && e.text) {
-          process.stderr.write(`\n${e.text}\n`);
-        } else if (e.type === "ledger" && e.ledger) {
-          const L = e.ledger;
-          if (L.verified.length) process.stderr.write(`\n✓ verified  ${L.verified.join("; ")}`);
-          if (L.observed.length) process.stderr.write(`\n· observed  ${L.observed.join("; ")}`);
-          if (L.believed.length) process.stderr.write(`\n~ believed  ${L.believed.join("; ")}`);
-          process.stderr.write("\n");
-        } else if (e.type === "error" && e.error) {
-          process.stderr.write(`\n[error] ${e.error}\n`);
-        }
-      },
-    });
-    process.stdout.write("\n");
-  } finally {
-    await mcp.stopAll();
-  }
-}
-
-function opts_or_new(resumeId: string | undefined, cwd: string): Session {
-  if (resumeId) {
-    const s = resumeSession(cwd, resumeId);
-    if (s) return s;
-  }
-  return newSession(cwd);
+  process.stdout.write("\n");
 }
 
 main().catch((err) => {
