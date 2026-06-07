@@ -21,18 +21,23 @@ const LOCAL_PROVIDERS = new Set(["ollama", "lmstudio", "mock"]);
 // Approximate public list prices (USD per 1M tokens). Match by substring so
 // version suffixes (dates, sizes) still resolve. Order matters: most specific
 // patterns first.
+// USD per 1M tokens. input/output for Anthropic are VERIFIED (platform.claude.com,
+// 2026-06); cache rates are Anthropic's standard 0.1x read / 1.25x write of input
+// (derived, not separately re-checked). OpenAI/Gemini rows are prior approximations
+// (marked "approx") — not re-verified 2026-06.
 const TABLE: Array<{ match: RegExp; price: ModelPrice }> = [
-  // Anthropic Claude
-  { match: /opus/i, price: { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 } },
-  { match: /sonnet/i, price: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 } },
-  { match: /haiku/i, price: { input: 0.8, output: 4, cacheRead: 0.08, cacheWrite: 1 } },
-  // OpenAI
+  // Anthropic Claude — pricing is version-specific, like the context windows.
+  { match: /opus-4-[5678]/i, price: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 } },   // Opus 4.5–4.8: verified $5/$25
+  { match: /opus/i, price: { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 } },           // Opus 4.1/4.0 + fallback: verified $15/$75
+  { match: /sonnet/i, price: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 } },           // verified $3/$15
+  { match: /haiku/i, price: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 } },             // Haiku 4.5: verified $1/$5
+  // OpenAI — approx (not re-verified 2026-06)
   { match: /gpt-4o-mini/i, price: { input: 0.15, output: 0.6, cacheRead: 0.075 } },
   { match: /gpt-4o/i, price: { input: 2.5, output: 10, cacheRead: 1.25 } },
   { match: /gpt-4\.1-mini/i, price: { input: 0.4, output: 1.6 } },
   { match: /gpt-4\.1/i, price: { input: 2, output: 8 } },
   { match: /(^|[^a-z])(o3-mini|o4-mini)/i, price: { input: 1.1, output: 4.4 } },
-  // Google Gemini
+  // Google Gemini — approx / UNVERIFIED (docs JS-rendered)
   { match: /gemini.*flash/i, price: { input: 0.1, output: 0.4 } },
   { match: /gemini.*pro/i, price: { input: 1.25, output: 5 } },
 ];

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FileReadTool } from "../src/tools/file-read";
 import { extractAttachments } from "../src/agent/attachments";
-import { contextWindowFor } from "../src/agent/pricing";
+import { contextWindowFor, priceFor } from "../src/agent/pricing";
 
 describe("FileRead binary detection", () => {
   it("errors on a file with NUL bytes", async () => {
@@ -62,6 +62,17 @@ describe("contextWindowFor", () => {
     } finally {
       delete process.env.FREECODE_CONTEXT_WINDOW;
     }
+  });
+});
+
+describe("priceFor (Anthropic verified 2026-06)", () => {
+  it("Anthropic pricing is version-specific", () => {
+    // Opus 4.5–4.8 dropped to $5/$25; 4.1/4.0 stay $15/$75.
+    expect(priceFor("claude-opus-4-8")).toMatchObject({ input: 5, output: 25 });
+    expect(priceFor("claude-opus-4-5")).toMatchObject({ input: 5, output: 25 });
+    expect(priceFor("claude-opus-4-1")).toMatchObject({ input: 15, output: 75 });
+    expect(priceFor("claude-sonnet-4-6")).toMatchObject({ input: 3, output: 15 });
+    expect(priceFor("claude-haiku-4-5")).toMatchObject({ input: 1, output: 5 });
   });
 });
 
