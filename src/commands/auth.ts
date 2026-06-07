@@ -130,7 +130,10 @@ export async function runAuth(args: string[]): Promise<void> {
       const auth = await import("../auth/login");
       try {
         if (target === "openai") await auth.loginOpenAI();
-        else if (target === "anthropic") await auth.loginAnthropic({ readCode: () => promptLine("Paste the authorization code: ") });
+        else if (target === "anthropic") {
+          process.stdout.write("⚠ Experimental: Anthropic's subscription OAuth is mid-migration (console→platform) and currently fails with \"invalid request format\".\n  For a reliable setup use an API key instead:  freecode auth set anthropic\n  Continuing anyway…\n\n");
+          await auth.loginAnthropic({ readCode: () => promptLine("Paste the authorization code: ") });
+        }
         else fail(`OAuth login supports "anthropic" or "openai" (got "${target}").`);
       } catch (err) {
         fail(`Login failed: ${err instanceof Error ? err.message : String(err)}`);

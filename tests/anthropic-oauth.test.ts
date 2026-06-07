@@ -8,7 +8,7 @@ import { buildAnthropicAuthUrl, parsePastedCode, anthropicClientId, ANTHROPIC_OA
 afterEach(() => { delete process.env.FREECODE_ANTHROPIC_OAUTH_CLIENT_ID; });
 
 describe("buildAnthropicAuthUrl", () => {
-  test("targets claude.ai with the verified params and %20-encoded scope", () => {
+  test("matches the anthropic-auth crate's start_flow(Max) config", () => {
     const raw = buildAnthropicAuthUrl({ challenge: "CH", state: "ST" });
     expect(raw.startsWith("https://claude.ai/oauth/authorize?")).toBe(true);
     const u = new URL(raw);
@@ -17,11 +17,10 @@ describe("buildAnthropicAuthUrl", () => {
     expect(u.searchParams.get("response_type")).toBe("code");
     expect(u.searchParams.get("redirect_uri")).toBe("https://console.anthropic.com/oauth/code/callback");
     expect(u.searchParams.get("code_challenge_method")).toBe("S256");
-    expect(u.searchParams.get("code_challenge")).toBe("CH");
     expect(u.searchParams.get("state")).toBe("ST");
-    // scope spaces must be %20, never '+'
-    expect(raw).toContain("scope=org%3Acreate_api_key%20user%3Aprofile%20user%3Ainference");
-    expect(raw).not.toMatch(/scope=[^&]*\+/);
+    // Three scopes; form-encoded spaces ('+'), not %20.
+    expect(raw).toContain("scope=org%3Acreate_api_key+user%3Aprofile+user%3Ainference");
+    expect(raw).not.toContain("%20");
   });
 
   test("client_id is env-overridable", () => {

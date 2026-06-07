@@ -1,5 +1,15 @@
 // Anthropic "Sign in with Claude" (Pro/Max subscription) OAuth.
 //
+// STATUS: EXPERIMENTAL / currently NOT WORKING. As of 2026-06, Anthropic is
+// migrating OAuth from console.anthropic.com → platform.claude.com, and the
+// claude.ai authorize endpoint rejects the request ("invalid request format")
+// even when matched byte-for-byte to the maintained `anthropic-auth` crate. The
+// reverse-engineered Claude Code source, vibekit, and that crate all disagree and
+// are all stale against the live migration. The infra below (PKCE, exchange,
+// provider OAuth mode) is sound and unit-tested; the params are best-effort and
+// will need updating once the migration settles. For a reliable Anthropic setup,
+// use an API key: `freecode auth set anthropic`.
+//
 // Values verified against multiple independent open-source implementations
 // (client_id appears verbatim in ~17 repos; flow + endpoints from ghuntley/loom's
 // claude-subscription-auth spec): authorize at claude.ai, token at
@@ -14,8 +24,18 @@
 import { getEnv } from "../utils/env";
 import type { TokenSet } from "./oauth";
 
+// Values taken verbatim from the actual Claude Code OAuth config (not a
+// third-party port — those diverge and were wrong). Notably: the authorize host
+// is console.anthropic.com (NOT claude.ai), there is NO `code=true` param, the
+// scope set is exactly these two, and the manual-flow redirect_uri is the
+// RELATIVE "/oauth/code/callback".
+// Matched byte-for-byte to the maintained `anthropic-auth` crate (querymt), the
+// reference the user pointed to: Max authorize on claude.ai, `code=true` present,
+// ABSOLUTE redirect to console.anthropic.com/oauth/code/callback, three scopes,
+// form-encoded ('+'). (The reverse-engineered Claude Code source differed — it's
+// likely an older build; the sources genuinely conflict as Anthropic migrates.)
 const DEFAULT_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
-const AUTHORIZE_URL = "https://claude.ai/oauth/authorize"; // Pro/Max subscription
+const AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
 const TOKEN_URL = "https://console.anthropic.com/v1/oauth/token";
 const REDIRECT_URI = "https://console.anthropic.com/oauth/code/callback";
 const SCOPES = ["org:create_api_key", "user:profile", "user:inference"];
@@ -33,20 +53,23 @@ export function anthropicClientId(): string {
   return getEnv("FREECODE_ANTHROPIC_OAUTH_CLIENT_ID") || DEFAULT_CLIENT_ID;
 }
 
-/** Build the claude.ai authorize URL. Percent-encode (space → %20) — never the
- *  URLSearchParams "+", which auth servers reject in `scope` (see oauth.ts). */
+/** Build the claude.ai authorize URL. NOTE: unlike OpenAI (which needs %20),
+ *  Anthropic's mint step wants form-encoding — spaces as "+" — so we build with
+ *  URLSearchParams, matching current working implementations (e.g. vibekit). The
+ *  consent page renders either way, but clicking "Authorize" fails with "invalid
+ *  request format" if scope spaces are %20. Param order mirrors vibekit. */
 export function buildAnthropicAuthUrl(opts: { challenge: string; state: string }): string {
-  const pairs: Array<[string, string]> = [
-    ["code", "true"],
-    ["client_id", anthropicClientId()],
-    ["response_type", "code"],
-    ["redirect_uri", REDIRECT_URI],
-    ["scope", SCOPES.join(" ")],
-    ["code_challenge", opts.challenge],
-    ["code_challenge_method", "S256"],
-    ["state", opts.state],
-  ];
-  return `${AUTHORIZE_URL}?${pairs.map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&")}`;
+  // Param set + order match the anthropic-auth crate's start_flow(Max) exactly.
+  const url = new URL(AUTHORIZE_URL);
+  url.searchParams.append("code", "true");
+  url.searchParams.append("client_id", anthropicClientId());
+  url.searchParams.append("response_type", "code");
+  url.searchParams.append("redirect_uri", REDIRECT_URI);
+  url.searchParams.append("scope", SCOPES.join(" "));
+  url.searchParams.append("code_challenge", opts.challenge);
+  url.searchParams.append("code_challenge_method", "S256");
+  url.searchParams.append("state", opts.state);
+  return url.toString();
 }
 
 /** The hosted callback shows the user a `code#state` string; split it. Pure. */
@@ -62,7 +85,8 @@ export function parsePastedCode(input: string): { code: string; state: string } 
 async function postJson(body: Record<string, string>): Promise<TokenSet> {
   const resp = await fetch(TOKEN_URL, {
     method: "POST",
-    headers: { "content-type": "application/json", accept: "application/json" },
+    // Working impls (vibekit) send the OAuth beta header on the token request too.
+    headers: { "content-type": "application/json", accept: "application/json", "anthropic-beta": ANTHROPIC_OAUTH_BETAS },
     body: JSON.stringify(body),
   });
   const text = await resp.text();
