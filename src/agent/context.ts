@@ -31,6 +31,12 @@ export class ContextTracker extends EventEmitter {
     this.pricing = pricing;
   }
 
+  // The most recent turn's usage (NOT summed). `input` is the full prompt the
+  // provider saw — i.e. how full the context window currently is — so this is the
+  // right basis for the live context-fill gauge (and matches what the agent loop
+  // uses for its compaction threshold). `usage` above stays cumulative, for cost.
+  private last: { input: number; output: number } = { input: 0, output: 0 };
+
   record(u: TokenUsage): void {
     this.usage = {
       input: this.usage.input + u.input,
@@ -39,6 +45,7 @@ export class ContextTracker extends EventEmitter {
       cacheWrite: this.usage.cacheWrite + u.cacheWrite,
       thinking: this.usage.thinking + u.thinking,
     };
+    this.last = { input: u.input, output: u.output };
     this.emit("usage", this.usage);
   }
 
@@ -48,6 +55,26 @@ export class ContextTracker extends EventEmitter {
 
   utilization(): number {
     return this.totalUsed() / this.windowSize;
+  }
+
+  /** Tokens currently in the context window (latest turn's prompt + completion). */
+  contextTokens(): number {
+    return this.last.input + this.last.output;
+  }
+
+  /** How full the context window is now, clamped to [0, 1]. */
+  contextFill(): number {
+    return this.windowSize > 0 ? Math.min(1, this.contextTokens() / this.windowSize) : 0;
+  }
+
+  /** The model's context window size (tokens). */
+  window(): number {
+    return this.windowSize;
+  }
+
+  /** Update the window when the model changes (so the gauge stays accurate). */
+  setWindow(n: number): void {
+    if (n > 0) this.windowSize = n;
   }
 
   shouldCompact(): boolean {

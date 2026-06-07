@@ -23,6 +23,7 @@ import { ensureStat, listStats, decayCandidates, verifyTrend, pruneArtifact } fr
 import { readFileSync as readFileForLearn } from "node:fs";
 import { ContextTracker } from "../agent/context";
 import { priceFor, contextWindowFor } from "../agent/pricing";
+import { contextBar, contextTone, formatTokens } from "../tui/context-bar";
 import { extractAttachments } from "../agent/attachments";
 import { summarizeConversation } from "../agent/summarize";
 import { Vault } from "../config/vault";
@@ -351,6 +352,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   const trackerRef = useRef(
     new ContextTracker({
       threshold: config.contextThreshold,
+      windowSize: contextWindowFor(config.model),
       pricing: priceFor(config.model, config.provider),
     }),
   );
@@ -397,6 +399,8 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   const [showTasks, setShowTasks] = useState(false);
   const [errorLine, setErrorLine] = useState<string | null>(null);
   const [costUsd, setCostUsd] = useState(0);
+  const [ctxFill, setCtxFill] = useState(0); // 0..1 — how full the context window is
+  const [ctxTokens, setCtxTokens] = useState(0); // tokens currently in context
   const [confidence, setConfidence] = useState<Confidence>("unchecked");
   const [tick, setTick] = useState(0); // drives the spinner + Bubo's eyes while working
   const busyStartRef = useRef(0);
@@ -617,7 +621,11 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           } else if (e.type === "usage" && e.usage) {
             trackerRef.current.record(e.usage);
             setCostUsd(trackerRef.current.costUsd());
+            setCtxFill(trackerRef.current.contextFill());
+            setCtxTokens(trackerRef.current.contextTokens());
           } else if (e.type === "compacted" && e.text) {
+            setCtxFill(trackerRef.current.contextFill());
+            setCtxTokens(trackerRef.current.contextTokens());
             setMessages((prev) => [...prev, { id: `c-${Date.now()}`, role: "system", text: e.text! }]);
           } else if (e.type === "verify" && e.text) {
             if (/✓ Verified|passed/.test(e.text)) updateConfidence(() => "verified");
@@ -666,6 +674,8 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         if (arg) {
           setModel(arg);
           trackerRef.current.setPricing(priceFor(arg, config.provider));
+          trackerRef.current.setWindow(contextWindowFor(arg));
+          setCtxFill(trackerRef.current.contextFill());
           setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Model switched to ${arg} (provider: ${config.provider}). Active from your next message.` }]);
         } else {
           // No arg: open the interactive arrow-key picker (↑/↓ select, Enter
@@ -695,6 +705,8 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         conversationRef.current = [];
         setMessages([]);
         setCostUsd(0);
+        setCtxFill(0);
+        setCtxTokens(0);
         updateConfidence(() => "unchecked");
         setErrorLine(null);
         setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "New session started" }]);
@@ -1146,6 +1158,8 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           setConfig(newCfg);
           setModel(newCfg.model);
           trackerRef.current.setPricing(priceFor(newCfg.model, newCfg.provider));
+          trackerRef.current.setWindow(contextWindowFor(newCfg.model));
+          setCtxFill(trackerRef.current.contextFill());
           const local = ["ollama", "lmstudio", "mock"].includes(newCfg.provider);
           const text = !newCfg.apiKey && !local
             ? `Switched to ${arg} (model ${newCfg.model}) — but no API key found. Add one with:  freecode auth add ${arg}`
@@ -1295,6 +1309,8 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         if (sel) {
           setModel(sel);
           trackerRef.current.setPricing(priceFor(sel, config.provider));
+          trackerRef.current.setWindow(contextWindowFor(sel));
+          setCtxFill(trackerRef.current.contextFill());
           setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Model switched to ${sel} (provider: ${config.provider}). Active from your next message.` }]);
         }
         return;
@@ -1541,7 +1557,9 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         <Text>
           {planMode && <Text color={theme.hex.warning}>PLAN  </Text>}
           <ConfidenceBadge state={confidence} theme={theme} />
-          <Text dimColor>  · </Text>
+          <Text dimColor>  · ctx </Text>
+          <Text color={{ ok: theme.hex.success, warn: theme.hex.warning, crit: theme.hex.error }[contextTone(ctxFill)]}>{contextBar(ctxFill)}</Text>
+          <Text dimColor> {Math.round(ctxFill * 100)}%{ctxTokens > 0 ? ` (${formatTokens(ctxTokens)}/${formatTokens(trackerRef.current.window())})` : ""} · </Text>
           <Text color={theme.hex.assistant}>{model}</Text>
           <Text dimColor>  cost </Text>
           <Text color={theme.hex.success}>${costUsd.toFixed(4)}</Text>

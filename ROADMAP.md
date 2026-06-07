@@ -47,6 +47,7 @@ Agent loop + streaming · tools: Bash, Read/Write/Edit, Glob, Grep, ViewImage, W
 - [ ] **LSP integration** — `workspaceSymbol`, language-server ops.
 
 ## Tier C — observability/polish (cheap, good for momentum)
+- [x] **context-fill gauge** (`src/tui/context-bar.ts`, tested): a live footer bar — `ctx ▓▓▓▓▓░░░░░ 48% (96k/200k)` — of how full the model's context window is, based on the latest turn's prompt+completion (the same basis the loop uses for auto-compaction). Green → yellow (60%) → red (85%); follows model switches; resets on `/new`. 5 tests.
 - [ ] `/usage` · `/insights` · `/status` · `/effort` · `/fast` · `/feedback` · `/release-notes`
 - [ ] TUI niceties — thinking-block collapse, tool-output collapse, word-level diff rendering, OSC-8 hyperlinks, copy-on-select, jump-to-bottom
 
