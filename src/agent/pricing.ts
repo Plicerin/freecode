@@ -1,4 +1,5 @@
 import type { TokenUsage } from "../providers/types";
+import { getEnv } from "../utils/env";
 
 /** USD per 1,000,000 tokens. */
 export interface ModelPrice {
@@ -52,17 +53,37 @@ export function priceFor(model: string, provider?: string): ModelPrice {
  * Estimate USD cost for accumulated usage. Cached reads/writes are billed at
  * their own rates when the provider reports them separately from `input`.
  */
+// Context windows. First match wins, so version-specific rules precede generic
+// ones. Provenance is per-line: "verified <source> <date>" was confirmed against
+// official provider docs; "approx" is a best-effort value not (re)confirmed.
+// Override any of this at runtime with FREECODE_CONTEXT_WINDOW=<tokens>.
 const WINDOWS: Array<{ match: RegExp; window: number }> = [
-  { match: /gpt-4\.1/i, window: 1_000_000 },
-  { match: /gpt-5/i, window: 400_000 },
-  { match: /gpt-4o/i, window: 128_000 },
-  { match: /(^|[^a-z])o[1-9]/i, window: 200_000 }, // o-series reasoning
-  { match: /gemini/i, window: 1_000_000 },
+  // OpenAI — verified developers.openai.com 2026-06.
+  { match: /gpt-5\.[45][\s-]*mini/i, window: 400_000 },   // GPT-5.4 mini
+  { match: /gpt-5\.[45]/i, window: 1_000_000 },           // GPT-5.5 / GPT-5.4
+  { match: /gpt-5/i, window: 400_000 },                   // plain gpt-5 (approx; absent from 2026 lineup)
+  { match: /gpt-4\.1/i, window: 1_000_000 },              // approx (not re-checked 2026-06)
+  { match: /gpt-4o/i, window: 128_000 },                  // approx
+  { match: /(^|[^a-z])o[1-9]/i, window: 200_000 },        // o-series reasoning — approx
+  // Anthropic — verified platform.claude.com 2026-06. Only Opus 4.6/4.7/4.8 and
+  // Sonnet 4.6 are 1M; everything older (Sonnet ≤4.5, Opus ≤4.5, Haiku) is 200k.
+  { match: /opus-4-[678]/i, window: 1_000_000 },
+  { match: /sonnet-4-6/i, window: 1_000_000 },
   { match: /claude/i, window: 200_000 },
+  // Google — UNVERIFIED (token table is JS-rendered; WebFetch can't read it).
+  // Gemini 2.5 Pro is widely documented at ~1,048,576 input tokens; treat as approx.
+  { match: /gemini/i, window: 1_000_000 },
 ];
 
-/** Approximate context window (tokens) for a model; used to size compaction. */
+/** Context window (tokens) for a model; used to size compaction + the fill gauge.
+ *  FREECODE_CONTEXT_WINDOW overrides everything (e.g. to pin an exact value the
+ *  table doesn't know yet). Otherwise a name-matched lookup; 128k fallback. */
 export function contextWindowFor(model: string): number {
+  const override = getEnv("FREECODE_CONTEXT_WINDOW");
+  if (override) {
+    const n = Number(override);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
   for (const w of WINDOWS) {
     if (w.match.test(model)) return w.window;
   }

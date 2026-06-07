@@ -38,12 +38,30 @@ describe("@path text-file inclusion", () => {
 });
 
 describe("contextWindowFor", () => {
-  it("maps models to windows", () => {
+  it("maps models to windows (verified against provider docs, 2026-06)", () => {
     expect(contextWindowFor("gpt-4o")).toBe(128_000);
     expect(contextWindowFor("gpt-4.1")).toBe(1_000_000);
-    expect(contextWindowFor("claude-sonnet-4-5")).toBe(200_000);
     expect(contextWindowFor("o3-mini")).toBe(200_000);
     expect(contextWindowFor("something-unknown")).toBe(128_000);
+    // OpenAI 2026 lineup
+    expect(contextWindowFor("gpt-5.5")).toBe(1_000_000);
+    expect(contextWindowFor("gpt-5.4")).toBe(1_000_000);
+    expect(contextWindowFor("gpt-5.4-mini")).toBe(400_000);
+    // Anthropic is version-specific: only Opus 4.6+ and Sonnet 4.6 are 1M.
+    expect(contextWindowFor("claude-sonnet-4-6")).toBe(1_000_000); // the bug we fixed
+    expect(contextWindowFor("claude-opus-4-8")).toBe(1_000_000);
+    expect(contextWindowFor("claude-opus-4-5")).toBe(200_000);
+    expect(contextWindowFor("claude-sonnet-4-5")).toBe(200_000);
+    expect(contextWindowFor("claude-haiku-4-5")).toBe(200_000);
+  });
+
+  it("FREECODE_CONTEXT_WINDOW overrides the table", () => {
+    process.env.FREECODE_CONTEXT_WINDOW = "750000";
+    try {
+      expect(contextWindowFor("claude-haiku-4-5")).toBe(750_000);
+    } finally {
+      delete process.env.FREECODE_CONTEXT_WINDOW;
+    }
   });
 });
 
