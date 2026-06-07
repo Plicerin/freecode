@@ -31,7 +31,10 @@ const TABLE: Array<{ match: RegExp; price: ModelPrice }> = [
   { match: /opus/i, price: { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 } },           // Opus 4.1/4.0 + fallback: verified $15/$75
   { match: /sonnet/i, price: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 } },           // verified $3/$15
   { match: /haiku/i, price: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 } },             // Haiku 4.5: verified $1/$5
-  // OpenAI — approx (not re-verified 2026-06)
+  // OpenAI — GPT-5.x verified developers.openai.com 2026-06 (5.4 mini price
+  // unverified — it matches the 5.4 row). gpt-4.x/4o/o-series are prior approx.
+  { match: /gpt-5\.5/i, price: { input: 5, output: 30, cacheRead: 0.5 } },     // verified
+  { match: /gpt-5\.4/i, price: { input: 2.5, output: 15, cacheRead: 0.25 } },  // verified
   { match: /gpt-4o-mini/i, price: { input: 0.15, output: 0.6, cacheRead: 0.075 } },
   { match: /gpt-4o/i, price: { input: 2.5, output: 10, cacheRead: 1.25 } },
   { match: /gpt-4\.1-mini/i, price: { input: 0.4, output: 1.6 } },
@@ -65,7 +68,7 @@ export function priceFor(model: string, provider?: string): ModelPrice {
 const WINDOWS: Array<{ match: RegExp; window: number }> = [
   // OpenAI — verified developers.openai.com 2026-06.
   { match: /gpt-5\.[45][\s-]*mini/i, window: 400_000 },   // GPT-5.4 mini
-  { match: /gpt-5\.[45]/i, window: 1_000_000 },           // GPT-5.5 / GPT-5.4
+  { match: /gpt-5\.[45]/i, window: 1_050_000 },           // GPT-5.5 / GPT-5.4 (verified 1,050,000)
   { match: /gpt-5/i, window: 400_000 },                   // plain gpt-5 (approx; absent from 2026 lineup)
   { match: /gpt-4\.1/i, window: 1_000_000 },              // approx (not re-checked 2026-06)
   { match: /gpt-4o/i, window: 128_000 },                  // approx

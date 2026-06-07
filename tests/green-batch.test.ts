@@ -43,9 +43,9 @@ describe("contextWindowFor", () => {
     expect(contextWindowFor("gpt-4.1")).toBe(1_000_000);
     expect(contextWindowFor("o3-mini")).toBe(200_000);
     expect(contextWindowFor("something-unknown")).toBe(128_000);
-    // OpenAI 2026 lineup
-    expect(contextWindowFor("gpt-5.5")).toBe(1_000_000);
-    expect(contextWindowFor("gpt-5.4")).toBe(1_000_000);
+    // OpenAI 2026 lineup (verified developers.openai.com)
+    expect(contextWindowFor("gpt-5.5")).toBe(1_050_000);
+    expect(contextWindowFor("gpt-5.4")).toBe(1_050_000);
     expect(contextWindowFor("gpt-5.4-mini")).toBe(400_000);
     // Anthropic is version-specific: only Opus 4.6+ and Sonnet 4.6 are 1M.
     expect(contextWindowFor("claude-sonnet-4-6")).toBe(1_000_000); // the bug we fixed
@@ -73,6 +73,11 @@ describe("priceFor (Anthropic verified 2026-06)", () => {
     expect(priceFor("claude-opus-4-1")).toMatchObject({ input: 15, output: 75 });
     expect(priceFor("claude-sonnet-4-6")).toMatchObject({ input: 3, output: 15 });
     expect(priceFor("claude-haiku-4-5")).toMatchObject({ input: 1, output: 5 });
+  });
+
+  it("OpenAI GPT-5.x pricing (verified developers.openai.com)", () => {
+    expect(priceFor("gpt-5.5")).toMatchObject({ input: 5, output: 30, cacheRead: 0.5 });
+    expect(priceFor("gpt-5.4")).toMatchObject({ input: 2.5, output: 15, cacheRead: 0.25 });
   });
 });
 
