@@ -551,6 +551,13 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         : [...baseTools, createAgentTool(() => ({
             provider, model, tools: baseTools, permission, promptUser,
             hooks: config.hooks, contextWindow: contextWindowFor(model),
+            // Live sub-agent progress: render each interior tool call as a dim,
+            // indented line so a long sub-agent run visibly moves (no frozen
+            // spinner until the final report).
+            onProgress: (line: string) => {
+              streamIdRef.current = null; // the next assistant text starts a fresh bubble
+              setMessages((prev) => [...prev, { id: `sap-${Date.now()}-${prev.length}`, role: "system", text: `     ${line}` }]);
+            },
           }))];
       const systemPrompt = planMode ? toolListToSystemPrompt(activeTools) + PLAN_MODE_NOTE : undefined;
       // Auto-verify gate: skip in plan mode (nothing changes). on = quick checks; strict = full.

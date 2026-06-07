@@ -63,6 +63,26 @@ describe("Agent tool", () => {
     expect(res.output).toBe("done: found 3 matches.");
   });
 
+  test("surfaces the sub-agent's interior tool calls via onProgress (live progress UI)", async () => {
+    const progress: string[] = [];
+    const tool = createAgentTool(() => ({
+      provider: scripted([
+        [text("looking…"), call("Grep", { pattern: "x" })],
+        [text("looking more…"), call("FileRead", { path: "y" })],
+        [text("done.")],
+      ]) as never,
+      model: "x", tools: [probe("Grep"), probe("FileRead")], permission: perm(), promptUser: allow,
+      onProgress: (line) => progress.push(line),
+    }));
+    await tool.run(
+      { description: "explore", prompt: "look around", subagent_type: "explore" } as never,
+      { cwd: process.cwd(), signal: undefined as unknown as AbortSignal },
+    );
+    // Each interior tool call surfaced, tagged with the agent type — no waiting
+    // for the final report.
+    expect(progress).toEqual(["↳ explore → Grep", "↳ explore → FileRead"]);
+  });
+
   test("recursion guard: the sub-agent never receives an Agent tool", async () => {
     // The host context wrongly includes a sentinel Agent; the sub-agent tries to
     // call it. If the guard works it's filtered out → never runs → no recursion.

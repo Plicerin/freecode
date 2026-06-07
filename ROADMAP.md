@@ -21,7 +21,7 @@ Agent loop + streaming · tools: Bash, Read/Write/Edit, Glob, Grep, ViewImage, W
   - [x] subagent types — built-ins `general`/`explore`/`code-reviewer` (own prompts + tool allowlists); `Agent` tool `subagent_type` param; typed sub-agents restricted to their allowlist; tested
   - [ ] worktree isolation for parallel file-mutating sub-agents
   - [ ] background sub-agents + completion notifications
-  - [ ] REPL UI for live sub-agent progress (today only the final report surfaces)
+  - [x] **live sub-agent progress** — the `Agent` tool now surfaces each interior tool call (`onProgress` → dim `↳ <type> → <Tool>` lines in the REPL) instead of only the final report, so a long dispatch visibly works instead of a frozen spinner. (Workflows already streamed; this covers the direct `Agent` dispatch path.) Tested.
 - [~] **Skills** — foundation shipped; self-authoring pending.
   - [x] discovery (`.freecode/skills/<name>.md` or `<name>/SKILL.md`, frontmatter `description` = trigger), prompt index (names/triggers only), `Skill` tool (on-demand body load = context-fork), `/skills`. Auto-reload (loaded per turn).
   - [ ] **self-authoring** — freecode proposes a skill when it detects a reusable procedure; propose-and-confirm, never silent (freecode-original / identity feature, not parity)

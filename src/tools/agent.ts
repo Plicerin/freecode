@@ -31,10 +31,14 @@ const DESCRIPTION_BASE =
   "it cannot ask you questions. Prefer doing simple things yourself — reach for a sub-agent when the work is " +
   "large, parallelizable, or worth keeping out of your main thread.";
 
+/** The host can pass `onProgress` to surface a running sub-agent's interior
+ *  (its tool calls) live, instead of only the final report. */
+export type AgentToolContext = SubAgentContext & { onProgress?: (line: string) => void };
+
 /** Build the Agent tool bound to a live run-context getter. The available agent
  *  types are baked into the description (rebuilt per turn, so project agents
  *  show up) and validated at call time against the current working directory. */
-export function createAgentTool(getCtx: () => SubAgentContext): Tool {
+export function createAgentTool(getCtx: () => AgentToolContext): Tool {
   const types = resolveAgentTypes(process.cwd());
   const typeList = types.map((t) => `  • ${t.name} — ${t.description}`).join("\n");
   const description = `${DESCRIPTION_BASE}\n\nAvailable agent types (pass as subagent_type, default "general"):\n${typeList}`;
@@ -62,6 +66,11 @@ export function createAgentTool(getCtx: () => SubAgentContext): Tool {
           prompt,
           agentType,
           signal: ctx.signal,
+          // Live progress: surface each interior tool call so the run is visibly
+          // working instead of a frozen spinner until the final report.
+          onEvent: c.onProgress
+            ? (e) => { if (e.type === "tool_call" && e.call) c.onProgress!(`↳ ${typeName} → ${e.call.name}`); }
+            : undefined,
         });
         return { ok: r.ok, output: r.output };
       } catch (e) {
