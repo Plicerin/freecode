@@ -70,6 +70,31 @@ describe("runWorkflow engine", () => {
     expect(seen).toEqual([0, 1]); // onStage fired once per stage, in order
   });
 
+  test("rejects a workflow that would exceed the sub-agent ceiling (runaway guard)", async () => {
+    const stages = Array.from({ length: 33 }, () => ({ tasks: [{ prompt: "x" }] }));
+    const wf: Workflow = { name: "big", description: "d", source: "dynamic", path: "", stages };
+    await expect(runWorkflow(wf, {
+      provider: echo as never, model: "x", tools: [], permission: perm(), promptUser: allow,
+      input: "", cwd: process.cwd(),
+    })).rejects.toThrow(/33|cap/);
+  });
+
+  test("a wide stage runs under a concurrency cap yet keeps outputs in order", async () => {
+    const wf: Workflow = {
+      name: "wide", description: "d", source: "dynamic", path: "",
+      stages: [{ name: "fan", tasks: [1, 2, 3, 4, 5, 6].map((n) => ({ prompt: `task ${n} {{input}}` })) }],
+    };
+    const res = await runWorkflow(wf, {
+      provider: echo as never, model: "x", tools: [], permission: perm(), promptUser: allow,
+      input: "Z", cwd: process.cwd(), concurrency: 2,
+    });
+    const got = res.stages[0]!.outputs.map((o) => o.output);
+    expect(got.length).toBe(6);
+    // Order preserved despite bounded concurrency (echo returns the prompt).
+    expect(got[0]).toContain("task 1 Z");
+    expect(got[5]).toContain("task 6 Z");
+  });
+
   test("onEvent streams stage_start, per-task task_done, and stage_done in order", async () => {
     const wf: Workflow = {
       name: "t", description: "d", source: "project", path: "",

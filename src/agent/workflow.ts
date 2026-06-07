@@ -16,7 +16,17 @@ import { APP_DIR } from "../utils/paths";
 import { runSubAgent, type SubAgentContext } from "./subagent";
 import { getAgentType, resolveAgentTypes } from "./agent-types";
 import { pluginDirs } from "../plugins";
+import { mapWithConcurrency } from "../utils/concurrency";
+import { getEnv } from "../utils/env";
 import type { Provider } from "../providers/types";
+
+/** Max sub-agents running at once within a stage (FREECODE_WORKFLOW_CONCURRENCY). */
+function defaultConcurrency(): number {
+  const n = Number(getEnv("FREECODE_WORKFLOW_CONCURRENCY"));
+  return Number.isInteger(n) && n > 0 ? n : 4;
+}
+/** Hard ceiling on total sub-agents a single workflow may spawn (runaway guard). */
+const MAX_TASKS = 32;
 
 export const WorkflowTaskSchema = z.object({
   agent: z.string().optional(), // a subagent_type; omitted = general
@@ -89,22 +99,35 @@ export async function runWorkflow(
     input: string;
     cwd: string;
     signal?: AbortSignal;
+    /** Max sub-agents running at once within a stage (default 4, env-tunable). */
+    concurrency?: number;
+    /** Override the runaway ceiling on total sub-agents (default 32). */
+    maxTasks?: number;
     onStage?: (index: number, stage: WorkflowStage, result: StageResult) => void;
     onEvent?: (e: WorkflowEvent) => void;
   },
 ): Promise<{ stages: StageResult[]; output: string }> {
-  // The workflow-only fields (input/onStage/onEvent) must NOT flow into runSubAgent
-  // — it has its own onEvent of a different shape. Keep them as locals and pass
-  // only the sub-agent context (`base`) down.
-  const { input, onStage, onEvent, ...base } = ctx;
+  // The workflow-only fields must NOT flow into runSubAgent — it has its own
+  // onEvent of a different shape. Keep them as locals and pass only `base` down.
+  const { input, onStage, onEvent, concurrency, maxTasks, ...base } = ctx;
+  // Runaway guard: a composed (/ultraplan) workflow could otherwise spawn an
+  // unbounded number of sub-agents. Refuse up front rather than mid-run.
+  const totalTasks = wf.stages.reduce((n, s) => n + s.tasks.length, 0);
+  const ceiling = maxTasks ?? MAX_TASKS;
+  if (totalTasks > ceiling) {
+    throw new Error(`workflow would spawn ${totalTasks} sub-agents, over the cap of ${ceiling} — split it or raise maxTasks`);
+  }
+  const limit = concurrency ?? defaultConcurrency();
   const results: StageResult[] = [];
   let previous = "";
   for (let i = 0; i < wf.stages.length; i++) {
     if (ctx.signal?.aborted) break;
     const stage = wf.stages[i]!;
     onEvent?.({ type: "stage_start", index: i, name: stage.name, tasks: stage.tasks.length });
-    const outputs = await Promise.all(
-      stage.tasks.map(async (task, ti) => {
+    // Bounded fan-out: at most `limit` sub-agents run at once within the stage.
+    const outputs = await mapWithConcurrency(
+      stage.tasks, limit,
+      async (task, ti) => {
         const prompt = task.prompt
           .replace(/\{\{\s*input\s*\}\}/g, input)
           .replace(/\{\{\s*previous\s*\}\}/g, previous);
@@ -119,7 +142,7 @@ export async function runWorkflow(
         });
         onEvent?.({ type: "task_done", stage: i, task: ti, agent: task.agent, ok: r.ok });
         return { agent: task.agent, output: r.output, ok: r.ok };
-      }),
+      },
     );
     const result: StageResult = { name: stage.name, outputs };
     results.push(result);
