@@ -79,6 +79,16 @@ describe("priceFor (Anthropic verified 2026-06)", () => {
     expect(priceFor("gpt-5.5")).toMatchObject({ input: 5, output: 30, cacheRead: 0.5 });
     expect(priceFor("gpt-5.4")).toMatchObject({ input: 2.5, output: 15, cacheRead: 0.25 });
   });
+
+  it("Gemini pricing — version-aware, base tier (verified ai.google.dev)", () => {
+    expect(priceFor("gemini-2.5-pro")).toMatchObject({ input: 1.25, output: 10 }); // was wrongly $5 out
+    expect(priceFor("gemini-2.5-flash")).toMatchObject({ input: 0.3, output: 2.5 });
+    expect(priceFor("gemini-2.5-flash-lite")).toMatchObject({ input: 0.1, output: 0.4 });
+    expect(priceFor("gemini-3.5-flash")).toMatchObject({ input: 1.5, output: 9 });
+    expect(priceFor("gemini-3.1-flash-lite")).toMatchObject({ input: 0.25, output: 1.5 });
+    expect(priceFor("gemini-3.1-pro-preview")).toMatchObject({ input: 2, output: 12 });
+    expect(priceFor("gemini-2.0-flash")).toMatchObject({ input: 0.1, output: 0.4 });
+  });
 });
 
 describe("@path trailing punctuation", () => {

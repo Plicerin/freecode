@@ -40,9 +40,19 @@ const TABLE: Array<{ match: RegExp; price: ModelPrice }> = [
   { match: /gpt-4\.1-mini/i, price: { input: 0.4, output: 1.6 } },
   { match: /gpt-4\.1/i, price: { input: 2, output: 8 } },
   { match: /(^|[^a-z])(o3-mini|o4-mini)/i, price: { input: 1.1, output: 4.4 } },
-  // Google Gemini — approx / UNVERIFIED (docs JS-rendered)
-  { match: /gemini.*flash/i, price: { input: 0.1, output: 0.4 } },
-  { match: /gemini.*pro/i, price: { input: 1.25, output: 5 } },
+  // Google Gemini — verified ai.google.dev/gemini-api/docs/pricing 2026-06.
+  // Base tier: ≤200k-token prompt, text/image/video input. Gemini's higher >200k
+  // tier and its audio-input rates aren't modeled by the flat price shape.
+  // Specific → generic so a model gets its own rate before a family fallback.
+  { match: /gemini-3\.5.*flash/i, price: { input: 1.5, output: 9, cacheRead: 0.15 } },        // 3.5 Flash
+  { match: /gemini-3.*flash-lite/i, price: { input: 0.25, output: 1.5, cacheRead: 0.025 } },  // 3.1 Flash-Lite
+  { match: /gemini-3.*pro/i, price: { input: 2, output: 12, cacheRead: 0.2 } },                // 3.1 Pro (≤200k)
+  { match: /gemini-2\.5.*flash-lite/i, price: { input: 0.1, output: 0.4 } },
+  { match: /gemini-2\.5.*flash/i, price: { input: 0.3, output: 2.5 } },
+  { match: /gemini-2\.5.*pro/i, price: { input: 1.25, output: 10 } },                          // ≤200k
+  { match: /gemini-2\.0.*flash/i, price: { input: 0.1, output: 0.4 } },
+  { match: /gemini.*flash/i, price: { input: 0.3, output: 2.5 } },   // unknown flash → ~2.5 Flash
+  { match: /gemini.*pro/i, price: { input: 1.25, output: 10 } },     // unknown pro → ~2.5 Pro
 ];
 
 /**
