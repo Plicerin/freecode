@@ -1,5 +1,8 @@
 import { spawn } from "node:child_process";
+import { openSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { z } from "zod";
+import { APP_DIR } from "../utils/paths";
 import type { Tool } from "./types";
 
 const ArgsSchema = z.object({
@@ -7,6 +10,9 @@ const ArgsSchema = z.object({
   cwd: z.string().optional(),
   timeoutMs: z.number().int().positive().max(600_000).optional(),
   env: z.record(z.string()).optional(),
+  // Start a long-lived process (dev server, watcher, tunnel) DETACHED: returns
+  // immediately with the pid + a log path instead of blocking until it exits.
+  runInBackground: z.boolean().optional(),
 });
 
 const DEFAULT_ALLOW = [/.*/];
@@ -55,6 +61,70 @@ export function spawnArgs(command: string, shellPath?: string): { file: string; 
   return { file: command, args: [], useShell: true };
 }
 
+interface RunCtx {
+  cwd: string;
+  signal?: AbortSignal;
+}
+
+/**
+ * Launch a long-lived command DETACHED and return at once. Output is redirected
+ * to a log file the model can read back; the process is unref'd and NOT tied to
+ * ctx.signal, so it survives the turn (the whole point — a dev server must keep
+ * running). We wait briefly to surface an immediate failure (bad command, port
+ * already in use) rather than reporting a "started" pid that's already dead.
+ */
+function runDetached(
+  args: z.infer<typeof ArgsSchema>,
+  ctx: RunCtx,
+  shellPath?: string,
+): Promise<{ ok: boolean; output: string; error?: string; metadata?: Record<string, unknown> }> {
+  const dir = join(APP_DIR, "bg-bash");
+  mkdirSync(dir, { recursive: true });
+  const logPath = join(dir, `${Date.now()}-${Math.random().toString(36).slice(2, 6)}.log`);
+  let fd: number;
+  try {
+    fd = openSync(logPath, "a");
+  } catch (err) {
+    return Promise.resolve({ ok: false, output: "", error: `Could not open background log: ${(err as Error).message}` });
+  }
+  const inv = spawnArgs(args.command, shellPath);
+  const child = spawn(inv.file, inv.args, {
+    shell: inv.useShell,
+    cwd: args.cwd ?? ctx.cwd,
+    env: { ...process.env, ...(args.env ?? {}) },
+    detached: true,
+    stdio: ["ignore", fd, fd], // no stdin; stdout+stderr → log file
+  });
+  const pid = child.pid;
+  const stopHint = IS_WINDOWS ? `taskkill /PID ${pid} /F` : `kill ${pid}`;
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (r: { ok: boolean; output: string; error?: string; metadata?: Record<string, unknown> }): void => {
+      if (settled) return;
+      settled = true;
+      resolve(r);
+    };
+    child.on("error", (err) => finish({ ok: false, output: "", error: `Failed to start background process: ${err.message}` }));
+    const onEarlyExit = (code: number | null): void =>
+      finish({ ok: false, output: "", error: `Background process exited immediately (code ${code}). Check the log: ${logPath}`, metadata: { pid, logPath, background: true } });
+    child.on("exit", onEarlyExit);
+    // Survived the startup window → treat it as running.
+    setTimeout(() => {
+      child.removeListener("exit", onEarlyExit);
+      child.unref();
+      finish({
+        ok: true,
+        output:
+          `Started in background (pid ${pid}). It keeps running after this turn.\n` +
+          `Output → ${logPath}  (read it with FileRead to check progress)\n` +
+          `Stop it with: ${stopHint}`,
+        metadata: { pid, logPath, background: true },
+      });
+    }, 600);
+  });
+}
+
 export function createBashTool(opts: BashToolOptions = {}): Tool<z.infer<typeof ArgsSchema>> {
   const allow = opts.allow ?? DEFAULT_ALLOW;
   const deny = opts.deny ?? DEFAULT_DENY;
@@ -62,7 +132,7 @@ export function createBashTool(opts: BashToolOptions = {}): Tool<z.infer<typeof 
 
   return {
     name: "Bash",
-    description: `Execute a shell command in ${bashShellName()}. Use for git, npm, scripts, system inspection. Runs NON-INTERACTIVELY (no stdin) with a ${DEFAULT_TIMEOUT_MS / 1000}s default timeout — for scaffolders/installers pass non-interactive flags (e.g. --yes), and set timeoutMs for long jobs. Output is truncated if large.`,
+    description: `Execute a shell command in ${bashShellName()}. Use for git, npm, scripts, system inspection. Runs NON-INTERACTIVELY (no stdin) with a ${DEFAULT_TIMEOUT_MS / 1000}s default timeout — for scaffolders/installers pass non-interactive flags (e.g. --yes), and set timeoutMs for long jobs. For a process that should KEEP RUNNING (a dev server, watcher, http.server, tunnel) set runInBackground:true — it launches detached and returns immediately with a pid + log path (do NOT run servers in the foreground; they'll just hit the timeout). Output is truncated if large.`,
     schema: ArgsSchema,
     permission: "confirm",
     async run(args, ctx) {
@@ -78,6 +148,9 @@ export function createBashTool(opts: BashToolOptions = {}): Tool<z.infer<typeof 
       const allowMatch = allow.some((re) => re.test(args.command));
       if (!allowMatch) {
         return { ok: false, output: "", error: "Command not in allowlist" };
+      }
+      if (args.runInBackground) {
+        return runDetached(args, ctx, opts.shellPath);
       }
       return new Promise((resolve) => {
         const inv = spawnArgs(args.command, opts.shellPath);
