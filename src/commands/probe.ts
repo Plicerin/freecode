@@ -6,6 +6,7 @@
 import { loadConfig, type CliFlags } from "../config/loader";
 import { buildProvider } from "../providers/registry";
 import { buildToolRegistry, toolListToSystemPrompt } from "../tools/registry";
+import { streamIdleMs } from "../providers/stall-timeout";
 import type { ChatRequest, StreamEvent, ToolDefinition } from "../providers/types";
 
 function mask(key?: string): string {
@@ -83,11 +84,13 @@ export async function runProbe(argv: string[]): Promise<void> {
     return realFetch(url as never, init as never);
   }) as unknown as typeof fetch;
 
-  process.stdout.write("── response ──\n");
+  const idleS = Math.round(streamIdleMs() / 1000);
+  process.stdout.write(`── response ── (awaiting first byte; aborts after ~${idleS}s of silence)\n`);
   const t0 = Date.now();
-  let text = "", reasoning = "", toolCalls = 0, errored = "";
+  let text = "", reasoning = "", toolCalls = 0, errored = "", firstByteMs = -1;
   try {
     for await (const e of provider.stream(req) as AsyncIterable<StreamEvent>) {
+      if (firstByteMs < 0) { firstByteMs = Date.now() - t0; process.stdout.write(`[first event after ${firstByteMs}ms]\n`); }
       switch (e.type) {
         case "thinking_delta": reasoning += e.delta; process.stdout.write(`\x1b[2m${e.delta}\x1b[0m`); break;
         case "text_delta": text += e.delta; process.stdout.write(e.delta); break;
@@ -106,7 +109,8 @@ export async function runProbe(argv: string[]): Promise<void> {
 
   process.stdout.write(
     `\n── summary (${Date.now() - t0}ms) ──\n` +
-    `reasoning: ${reasoning.length} chars${withTools ? "" : ""}\n` +
+    `first event: ${firstByteMs < 0 ? "NEVER — no response received (model id wrong? endpoint stalled?)" : firstByteMs + "ms"}\n` +
+    `reasoning: ${reasoning.length} chars\n` +
     `text:      ${text.length} chars\n` +
     `tool calls: ${toolCalls}\n` +
     `error:     ${errored || "none"}\n` +
