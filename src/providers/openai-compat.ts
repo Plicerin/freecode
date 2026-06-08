@@ -2,7 +2,22 @@ import type { ChatMessage, ChatRequest, Provider, StreamEvent, TokenUsage } from
 import { friendlyError, makeError } from "./friendly-errors";
 import { zodToJsonSchema } from "./schema-util";
 import { debug } from "../utils/debug";
+import { getEnv } from "../utils/env";
 import { createStallTimeout, streamIdleMs } from "./stall-timeout";
+
+// Open reasoning models served over OpenAI-compat (gpt-oss, deepseek-r1, qwq,
+// generic "reasoner"s) take a reasoning_effort and emit a separate reasoning
+// channel. Without an effort they run at the server default — often too low for
+// multi-step agentic work, so they stall and give shallow answers. Default high;
+// FREECODE_REASONING_EFFORT=low|medium|high overrides, =off stops sending it (an
+// escape hatch if a particular endpoint rejects the parameter).
+function reasoningEffortFor(model: string): "low" | "medium" | "high" | undefined {
+  if (!/gpt-oss|deepseek-r1|\bqwq\b|reasoner/i.test(model)) return undefined;
+  const env = (getEnv("FREECODE_REASONING_EFFORT") || "").toLowerCase();
+  if (env === "off" || env === "none") return undefined;
+  if (env === "low" || env === "medium" || env === "high") return env;
+  return "high";
+}
 
 interface OpenAICompatOptions {
   apiKey?: string;
@@ -24,6 +39,10 @@ interface ChatCompletionChunk {
   choices?: Array<{
     delta?: {
       content?: string | null;
+      // Reasoning models expose chain-of-thought separately from the answer.
+      // NIM/vLLM use `reasoning_content`; some servers use `reasoning`.
+      reasoning_content?: string | null;
+      reasoning?: string | null;
       tool_calls?: Array<{
         index: number;
         id?: string;
@@ -107,8 +126,14 @@ export class OpenAICompatProvider implements Provider {
       if (req.enableExtendedThinking && !hasTools) body.reasoning_effort = "high";
     } else {
       body.max_tokens = maxTokens;
-      body.temperature = req.temperature ?? 0.7;
+      // Reasoning models (gpt-oss et al.) are tuned for temperature ~1.0; the
+      // generic chat default is 0.7.
+      body.temperature = req.temperature ?? (reasoningEffortFor(req.model) ? 1 : 0.7);
     }
+    // Tell a reasoning model HOW hard to think — without this it runs at the
+    // server default, which is often too low for agentic, multi-step work.
+    const effort = reasoningEffortFor(req.model);
+    if (effort) body.reasoning_effort = effort;
     // Note: OpenAI prompt caching is automatic (no markers); cached_tokens are
     // already read from usage. Anthropic needs explicit cache_control markers.
     if (req.tools && req.tools.length > 0 && this.opts.supportsTools) {
@@ -186,6 +211,13 @@ export class OpenAICompatProvider implements Provider {
           continue;
         }
         const choice = chunk.choices?.[0];
+        // Reasoning channel (gpt-oss et al.) — surfaced as thinking, kept out of
+        // the answer text. Previously dropped entirely, so a reasoning model's
+        // work was invisible.
+        const reasoning = choice?.delta?.reasoning_content ?? choice?.delta?.reasoning;
+        if (reasoning) {
+          yield { type: "thinking_delta", delta: reasoning };
+        }
         if (choice?.delta?.content) {
           yield { type: "text_delta", delta: choice.delta.content };
         }

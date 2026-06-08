@@ -59,7 +59,7 @@ export interface ReplOptions {
 
 interface UiMessage {
   id: string;
-  role: "user" | "assistant" | "tool" | "system" | "ledger" | "warning";
+  role: "user" | "assistant" | "tool" | "system" | "ledger" | "warning" | "reasoning";
   text: string;
   toolName?: string;
   ok?: boolean;
@@ -288,6 +288,9 @@ function MessageLine({ m, theme }: { m: UiMessage; theme: ReturnType<typeof make
   if (m.role === "warning") {
     return <Text color={theme.hex.warning} bold>{"⚠ "}{m.text}</Text>;
   }
+  if (m.role === "reasoning") {
+    return <Text color={theme.dim} italic>{"💭 "}{m.text}</Text>;
+  }
   return (
     <Text>
       {m.role === "user" && <Text color={theme.user}>› </Text>}
@@ -442,6 +445,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   const approvalQueue = useRef(createApprovalQueue(setPending)).current;
   const abortRef = useRef<AbortController | null>(null);
   const streamIdRef = useRef<string | null>(null); // id of the assistant bubble currently streaming
+  const thinkIdRef = useRef<string | null>(null); // id of the reasoning bubble currently streaming
   // Messages typed WHILE a turn is running are queued, not dropped. submit()
   // refuses to run concurrently (returns early if busy), so without this a line
   // entered mid-turn vanished on Enter — the user couldn't steer the agent. We
@@ -665,9 +669,21 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         promptUser,
         signal: controller.signal,
         onEvent: (e) => {
-          if (e.type === "text_delta" && e.text) {
+          if (e.type === "thinking_delta" && e.text) {
+            // Reasoning channel (gpt-oss et al.) — stream into a dim 💭 bubble so
+            // you can see the model actually working through the problem.
+            const delta = e.text;
+            setMessages((prev) => {
+              const tid = thinkIdRef.current;
+              if (tid) return prev.map((m) => (m.id === tid ? { ...m, text: m.text + delta } : m));
+              const id = `think-${t0}-${prev.length}`;
+              thinkIdRef.current = id;
+              return [...prev, { id, role: "reasoning", text: delta }];
+            });
+          } else if (e.type === "text_delta" && e.text) {
             buffer += e.text;
             streamedAny = true;
+            thinkIdRef.current = null; // answer started — close the reasoning bubble
             // Degeneration guard: if the model collapses into runaway repetition,
             // abort the turn instead of streaming garbage until the user hits esc.
             if (!degenerated && buffer.length - degenCheckedAt >= 400) {
@@ -691,6 +707,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
             });
           } else if (e.type === "tool_call" && e.call) {
             streamIdRef.current = null; // text after a tool call starts a fresh bubble
+            thinkIdRef.current = null; // and a fresh reasoning bubble next step
             const call = e.call;
             const tid = `t-${call.id ?? Math.random().toString(36).slice(2, 8)}`;
             setMessages((prev) => [...prev, { id: tid, role: "tool", text: `→ ${call.name}(${JSON.stringify(call.arguments).slice(0, 120)})`, toolName: call.name }]);
