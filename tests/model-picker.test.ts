@@ -1,7 +1,19 @@
 // Pure logic behind the interactive /model picker (the keystroke wiring is
 // verified live — the harness can't drive keys).
 import { test, expect, describe } from "bun:test";
-import { filterChatModels, pickerWindow, searchModels } from "../src/tui/model-picker";
+import { filterChatModels, pickerWindow, searchModels, sortFreeFirst } from "../src/tui/model-picker";
+
+describe("sortFreeFirst", () => {
+  test("floats free models to the top, stable within each group", () => {
+    const models = ["gpt-4o", "meta/llama:free", "claude-opus", "qwen/q:free", "gemini"];
+    expect(sortFreeFirst(models)).toEqual(["meta/llama:free", "qwen/q:free", "gpt-4o", "claude-opus", "gemini"]);
+  });
+
+  test("case-insensitive; no free models → unchanged", () => {
+    expect(sortFreeFirst(["a-FREE-b", "c"])).toEqual(["a-FREE-b", "c"]);
+    expect(sortFreeFirst(["x", "y"])).toEqual(["x", "y"]);
+  });
+});
 
 describe("searchModels", () => {
   const models = ["gpt-4o", "gpt-5.4", "anthropic/claude-opus-4-8", "anthropic/claude-sonnet-4-6", "gemini-2.5-pro"];

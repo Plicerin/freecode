@@ -11,7 +11,7 @@ import { createAgentTool } from "../tools/agent";
 import { resolveAgentTypes } from "../agent/agent-types";
 import { resolveSkills } from "../agent/skills";
 import { resolveWorkflows, getWorkflow, runWorkflow, composeWorkflow, type WorkflowEvent } from "../agent/workflow";
-import { filterChatModels, pickerWindow, searchModels } from "../tui/model-picker";
+import { filterChatModels, pickerWindow, searchModels, sortFreeFirst } from "../tui/model-picker";
 import { matchCommands, resolveSubmit } from "../tui/slash-complete";
 import { createApprovalQueue } from "../tui/approval-queue";
 import { resolvePlugins, setPluginEnabled, installPlugin, uninstallPlugin } from "../plugins";
@@ -716,7 +716,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           try {
             const all = await provider.models();
             const { show } = filterChatModels(all);
-            const list = show.length ? show : all;
+            const list = sortFreeFirst(show.length ? show : all); // free models to the top
             if (!list.length) {
               setErrorLine("Provider returned no models.");
             } else {
@@ -1579,7 +1579,13 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
                   const isCurrent = m === model;
                   return (
                     <Text key={m} color={sel ? theme.user : undefined} dimColor={!sel}>
-                      {sel ? "❯ " : "  "}{isCurrent ? "→ " : "  "}{m}
+                      {sel ? "❯ " : "  "}{isCurrent ? "→ " : "  "}
+                      {/* highlight "free" in hot pink; other parts inherit the line style */}
+                      {m.split(/(free)/i).map((part, j) =>
+                        /^free$/i.test(part)
+                          ? <Text key={j} color="#ff69b4" bold>{part}</Text>
+                          : part,
+                      )}
                     </Text>
                   );
                 })}

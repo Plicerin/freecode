@@ -14,6 +14,13 @@ export function filterChatModels(all: string[]): { show: string[]; hidden: numbe
   return { show, hidden: all.length - show.length };
 }
 
+/** Float free models to the top (their name contains "free", e.g. OpenRouter's
+ *  ":free" tier), preserving the original order within each group. Stable. */
+export function sortFreeFirst(models: string[]): string[] {
+  const isFree = (m: string) => /free/i.test(m);
+  return [...models.filter(isFree), ...models.filter((m) => !isFree(m))];
+}
+
 /** Filter a model list by a search query: case-insensitive, AND across
  *  whitespace-separated terms (so "claude opus" matches "claude-opus-4-8").
  *  Empty query → the list unchanged. */
