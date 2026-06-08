@@ -1528,20 +1528,6 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         )}
       </Box>
 
-      {!pending && menuMatches.length > 0 && (
-        <Box flexDirection="column" paddingX={1} marginTop={1}>
-          {menuMatches.map((m, i) => {
-            const sel = i === Math.min(menuIdx, menuMatches.length - 1);
-            return (
-              <Text key={m.name} color={sel ? theme.user : undefined} dimColor={!sel}>
-                {sel ? "❯ " : "  "}{m.name}{m.desc ? `  —  ${m.desc}` : ""}
-              </Text>
-            );
-          })}
-          <Text dimColor>  ↑/↓ select · Enter run · Tab fill (for args)</Text>
-        </Box>
-      )}
-
       {/* Bubo on his own row above the input — known-good layout (no input-box
           reflow). Right-aligned, eyes darting while a turn runs. */}
       <Box paddingX={1} justifyContent="flex-end">
@@ -1617,6 +1603,22 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
             <Text inverse>{input.slice(cursor, cursor + 1) || " "}</Text>
             <Text>{input.slice(cursor + 1)}</Text>
           </Text>
+        </Box>
+      )}
+
+      {/* Slash-command suggestions render BELOW the input so typing a command
+          never shoves the input box up/down — the input stays put. */}
+      {!pending && !modelPicker && !picker && menuMatches.length > 0 && (
+        <Box flexDirection="column" paddingX={1}>
+          {menuMatches.map((m, i) => {
+            const sel = i === Math.min(menuIdx, menuMatches.length - 1);
+            return (
+              <Text key={m.name} color={sel ? theme.user : undefined} dimColor={!sel}>
+                {sel ? "❯ " : "  "}{m.name}{m.desc ? `  —  ${m.desc}` : ""}
+              </Text>
+            );
+          })}
+          <Text dimColor>  ↑/↓ select · Enter run · Tab fill (for args)</Text>
         </Box>
       )}
       <Box paddingX={1} flexDirection="row" justifyContent="space-between">
