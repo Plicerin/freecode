@@ -22,11 +22,12 @@ describe("titleSequence", () => {
 });
 
 describe("setTerminalTitle", () => {
-  test("writes the sequence to a TTY", () => {
+  test("writes both OSC 2 and OSC 0 to a TTY", () => {
     let written = "";
     const out = { isTTY: true, write: (s: string) => { written = s; return true; } } as unknown as NodeJS.WriteStream;
     setTerminalTitle("hello", out);
-    expect(written).toBe(`${ESC}]0;hello${BEL}`);
+    expect(written).toContain(`${ESC}]0;hello${BEL}`);
+    expect(written).toContain(`${ESC}]2;hello${BEL}`);
   });
 
   test("writes nothing when stdout is not a TTY (piped output stays clean)", () => {
