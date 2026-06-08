@@ -1589,7 +1589,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           <Text dimColor>  · ctx </Text>
           <Text color={{ ok: theme.hex.success, warn: theme.hex.warning, crit: theme.hex.error }[contextTone(ctxFill)]}>{contextBar(ctxFill)}</Text>
           <Text dimColor> {Math.round(ctxFill * 100)}%{ctxTokens > 0 ? ` (${formatTokens(ctxTokens)}/${formatTokens(trackerRef.current.window())})` : ""} · </Text>
-          <Text color={theme.dim}>{config.provider}/</Text>
+          <Text color={theme.dim}>{config.provider}:</Text>
           <Text color={theme.hex.assistant}>{model}</Text>
           <Text dimColor>  cost </Text>
           <Text color={theme.hex.success}>${costUsd.toFixed(4)}</Text>
