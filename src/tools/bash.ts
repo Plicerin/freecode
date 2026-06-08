@@ -44,6 +44,12 @@ const IS_WINDOWS = process.platform === "win32";
 // forever without this backstop. The model can override per-call up to the cap.
 const DEFAULT_TIMEOUT_MS = 120_000;
 
+// How long a backgrounded process must stay alive before we call it "started".
+// It must comfortably exceed shell COLD-START: on Windows, launching PowerShell
+// itself takes ~600ms, so a command that exits "immediately" still does so near
+// 600ms — too close to a 600ms window to tell apart from a server that's up.
+const STARTUP_GRACE_MS = IS_WINDOWS ? 1500 : 700;
+
 /** The shell the Bash tool executes in, for the system prompt and UX. */
 export function bashShellName(): string {
   return IS_WINDOWS ? "PowerShell" : "bash/sh";
@@ -121,9 +127,13 @@ function runDetached(
     };
     child.on("error", (err) => finish({ ok: false, output: "", error: `Failed to start background process: ${err.message}` }));
     const onEarlyExit = (code: number | null): void => {
-      // Small delay so the OS flushes the child's last writes to the log.
-      setTimeout(() => {
+      // The child's final writes may not be flushed to the log the instant it
+      // exits, so poll briefly for output before giving up (otherwise a real
+      // crash can be reported as "no output" — both a UX miss and a test flake).
+      let tries = 0;
+      const attempt = (): void => {
         const tail = readLogTail(logPath);
+        if (!tail && tries < 4) { tries++; setTimeout(attempt, 90); return; }
         const why = tail ? `\n--- captured output ---\n${tail}` : " (no output was captured)";
         finish({
           ok: false,
@@ -131,7 +141,8 @@ function runDetached(
           error: `The background command exited right away (exit code ${code}) instead of staying up.${why}`,
           metadata: { pid, logPath, background: true },
         });
-      }, 120);
+      };
+      setTimeout(attempt, 60);
     };
     child.on("exit", onEarlyExit);
     // Survived the startup window → treat it as running.
@@ -148,7 +159,7 @@ function runDetached(
           `\nStop it with: ${stopHint}`,
         metadata: { pid, logPath, background: true },
       });
-    }, 600);
+    }, STARTUP_GRACE_MS);
   });
 }
 
