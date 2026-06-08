@@ -696,6 +696,24 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     }
   }
 
+  // Open the interactive model picker for a given provider instance. Shared by
+  // /model (no arg) and by /provider (which auto-opens it for the new provider).
+  async function openModelPicker(prov: ReturnType<typeof buildProvider>, currentModel: string): Promise<void> {
+    setBusy(true);
+    try {
+      const all = await prov.models();
+      const { show } = filterChatModels(all);
+      const list = sortFreeFirst(show.length ? show : all); // free models to the top
+      if (!list.length) { setErrorLine("Provider returned no models."); return; }
+      const cur = list.indexOf(currentModel);
+      setModelPicker({ all: list, query: "", idx: cur >= 0 ? cur : 0 });
+    } catch (err) {
+      setErrorLine(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function runSlash(cmd: string): Promise<void> {
     const [name, ...rest] = cmd.split(/\s+/);
     const arg = rest.join(" ");
@@ -710,24 +728,9 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           writeLastSession({ provider: config.provider, model: arg });
           setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Model switched to ${arg} (provider: ${config.provider}). Active from your next message.` }]);
         } else {
-          // No arg: open the interactive arrow-key picker (↑/↓ select, Enter
-          // switch). `/model <name>` above still switches directly.
-          setBusy(true);
-          try {
-            const all = await provider.models();
-            const { show } = filterChatModels(all);
-            const list = sortFreeFirst(show.length ? show : all); // free models to the top
-            if (!list.length) {
-              setErrorLine("Provider returned no models.");
-            } else {
-              const cur = list.indexOf(model);
-              setModelPicker({ all: list, query: "", idx: cur >= 0 ? cur : 0 });
-            }
-          } catch (err) {
-            setErrorLine(err instanceof Error ? err.message : String(err));
-          } finally {
-            setBusy(false);
-          }
+          // No arg: open the interactive arrow-key picker (↑/↓ select, type to
+          // filter, Enter switch). `/model <name>` above still switches directly.
+          await openModelPicker(provider, model);
         }
         break;
       }
@@ -1199,8 +1202,11 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           const local = ["ollama", "lmstudio", "mock"].includes(newCfg.provider);
           const text = !newCfg.apiKey && !local
             ? `Switched to ${arg} (model ${newCfg.model}) — but no API key found. Add one with:  freecode auth add ${arg}`
-            : `Switched to ${arg} — model ${newCfg.model}, ${defaultEndpoint(newCfg.provider, newCfg.baseUrl)}. Active from your next message.`;
+            : `Switched to ${arg} — pick a model:`;
           setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text }]);
+          // Auto-open the model picker for the NEW provider (build it from newCfg
+          // — the live `provider` instance is still the old one this render).
+          await openModelPicker(buildProvider(newCfg), newCfg.model);
         } else {
           setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Provider: ${config.provider}\nModel: ${model}\nEndpoint: ${defaultEndpoint(config.provider, config.baseUrl)}\nKey: ${config.apiKey ? "set" : "none"}\n\nSwitch with /provider <name> (${KNOWN.join(", ")}).` }]);
         }
