@@ -11,7 +11,7 @@ import { createAgentTool } from "../tools/agent";
 import { resolveAgentTypes } from "../agent/agent-types";
 import { resolveSkills } from "../agent/skills";
 import { resolveWorkflows, getWorkflow, runWorkflow, composeWorkflow, type WorkflowEvent } from "../agent/workflow";
-import { filterChatModels, pickerWindow } from "../tui/model-picker";
+import { filterChatModels, pickerWindow, searchModels } from "../tui/model-picker";
 import { matchCommands, resolveSubmit } from "../tui/slash-complete";
 import { createApprovalQueue } from "../tui/approval-queue";
 import { resolvePlugins, setPluginEnabled, installPlugin, uninstallPlugin } from "../plugins";
@@ -412,7 +412,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   // Interactive resume picker: when open, ↑/↓ choose and Enter resumes.
   const [picker, setPicker] = useState<{ items: SessionMeta[]; idx: number } | null>(null);
   // Interactive model picker: when open, ↑/↓ choose and Enter switches.
-  const [modelPicker, setModelPicker] = useState<{ items: string[]; idx: number } | null>(null);
+  const [modelPicker, setModelPicker] = useState<{ all: string[]; query: string; idx: number } | null>(null);
   // Self-improvement: proposals from the last /learn, awaiting /learn save <n|all>.
   const learnProposalsRef = useRef<Proposal[]>([]);
   // Approval prompts are QUEUED, not held in a single slot. Parallel sub-agents
@@ -721,7 +721,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
               setErrorLine("Provider returned no models.");
             } else {
               const cur = list.indexOf(model);
-              setModelPicker({ items: list, idx: cur >= 0 ? cur : 0 });
+              setModelPicker({ all: list, query: "", idx: cur >= 0 ? cur : 0 });
             }
           } catch (err) {
             setErrorLine(err instanceof Error ? err.message : String(err));
@@ -1337,10 +1337,11 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     }
     // While the model picker is open, ↑/↓ choose, Enter switches, Esc cancels.
     if (modelPicker) {
+      const filtered = searchModels(modelPicker.all, modelPicker.query);
       if (key.upArrow) { setModelPicker((p) => (p ? { ...p, idx: Math.max(0, p.idx - 1) } : p)); return; }
-      if (key.downArrow) { setModelPicker((p) => (p ? { ...p, idx: Math.min(p.items.length - 1, p.idx + 1) } : p)); return; }
+      if (key.downArrow) { setModelPicker((p) => (p ? { ...p, idx: Math.min(filtered.length - 1, p.idx + 1) } : p)); return; }
       if (key.return) {
-        const sel = modelPicker.items[modelPicker.idx];
+        const sel = filtered[Math.min(modelPicker.idx, filtered.length - 1)];
         setModelPicker(null);
         if (sel) {
           setModel(sel);
@@ -1353,6 +1354,16 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         return;
       }
       if (key.escape) { setModelPicker(null); return; }
+      // Type to filter: backspace edits the query, printable chars extend it. Any
+      // edit resets the cursor to the top of the new result set.
+      if (key.backspace || key.delete || (input2 && /^[\x08\x7f]+$/.test(input2))) {
+        setModelPicker((p) => (p ? { ...p, query: p.query.slice(0, -1), idx: 0 } : p));
+        return;
+      }
+      if (input2 && !key.ctrl && !key.meta) {
+        const clean = input2.replace(/[\x00-\x1f\x7f]/g, "");
+        if (clean) setModelPicker((p) => (p ? { ...p, query: p.query + clean, idx: 0 } : p));
+      }
       return; // swallow everything else while picking
     }
     // While a tool-approval prompt is open, keys select a decision and nothing else.
@@ -1548,15 +1559,23 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       ) : modelPicker ? (
         <Box flexDirection="column" borderStyle="round" borderColor={theme.user} paddingX={1} marginTop={1}>
           <Text bold color={theme.user}>Select a model — {config.provider}</Text>
+          <Text>
+            <Text dimColor>search </Text>
+            <Text color={theme.user}>{modelPicker.query}</Text>
+            <Text inverse> </Text>
+          </Text>
           {(() => {
+            const filtered = searchModels(modelPicker.all, modelPicker.query);
+            if (!filtered.length) return <Text color={theme.hex.warning}>  no models match “{modelPicker.query}”</Text>;
             const height = 12;
-            const { slice, offset } = pickerWindow(modelPicker.items, modelPicker.idx, height);
-            const tail = modelPicker.items.length - offset - slice.length;
+            const idx = Math.min(modelPicker.idx, filtered.length - 1);
+            const { slice, offset } = pickerWindow(filtered, idx, height);
+            const tail = filtered.length - offset - slice.length;
             return (
               <>
                 {offset > 0 && <Text dimColor>{`  ↑ ${offset} more`}</Text>}
                 {slice.map((m, i) => {
-                  const sel = offset + i === modelPicker.idx;
+                  const sel = offset + i === idx;
                   const isCurrent = m === model;
                   return (
                     <Text key={m} color={sel ? theme.user : undefined} dimColor={!sel}>
@@ -1568,7 +1587,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
               </>
             );
           })()}
-          <Text dimColor>  ↑/↓ select · Enter switch · Esc cancel</Text>
+          <Text dimColor>  type to filter · ↑/↓ select · Enter switch · Esc cancel</Text>
         </Box>
       ) : picker ? (
         <Box flexDirection="column" borderStyle="round" borderColor={theme.user} paddingX={1} marginTop={1}>

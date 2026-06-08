@@ -18,20 +18,28 @@ function defaultPath(): string {
   return join(APP_DIR, "last-session.json");
 }
 
-export function readLastSession(path: string = defaultPath()): LastSession {
+// Under the test runner, ignore the real file unless a path is passed explicitly,
+// so loadConfig tests stay deterministic (and a test never pollutes the real one).
+const underTest = process.env.NODE_ENV === "test";
+
+export function readLastSession(path?: string): LastSession {
+  if (path === undefined && underTest) return {};
+  const p = path ?? defaultPath();
   try {
-    if (!existsSync(path)) return {};
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as LastSession;
+    if (!existsSync(p)) return {};
+    const parsed = JSON.parse(readFileSync(p, "utf8")) as LastSession;
     return { provider: parsed.provider, model: parsed.model };
   } catch {
     return {};
   }
 }
 
-export function writeLastSession(s: LastSession, path: string = defaultPath()): void {
+export function writeLastSession(s: LastSession, path?: string): void {
+  if (path === undefined && underTest) return;
+  const p = path ?? defaultPath();
   try {
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, JSON.stringify({ provider: s.provider, model: s.model }, null, 2));
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, JSON.stringify({ provider: s.provider, model: s.model }, null, 2));
   } catch {
     /* remembering must never break a run */
   }

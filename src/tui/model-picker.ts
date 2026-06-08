@@ -14,6 +14,18 @@ export function filterChatModels(all: string[]): { show: string[]; hidden: numbe
   return { show, hidden: all.length - show.length };
 }
 
+/** Filter a model list by a search query: case-insensitive, AND across
+ *  whitespace-separated terms (so "claude opus" matches "claude-opus-4-8").
+ *  Empty query → the list unchanged. */
+export function searchModels(models: string[], query: string): string[] {
+  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!terms.length) return models;
+  return models.filter((m) => {
+    const lower = m.toLowerCase();
+    return terms.every((t) => lower.includes(t));
+  });
+}
+
 /** The visible slice of a (possibly long, e.g. OpenRouter's 300+) list for a
  *  scrolling picker: centers the cursor and clamps to the ends. `offset` is the
  *  index of the first visible item, for "↑ N more / ↓ N more" hints. */

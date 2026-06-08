@@ -1,7 +1,30 @@
 // Pure logic behind the interactive /model picker (the keystroke wiring is
 // verified live — the harness can't drive keys).
 import { test, expect, describe } from "bun:test";
-import { filterChatModels, pickerWindow } from "../src/tui/model-picker";
+import { filterChatModels, pickerWindow, searchModels } from "../src/tui/model-picker";
+
+describe("searchModels", () => {
+  const models = ["gpt-4o", "gpt-5.4", "anthropic/claude-opus-4-8", "anthropic/claude-sonnet-4-6", "gemini-2.5-pro"];
+
+  test("empty query returns everything", () => {
+    expect(searchModels(models, "")).toEqual(models);
+    expect(searchModels(models, "   ")).toEqual(models);
+  });
+
+  test("case-insensitive substring match", () => {
+    expect(searchModels(models, "GPT")).toEqual(["gpt-4o", "gpt-5.4"]);
+    expect(searchModels(models, "sonnet")).toEqual(["anthropic/claude-sonnet-4-6"]);
+  });
+
+  test("ANDs across whitespace-separated terms", () => {
+    expect(searchModels(models, "claude opus")).toEqual(["anthropic/claude-opus-4-8"]);
+    expect(searchModels(models, "5 pro")).toEqual(["gemini-2.5-pro"]); // 2.5 has "5" and "pro"
+  });
+
+  test("no match → empty", () => {
+    expect(searchModels(models, "llama")).toEqual([]);
+  });
+});
 
 describe("filterChatModels", () => {
   test("hides non-chat models, keeps chat ones, counts hidden", () => {
