@@ -428,6 +428,12 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   const approvalQueue = useRef(createApprovalQueue(setPending)).current;
   const abortRef = useRef<AbortController | null>(null);
   const streamIdRef = useRef<string | null>(null); // id of the assistant bubble currently streaming
+  // Messages typed WHILE a turn is running are queued, not dropped. submit()
+  // refuses to run concurrently (returns early if busy), so without this a line
+  // entered mid-turn vanished on Enter — the user couldn't steer the agent. We
+  // hold them here and drain one when the turn finishes (see the effect below).
+  const queuedInputRef = useRef<string[]>([]);
+  const [queuedCount, setQueuedCount] = useState(0);
 
   // Exit cleanly: abort any in-flight turn first so spawned tool processes (e.g.
   // a running test suite) are signaled to die — otherwise their open pipes keep
@@ -450,6 +456,18 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   useEffect(() => {
     if (!busy && !pending) setSettled(messages.length);
   }, [busy, pending, messages.length]);
+
+  // Drain queued input once the turn finishes (and no approval is open). One at a
+  // time: dispatching sets busy again, which re-runs this effect for the next.
+  useEffect(() => {
+    if (busy || pending) return;
+    if (queuedInputRef.current.length === 0) return;
+    const next = queuedInputRef.current.shift()!;
+    setQueuedCount(queuedInputRef.current.length);
+    if (next.startsWith("/")) void runSlash(next);
+    else void submit(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy, pending]);
 
   // Honor reduced-motion: FREECODE_NO_ANIMATION / NO_ANIMATION → static indicators
   // instead of the spinner/eye animation (the CLI analog of prefersReducedMotion).
@@ -1527,6 +1545,16 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       }
       setEditor({ text: "", cursor: 0 });
       setHistoryIdx(null);
+      if (!value.trim()) return;
+      // Mid-turn input is queued, not run concurrently (submit/runSlash can't
+      // overlap a live turn) — so the user's steering isn't silently dropped.
+      if (busy || pending) {
+        queuedInputRef.current.push(value);
+        setQueuedCount(queuedInputRef.current.length);
+        setMessages((prev) => [...prev, { id: `q-${Date.now()}`, role: "system", text:
+          `⏳ Queued (sends when the current turn finishes): ${value.length > 80 ? value.slice(0, 80) + "…" : value}` }]);
+        return;
+      }
       if (value.startsWith("/")) {
         void runSlash(value);
       } else {
@@ -1599,7 +1627,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           ))}
           {busy && (
             <Text color={theme.hex.warning}>
-              {reducedMotion ? "•" : SPINNER_FRAMES[tick % SPINNER_FRAMES.length]} Working… <Text dimColor>({Math.max(0, Math.floor((Date.now() - busyStartRef.current) / 1000))}s · esc to interrupt)</Text>
+              {reducedMotion ? "•" : SPINNER_FRAMES[tick % SPINNER_FRAMES.length]} Working… <Text dimColor>({Math.max(0, Math.floor((Date.now() - busyStartRef.current) / 1000))}s · esc to interrupt{queuedCount > 0 ? ` · ${queuedCount} queued` : ""})</Text>
             </Text>
           )}
           {errorLine && <Text color={theme.hex.error}>! {errorLine}</Text>}

@@ -92,6 +92,7 @@ export function toolListToSystemPrompt(tools: Tool[]): string {
     "- Read a file before you edit it. FileEdit matches exact surrounding text and fails if it isn't unique, so include enough context. Don't slurp huge or generated files — use offset/limit.",
     "- When several independent tool calls are needed, issue them together in one step instead of one at a time.",
     "- Earn your confidence: don't claim something works until you've seen it work. After changing code, run the project's checks (typecheck/build/tests) and report the real result; if you haven't verified, say so plainly rather than implying success.",
+    "- Make a failing check pass by FIXING THE CODE — never by deleting, skipping, commenting out, or weakening the check (or the test/assertion it guards). A green you produced by removing the red is a false green, the worst possible outcome. If a check genuinely must be disabled, do it only with the user's say-so, state it explicitly, and do NOT report the suite as passing.",
     "",
     "Editing code:",
     "- Match the surrounding code — its naming, style, structure, and comment density. New code should read as if it was always there. Don't reformat or churn lines unrelated to your change.",
