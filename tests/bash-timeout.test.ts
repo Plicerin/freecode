@@ -40,9 +40,11 @@ test("runInBackground launches detached and returns a pid + log handle without b
   if (pid) { try { process.kill(pid); } catch { /* already gone */ } }
 });
 
-test("runInBackground reports an immediately-failing command instead of a fake 'started'", async () => {
+test("runInBackground reports an immediately-failing command, with its captured output", async () => {
   const tool = createBashTool();
-  const r = await tool.run({ command: "exit 7", runInBackground: true } as never, ctx);
+  // Write to stderr then exit nonzero — the error must surface BOTH and not look "clean".
+  const r = await tool.run({ command: "[Console]::Error.WriteLine('boom-trace'); exit 7", runInBackground: true } as never, ctx);
   expect(r.ok).toBe(false);
-  expect(r.error).toMatch(/exited immediately/i);
+  expect(r.error).toMatch(/exited right away/i);
+  expect(r.error).toMatch(/boom-trace/); // the captured reason is surfaced inline
 });

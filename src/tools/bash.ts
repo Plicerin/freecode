@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { openSync, mkdirSync } from "node:fs";
+import { openSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { APP_DIR } from "../utils/paths";
@@ -66,12 +66,27 @@ interface RunCtx {
   signal?: AbortSignal;
 }
 
+/** Read the tail of a background log (the captured stdout/stderr), trimmed. */
+function readLogTail(path: string, maxChars = 1500): string {
+  try {
+    const t = readFileSync(path, "utf8").trim();
+    return t.length > maxChars ? "…" + t.slice(-maxChars) : t;
+  } catch {
+    return "";
+  }
+}
+
 /**
- * Launch a long-lived command DETACHED and return at once. Output is redirected
- * to a log file the model can read back; the process is unref'd and NOT tied to
- * ctx.signal, so it survives the turn (the whole point — a dev server must keep
- * running). We wait briefly to surface an immediate failure (bad command, port
- * already in use) rather than reporting a "started" pid that's already dead.
+ * Launch a long-lived command in the background and return at once. stdout+stderr
+ * are captured to a log file the model can read back; the child is unref'd and
+ * NOT tied to ctx.signal, so it outlives the turn (the whole point — a dev server
+ * must keep running) and runs for the rest of the session.
+ *
+ * NOT `detached: true`: on Windows a detached child does not inherit our file
+ * descriptors, so the log captures nothing (and a crash looks like a clean exit).
+ * We wait briefly to catch an immediate failure — and surface the captured output
+ * (e.g. a Python traceback, "address already in use") right in the error, since a
+ * shell wrapper often exits 0 even when the real command crashed.
  */
 function runDetached(
   args: z.infer<typeof ArgsSchema>,
@@ -92,7 +107,6 @@ function runDetached(
     shell: inv.useShell,
     cwd: args.cwd ?? ctx.cwd,
     env: { ...process.env, ...(args.env ?? {}) },
-    detached: true,
     stdio: ["ignore", fd, fd], // no stdin; stdout+stderr → log file
   });
   const pid = child.pid;
@@ -106,19 +120,32 @@ function runDetached(
       resolve(r);
     };
     child.on("error", (err) => finish({ ok: false, output: "", error: `Failed to start background process: ${err.message}` }));
-    const onEarlyExit = (code: number | null): void =>
-      finish({ ok: false, output: "", error: `Background process exited immediately (code ${code}). Check the log: ${logPath}`, metadata: { pid, logPath, background: true } });
+    const onEarlyExit = (code: number | null): void => {
+      // Small delay so the OS flushes the child's last writes to the log.
+      setTimeout(() => {
+        const tail = readLogTail(logPath);
+        const why = tail ? `\n--- captured output ---\n${tail}` : " (no output was captured)";
+        finish({
+          ok: false,
+          output: "",
+          error: `The background command exited right away (exit code ${code}) instead of staying up.${why}`,
+          metadata: { pid, logPath, background: true },
+        });
+      }, 120);
+    };
     child.on("exit", onEarlyExit);
     // Survived the startup window → treat it as running.
     setTimeout(() => {
       child.removeListener("exit", onEarlyExit);
       child.unref();
+      const tail = readLogTail(logPath, 600);
       finish({
         ok: true,
         output:
-          `Started in background (pid ${pid}). It keeps running after this turn.\n` +
-          `Output → ${logPath}  (read it with FileRead to check progress)\n` +
-          `Stop it with: ${stopHint}`,
+          `Started in background (pid ${pid}). Runs until you stop it or this freecode session ends.\n` +
+          `Output → ${logPath}` +
+          (tail ? `\n--- so far ---\n${tail}` : "  (nothing logged yet — read it with FileRead to check progress)") +
+          `\nStop it with: ${stopHint}`,
         metadata: { pid, logPath, background: true },
       });
     }, 600);
