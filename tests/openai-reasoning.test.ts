@@ -31,27 +31,24 @@ async function drain(req: ChatRequest): Promise<StreamEvent[]> {
   return out;
 }
 
-describe("reasoning_effort", () => {
-  test("a gpt-oss model gets reasoning_effort=high and temperature 1 by default", async () => {
+describe("reasoning_effort (opt-in)", () => {
+  test("a gpt-oss model sends NO reasoning_effort by default (prior behavior, temp 0.7)", async () => {
     const body = stubFetch('data: {"choices":[{"delta":{"content":"hi"}}]}\n\ndata: [DONE]\n\n');
+    await drain({ model: "openai/gpt-oss-120b", messages: [{ role: "user", content: "x" }], stream: true });
+    expect(body().reasoning_effort).toBeUndefined();
+    expect(body().temperature).toBe(0.7);
+  });
+
+  test("FREECODE_REASONING_EFFORT opts in for reasoning models (and bumps temp to 1)", async () => {
+    process.env.FREECODE_REASONING_EFFORT = "high";
+    const body = stubFetch('data: [DONE]\n\n');
     await drain({ model: "openai/gpt-oss-120b", messages: [{ role: "user", content: "x" }], stream: true });
     expect(body().reasoning_effort).toBe("high");
     expect(body().temperature).toBe(1);
   });
 
-  test("FREECODE_REASONING_EFFORT overrides; =off omits it", async () => {
-    process.env.FREECODE_REASONING_EFFORT = "medium";
-    let body = stubFetch('data: [DONE]\n\n');
-    await drain({ model: "openai/gpt-oss-120b", messages: [{ role: "user", content: "x" }], stream: true });
-    expect(body().reasoning_effort).toBe("medium");
-
-    process.env.FREECODE_REASONING_EFFORT = "off";
-    body = stubFetch('data: [DONE]\n\n');
-    await drain({ model: "openai/gpt-oss-120b", messages: [{ role: "user", content: "x" }], stream: true });
-    expect(body().reasoning_effort).toBeUndefined();
-  });
-
-  test("a non-reasoning model gets no reasoning_effort and the 0.7 default temp", async () => {
+  test("the env var does nothing for a non-reasoning model", async () => {
+    process.env.FREECODE_REASONING_EFFORT = "high";
     const body = stubFetch('data: [DONE]\n\n');
     await drain({ model: "meta/llama-3.1-70b", messages: [{ role: "user", content: "x" }], stream: true });
     expect(body().reasoning_effort).toBeUndefined();

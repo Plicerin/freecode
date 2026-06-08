@@ -5,18 +5,17 @@ import { debug } from "../utils/debug";
 import { getEnv } from "../utils/env";
 import { createStallTimeout, streamIdleMs } from "./stall-timeout";
 
-// Open reasoning models served over OpenAI-compat (gpt-oss, deepseek-r1, qwq,
-// generic "reasoner"s) take a reasoning_effort and emit a separate reasoning
-// channel. Without an effort they run at the server default — often too low for
-// multi-step agentic work, so they stall and give shallow answers. Default high;
-// FREECODE_REASONING_EFFORT=low|medium|high overrides, =off stops sending it (an
-// escape hatch if a particular endpoint rejects the parameter).
+// Open reasoning models (gpt-oss, deepseek-r1, qwq, "reasoner"s) accept a
+// reasoning_effort. Setting it MAY help multi-step work, but it can also backfire
+// on some endpoints — a server can reject the param (400), or high effort can
+// burn the output-token budget before any tool call is emitted. It's unverified
+// against live endpoints, so it's OPT-IN: default sends nothing (prior behavior),
+// and FREECODE_REASONING_EFFORT=low|medium|high turns it on for reasoning models.
 function reasoningEffortFor(model: string): "low" | "medium" | "high" | undefined {
   if (!/gpt-oss|deepseek-r1|\bqwq\b|reasoner/i.test(model)) return undefined;
   const env = (getEnv("FREECODE_REASONING_EFFORT") || "").toLowerCase();
-  if (env === "off" || env === "none") return undefined;
   if (env === "low" || env === "medium" || env === "high") return env;
-  return "high";
+  return undefined; // opt-in only
 }
 
 interface OpenAICompatOptions {
