@@ -90,10 +90,22 @@ function colorRow(line: string, theme: Theme): React.ReactElement[] {
   return segs;
 }
 
-export function Mascot({ theme }: { theme: Theme }): React.ReactElement {
+/** Half-height owl for the startup banner — every other row, ~50% smaller.
+ *  Terminal cells are ~2:1, so dropping rows also un-stretches the aspect ratio. */
+export function owlHalf(): string[] {
+  return OWL.filter((_, i) => i % 2 === 0);
+}
+
+/** Blink: the eyes (the only `█` glyphs) momentarily close to feather shading. */
+function closeEyes(rows: string[]): string[] {
+  return rows.map((r) => r.replace(/█/g, "▒"));
+}
+
+export function Mascot({ theme, blink = false }: { theme: Theme; blink?: boolean }): React.ReactElement {
+  const rows = blink ? closeEyes(owlHalf()) : owlHalf();
   return (
     <Box flexDirection="column">
-      {OWL.map((row, i) => (
+      {rows.map((row, i) => (
         <Text key={i}>{colorRow(row, theme)}</Text>
       ))}
     </Box>

@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { OWL, OWL_MICRO, MASCOT_NAME, MASCOT_BIO } from "../src/tui/mascot";
+import { OWL, owlHalf, OWL_MICRO, MASCOT_NAME, MASCOT_BIO } from "../src/tui/mascot";
 
 // The owl is rendered row-by-row with per-glyph coloring, so any misaligned
 // row (a dropped or extra block from a future edit) would visibly break him.
@@ -26,6 +26,14 @@ test("the solid █ glyph appears only in the eye rows", () => {
   for (let i = 1; i < eyeRows.length; i++) {
     expect(eyeRows[i]! - eyeRows[i - 1]!).toBe(1); // contiguous
   }
+});
+
+// The startup banner uses the half-height owl (~50% smaller). It must keep the
+// eyes, or the launch blink would have nothing to close.
+test("owlHalf is ~half height and keeps the eyes", () => {
+  expect(owlHalf().length).toBe(Math.ceil(OWL.length / 2));
+  expect(owlHalf().length).toBeLessThan(OWL.length);
+  expect(owlHalf().some((r) => r.includes("█"))).toBe(true);
 });
 
 test("Bubo's identity is intact", () => {
