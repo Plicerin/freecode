@@ -6,6 +6,7 @@ import { isRetryable } from "../providers/friendly-errors";
 import { debug } from "../utils/debug";
 import { toolListToSystemPrompt } from "../tools/registry";
 import { ContextTracker } from "./context";
+import { estimateMessagesTokens } from "./token-estimate";
 import { summarizeConversation } from "./summarize";
 import { runHooks } from "./hooks";
 import { runVerify, type VerifyPlan } from "./verify";
@@ -116,8 +117,13 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
     turns += 1;
     if (opts.signal?.aborted) { aborted = true; break; }
 
-    // Auto-compact when the context window fills up (SPEC V14).
-    if (contextTokens >= windowSize * threshold && messages.length > 4) {
+    // Auto-compact when the context window fills up (SPEC V14). The usage-based
+    // gauge (contextTokens) lags by a turn, so estimate the outgoing prompt too —
+    // a large input added THIS turn (a fetched page, big paste, verbose tool
+    // result) would otherwise sail past the gauge into a doomed request.
+    const estimated = estimateMessagesTokens(messages, sys);
+    const fillBasis = Math.max(contextTokens, estimated);
+    if (fillBasis >= windowSize * threshold && messages.length > 4) {
       try {
         const result = await tracker.compact(messages, summarize);
         if (result.removedCount > 0) {
@@ -130,6 +136,22 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
       } catch (err) {
         debug.warn("compaction failed; continuing without it", { err: String(err) });
       }
+    }
+    // Hard guard: if the prompt STILL won't fit (compaction can't shrink a single
+    // oversized message in the kept tail), stop with a clear error instead of
+    // letting the provider reject it — e.g. NIM computes max_tokens = window −
+    // prompt and 400s on the resulting negative value. Reserve room for a reply.
+    const reserve = Math.min(8192, Math.max(512, Math.floor(windowSize * 0.05)));
+    const finalEstimate = estimateMessagesTokens(messages, sys);
+    if (finalEstimate + reserve > windowSize) {
+      opts.onEvent({
+        type: "error",
+        error:
+          `This conversation (~${finalEstimate.toLocaleString()} tokens) no longer fits ${opts.model}'s ` +
+          `${windowSize.toLocaleString()}-token context window, even after compaction. ` +
+          `Start fresh with /new, or drop the large input (a big pasted file, or a fetched page/binary).`,
+      });
+      break;
     }
     const req: ChatRequest = {
       model: opts.model,
