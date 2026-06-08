@@ -90,10 +90,12 @@ function colorRow(line: string, theme: Theme): React.ReactElement[] {
   return segs;
 }
 
-/** Half-height owl for the startup banner — every other row, ~50% smaller.
- *  Terminal cells are ~2:1, so dropping rows also un-stretches the aspect ratio. */
+/** Half-size owl for the startup banner — every other row AND every other column,
+ *  so it shrinks ~50% in BOTH dimensions and keeps its proportions (not squashed). */
 export function owlHalf(): string[] {
-  return OWL.filter((_, i) => i % 2 === 0);
+  return OWL
+    .filter((_, i) => i % 2 === 0)
+    .map((row) => [...row].filter((_, j) => j % 2 === 0).join(""));
 }
 
 // Eye-dart: the pupils (the only `█` glyphs) live in white sockets bounded by the
