@@ -3,7 +3,8 @@ import { PROFILE_PATH } from "../utils/paths";
 import { ProfileSchema, type Profile } from "./schema";
 import { loadJsoncSettings } from "./settings-jsonc";
 import { loadProfile } from "./profile";
-import { detectProviderFromEnv, getEnv } from "../utils/env";
+import { readLastSession } from "./last-session";
+import { detectProviderFromEnv, explicitEnvProvider, getEnv } from "../utils/env";
 import { Vault } from "./vault";
 import {
   type ProviderId,
@@ -158,23 +159,32 @@ export interface LoadOptions {
   flags: CliFlags;
   profilePath?: string;
   settingsPath?: string;
+  lastSessionPath?: string;
 }
 
 export function loadConfig(opts: LoadOptions): ResolvedConfig {
   const profile = loadProfile(opts.profilePath ?? PROFILE_PATH);
   const settings: Settings = loadJsoncSettings(opts.settingsPath);
+  const last = readLastSession(opts.lastSessionPath); // remembered provider/model (lowest priority)
 
-  const envProvider = detectProviderFromEnv();
-  // A deliberate choice (CLI flag or project profile) is absolute. Otherwise an
-  // env-detected provider is honored only if it has a usable key — so a stray
-  // CLAUDE_CODE_USE_X flag (or empty key var) can't boot us into a keyless
-  // provider while a real key (e.g. openai in the vault) goes unused.
+  const explicitEnv = explicitEnvProvider(); // CLAUDE_CODE_USE_* — deliberate
+  const envProvider = detectProviderFromEnv(); // incl. raw-key inference (auto-select)
+  // Precedence: a deliberate choice (CLI flag / project profile) is absolute, then
+  // an explicit CLAUDE_CODE_USE_* env flag, then the REMEMBERED last session (so we
+  // reopen where you left off instead of auto-selecting whatever has a key), then
+  // raw-key inference, then the first provider with any key.
   const deliberate = opts.flags.provider ?? profile.provider;
   let finalProvider: ProviderId;
   let providerSource: Source;
   if (deliberate) {
     finalProvider = deliberate;
     providerSource = opts.flags.provider !== undefined ? "cli" : "profile";
+  } else if (explicitEnv && hasUsableKey(explicitEnv)) {
+    finalProvider = explicitEnv;
+    providerSource = "env";
+  } else if (last.provider && hasUsableKey(last.provider)) {
+    finalProvider = last.provider;
+    providerSource = "settings";
   } else if (envProvider && hasUsableKey(envProvider)) {
     finalProvider = envProvider;
     providerSource = "env";
@@ -185,12 +195,15 @@ export function loadConfig(opts: LoadOptions): ResolvedConfig {
   }
 
   const envModel = envValueFor("CLAUDE_CODE_MODEL") ?? envValueFor("OPENAI_MODEL") ?? envValueFor("ANTHROPIC_MODEL");
+  // Use the remembered model only when it goes with the remembered provider, so
+  // we never pair (say) a Claude model id with an auto-selected OpenAI provider.
+  const rememberedModel = last.provider === finalProvider ? last.model : undefined;
   const modelPick = pick<string | undefined>(
     opts.flags.model,
     profile.model,
     envModel,
     settings.model,
-    undefined,
+    rememberedModel, // lowest-priority default; undefined → falls through to defaultModelFor below
   );
   const finalModel = modelPick.value ?? defaultModelFor(finalProvider);
 

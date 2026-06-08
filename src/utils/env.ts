@@ -42,10 +42,19 @@ const ENV_FLAGS: Record<ProviderId, string> = {
   nim: "CLAUDE_CODE_USE_NIM",
 };
 
-export function detectProviderFromEnv(): ProviderId | undefined {
+/** A DELIBERATE provider choice from env: only the CLAUDE_CODE_USE_* flags, not
+ *  raw-key inference. Should outrank a remembered session; key-inference (the full
+ *  detectProviderFromEnv below) should not. */
+export function explicitEnvProvider(): ProviderId | undefined {
   for (const [id, flag] of Object.entries(ENV_FLAGS)) {
     if (getEnvBool(flag)) return id as ProviderId;
   }
+  return undefined;
+}
+
+export function detectProviderFromEnv(): ProviderId | undefined {
+  const explicit = explicitEnvProvider();
+  if (explicit) return explicit;
   if (getEnv("ANTHROPIC_API_KEY")) return "anthropic";
   if (getEnv("OPENAI_API_KEY")) return "openai";
   if (getEnv("GEMINI_API_KEY")) return "gemini";

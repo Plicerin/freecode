@@ -37,6 +37,7 @@ import { closest } from "../utils/fuzzy";
 import { resolveVerify, resolveQuickVerify, runVerify } from "../agent/verify";
 import { newSession, appendEvent, resumeSession, readSession, setSessionTitle, titleOf, listSessionMetas, type Session, type SessionMeta } from "../session/manager";
 import { setTerminalTitle } from "../tui/terminal-title";
+import { writeLastSession } from "../config/last-session";
 import { basename } from "node:path";
 import { historyFromEvents } from "../session/history";
 import { makeTheme } from "../tui/theme";
@@ -537,6 +538,8 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     }
     // Title from the session's name if it has one (resume), else the project folder.
     applyTabTitle(titleOf(readSession(sessionRef.current) as never));
+    // Remember this session's provider/model so the next launch reopens here.
+    writeLastSession({ provider: config.provider, model });
     if (mcpStatus && mcpStatus.length > 0) {
       const ok = mcpStatus.filter((s) => s.ok);
       const toolCount = ok.reduce((n, s) => n + s.toolCount, 0);
@@ -704,6 +707,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           trackerRef.current.setPricing(priceFor(arg, config.provider));
           trackerRef.current.setWindow(contextWindowFor(arg));
           setCtxFill(trackerRef.current.contextFill());
+          writeLastSession({ provider: config.provider, model: arg });
           setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Model switched to ${arg} (provider: ${config.provider}). Active from your next message.` }]);
         } else {
           // No arg: open the interactive arrow-key picker (↑/↓ select, Enter
@@ -1190,6 +1194,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           setModel(newCfg.model);
           trackerRef.current.setPricing(priceFor(newCfg.model, newCfg.provider));
           trackerRef.current.setWindow(contextWindowFor(newCfg.model));
+          writeLastSession({ provider: newCfg.provider, model: newCfg.model });
           setCtxFill(trackerRef.current.contextFill());
           const local = ["ollama", "lmstudio", "mock"].includes(newCfg.provider);
           const text = !newCfg.apiKey && !local
@@ -1342,6 +1347,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           trackerRef.current.setPricing(priceFor(sel, config.provider));
           trackerRef.current.setWindow(contextWindowFor(sel));
           setCtxFill(trackerRef.current.contextFill());
+          writeLastSession({ provider: config.provider, model: sel });
           setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Model switched to ${sel} (provider: ${config.provider}). Active from your next message.` }]);
         }
         return;
