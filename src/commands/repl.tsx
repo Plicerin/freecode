@@ -38,6 +38,7 @@ import { resolveVerify, resolveQuickVerify, runVerify } from "../agent/verify";
 import { newSession, appendEvent, resumeSession, readSession, setSessionTitle, titleOf, listSessionMetas, type Session, type SessionMeta } from "../session/manager";
 import { setTerminalTitle } from "../tui/terminal-title";
 import { writeLastSession } from "../config/last-session";
+import { goalPrompt, goalStatus, goalDecision, GOAL_MAX_DEFAULT } from "../agent/goal";
 import { basename } from "node:path";
 import { historyFromEvents } from "../session/history";
 import { makeTheme } from "../tui/theme";
@@ -63,7 +64,7 @@ interface UiMessage {
   ok?: boolean;
 }
 
-const SLASH_COMMANDS = ["/model", "/models", "/new", "/resume", "/rename", "/context", "/cost", "/config", "/doctor", "/diff", "/commit", "/commit-push-pr", "/branch", "/issue", "/pr-comments", "/review", "/security-review", "/autofix-pr", "/explore", "/agents", "/skills", "/learn", "/workflows", "/ultraplan", "/bg", "/plugins", "/provider", "/plan", "/verify", "/bench", "/log", "/mcp", "/help", "/compact", "/about", "/exit"];
+const SLASH_COMMANDS = ["/model", "/models", "/new", "/resume", "/rename", "/context", "/cost", "/config", "/doctor", "/diff", "/commit", "/commit-push-pr", "/branch", "/issue", "/pr-comments", "/review", "/security-review", "/autofix-pr", "/explore", "/agents", "/skills", "/learn", "/goal", "/workflows", "/ultraplan", "/bg", "/plugins", "/provider", "/plan", "/verify", "/bench", "/log", "/mcp", "/help", "/compact", "/about", "/exit"];
 
 // Spinner frames — proof of life while a turn runs. Not the braille snake every
 // other CLI ships: this is Bubo's eye. He holds your gaze, glances right, glances
@@ -120,6 +121,7 @@ const COMMAND_DESC: Record<string, string> = {
   "/ultraplan": "freecode composes a multi-agent workflow for a task and runs it (/ultraplan <task>)",
   "/bg": "run a prompt as a detached background job, or list jobs (/bg [prompt])",
   "/learn": "self-improvement: propose (/learn), save (/learn save <n|all>), score (/learn stats), prune",
+  "/goal": "work autonomously toward an objective until done (/goal <objective>, /goal stop)",
   "/plugins": "list/install/uninstall/enable/disable plugins (/plugins install <git-url|path>)",
   "/verify": "run the project's checks",
   "/bench": "race the performance ghost",
@@ -415,6 +417,8 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   const [modelPicker, setModelPicker] = useState<{ all: string[]; query: string; idx: number } | null>(null);
   // Self-improvement: proposals from the last /learn, awaiting /learn save <n|all>.
   const learnProposalsRef = useRef<Proposal[]>([]);
+  // /goal: true while an autonomous goal loop is running (esc or /goal stop ends it).
+  const goalActiveRef = useRef(false);
   // Approval prompts are QUEUED, not held in a single slot. Parallel sub-agents
   // (a workflow fan-out) can each need approval at the same instant; a lone
   // resolver let the second prompt clobber the first, orphaning its promise so
@@ -553,8 +557,8 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     }
   }, []);
 
-  async function submit(prompt: string): Promise<void> {
-    if (!prompt.trim() || busy) return;
+  async function submit(prompt: string): Promise<{ text: string; aborted: boolean }> {
+    if (!prompt.trim() || busy) return { text: "", aborted: false };
     logActivity(`USER ${prompt.replace(/\s+/g, " ").trim().slice(0, 200)}`);
     setBusy(true);
     setErrorLine(null);
@@ -571,6 +575,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     appendEvent(sessionRef.current, { kind: "user", text: prompt, ts: new Date().toISOString() });
     let buffer = "";
     let streamedAny = false;
+    let aborted = false;
     const t0 = Date.now();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -686,6 +691,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       debug.log("turn complete", { turns: result.turns, usage: result.usage });
     } catch (err) {
       if (controller.signal.aborted) {
+        aborted = true;
         setMessages((prev) => [...prev, { id: `int-${Date.now()}`, role: "system", text: "⏹ Interrupted." }]);
       } else {
         setErrorLine(err instanceof Error ? err.message : String(err));
@@ -694,6 +700,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       abortRef.current = null;
       setBusy(false);
     }
+    return { text: buffer, aborted };
   }
 
   // Open the interactive model picker for a given provider instance. Shared by
@@ -905,6 +912,58 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           break;
         }
         void submit(`Use the Agent tool with subagent_type "explore" to: ${arg.trim()}. Return its findings verbatim.`);
+        break;
+      }
+      case "/goal": {
+        const sub = arg.trim();
+        if (sub === "stop") {
+          if (goalActiveRef.current) {
+            goalActiveRef.current = false;
+            abortRef.current?.abort(); // interrupt the in-flight cycle too
+            setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "◆ Goal stopped." }]);
+          } else {
+            setErrorLine("No goal is running.");
+          }
+          break;
+        }
+        if (!sub) {
+          setErrorLine("Usage: /goal <objective>  — work autonomously until done (/goal stop or esc to halt)");
+          break;
+        }
+        if (goalActiveRef.current) {
+          setErrorLine("A goal is already running. /goal stop to halt it first.");
+          break;
+        }
+        const objective = sub;
+        const max = GOAL_MAX_DEFAULT;
+        goalActiveRef.current = true;
+        setMessages((prev) => [...prev, { id: `goal-${Date.now()}`, role: "system", text:
+          `◆ Goal: ${objective}\n  Working autonomously (up to ${max} cycles). Press esc or run /goal stop to halt.` }]);
+        try {
+          let completed = 0;
+          while (goalActiveRef.current) {
+            setMessages((prev) => [...prev, { id: `gc-${Date.now()}`, role: "system", text: `◆ cycle ${completed + 1}/${max}` }]);
+            const res = await submit(goalPrompt(objective, completed));
+            completed += 1;
+            const decision = goalDecision({ status: goalStatus(res.text), aborted: res.aborted, completed, max });
+            if (decision === "done") {
+              setMessages((prev) => [...prev, { id: `gd-${Date.now()}`, role: "system", text: `✓ Goal reported DONE after ${completed} cycle${completed === 1 ? "" : "s"}.` }]);
+              break;
+            }
+            if (decision === "stop-aborted") {
+              setMessages((prev) => [...prev, { id: `gd-${Date.now()}`, role: "system", text: `◆ Goal halted after ${completed} cycle${completed === 1 ? "" : "s"}.` }]);
+              break;
+            }
+            if (decision === "stop-max") {
+              setMessages((prev) => [...prev, { id: `gd-${Date.now()}`, role: "system", text:
+                `◆ Reached the ${max}-cycle cap without a DONE. Run /goal "${objective}" to keep going.` }]);
+              break;
+            }
+            // "continue" → next cycle
+          }
+        } finally {
+          goalActiveRef.current = false;
+        }
         break;
       }
       case "/agents": {
