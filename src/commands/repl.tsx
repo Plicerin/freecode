@@ -59,7 +59,7 @@ export interface ReplOptions {
 
 interface UiMessage {
   id: string;
-  role: "user" | "assistant" | "tool" | "system" | "ledger";
+  role: "user" | "assistant" | "tool" | "system" | "ledger" | "warning";
   text: string;
   toolName?: string;
   ok?: boolean;
@@ -284,6 +284,9 @@ function MessageLine({ m, theme }: { m: UiMessage; theme: ReturnType<typeof make
   // syntax-highlighted and inline `code` is coloured (instead of flat white).
   if (m.role === "assistant") {
     return <MarkdownBody text={m.text} theme={theme} marker={<Text color={theme.hex.assistant}>● </Text>} />;
+  }
+  if (m.role === "warning") {
+    return <Text color={theme.hex.warning} bold>{"⚠ "}{m.text}</Text>;
   }
   return (
     <Text>
@@ -724,6 +727,8 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
             if (L.observed.length) lines.push(`· observed  ${L.observed.join("; ")}`);
             if (L.believed.length) lines.push(`~ believed  ${L.believed.join("; ")}`);
             if (lines.length) setMessages((prev) => [...prev, { id: `led-${Date.now()}-${prev.length}`, role: "ledger", text: lines.join("\n") }]);
+            // Loud, non-dim caution when a success claim isn't backed by evidence.
+            if (L.warning) setMessages((prev) => [...prev, { id: `warn-${Date.now()}-${prev.length}`, role: "warning", text: L.warning! }]);
           } else if (e.type === "error" && e.error) {
             setErrorLine(e.error);
           }

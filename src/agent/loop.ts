@@ -7,6 +7,7 @@ import { debug } from "../utils/debug";
 import { toolListToSystemPrompt } from "../tools/registry";
 import { ContextTracker } from "./context";
 import { estimateMessagesTokens } from "./token-estimate";
+import { overclaimWarning } from "./overclaim";
 import { summarizeConversation } from "./summarize";
 import { runHooks } from "./hooks";
 import { runVerify, type VerifyPlan } from "./verify";
@@ -19,6 +20,8 @@ export interface TurnLedger {
   verified: string[];
   observed: string[];
   believed: string[];
+  /** A loud caution when the reply's success claim isn't backed by evidence. */
+  warning?: string;
 }
 
 export interface AgentEvent {
@@ -405,9 +408,15 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
       believed.push(`changed ${changedCount} file(s) without running checks — unverified`);
     }
 
-    if (observed.length || verified.length || believed.length) {
-      logActivity(`LEDGER verified=[${verified.join("; ")}] observed=[${observed.join("; ")}] believed=[${believed.join("; ")}]`);
-      opts.onEvent({ type: "ledger", ledger: { verified, observed, believed } });
+    // Overclaim guard: if the final reply asserts sweeping success but freecode
+    // confirmed no passing check (or one failed), say so loudly — a false green
+    // must not hide behind confident prose.
+    const finalText = [...messages].reverse().find((m) => m.role === "assistant")?.content ?? "";
+    const warning = overclaimWarning(finalText, { changedCount, verifiedCount: verified.length, anyFailed }) ?? undefined;
+
+    if (observed.length || verified.length || believed.length || warning) {
+      logActivity(`LEDGER verified=[${verified.join("; ")}] observed=[${observed.join("; ")}] believed=[${believed.join("; ")}]${warning ? ` warning=[${warning}]` : ""}`);
+      opts.onEvent({ type: "ledger", ledger: { verified, observed, believed, warning } });
     }
   }
 
