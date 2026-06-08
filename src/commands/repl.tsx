@@ -39,6 +39,7 @@ import { newSession, appendEvent, resumeSession, readSession, setSessionTitle, t
 import { setTerminalTitle } from "../tui/terminal-title";
 import { writeLastSession } from "../config/last-session";
 import { goalPrompt, goalStatus, goalDecision, GOAL_MAX_DEFAULT } from "../agent/goal";
+import { degenerationReason } from "../agent/degeneration";
 import { basename } from "node:path";
 import { historyFromEvents } from "../session/history";
 import { makeTheme } from "../tui/theme";
@@ -576,6 +577,8 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     let buffer = "";
     let streamedAny = false;
     let aborted = false;
+    let degenerated: string | null = null; // set if the stream collapses into repetition
+    let degenCheckedAt = 0; // throttle the (cheap but not free) repetition scan
     const t0 = Date.now();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -628,6 +631,17 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           if (e.type === "text_delta" && e.text) {
             buffer += e.text;
             streamedAny = true;
+            // Degeneration guard: if the model collapses into runaway repetition,
+            // abort the turn instead of streaming garbage until the user hits esc.
+            if (!degenerated && buffer.length - degenCheckedAt >= 400) {
+              degenCheckedAt = buffer.length;
+              const reason = degenerationReason(buffer);
+              if (reason) {
+                degenerated = reason;
+                controller.abort();
+                return;
+              }
+            }
             const delta = e.text;
             setMessages((prev) => {
               const sid = streamIdRef.current;
@@ -690,7 +704,12 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       appendEvent(sessionRef.current, { kind: "assistant", text: buffer, ts: new Date().toISOString(), usage: result.usage as unknown as Record<string, number> });
       debug.log("turn complete", { turns: result.turns, usage: result.usage });
     } catch (err) {
-      if (controller.signal.aborted) {
+      if (degenerated) {
+        aborted = true; // mark aborted so any /goal loop also halts (re-running would re-collapse)
+        setMessages((prev) => [...prev, { id: `deg-${Date.now()}`, role: "system", text:
+          `⚠ Stopped: the model's output collapsed into runaway repetition (${degenerated}). ` +
+          "This is a model-side failure, not your prompt — retry, or switch models with /model." }]);
+      } else if (controller.signal.aborted) {
         aborted = true;
         setMessages((prev) => [...prev, { id: `int-${Date.now()}`, role: "system", text: "⏹ Interrupted." }]);
       } else {
