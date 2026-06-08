@@ -58,6 +58,13 @@ async function main(): Promise<void> {
     await runBenchCommand(process.argv.slice(3));
     return;
   }
+  // `freecode probe [prompt] [--tools]` — send ONE real request to the configured
+  // provider and print the exact request body + streamed response, no agent loop.
+  if (process.argv[2] === "probe") {
+    const { runProbe } = await import("./commands/probe");
+    await runProbe(process.argv.slice(3));
+    return;
+  }
   // `freecode resume <session-id>` — SPEC §I subcommand form of --resume.
   if (process.argv[2] === "resume") {
     const { startRepl } = await import("./commands/repl");
