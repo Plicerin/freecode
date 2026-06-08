@@ -9,7 +9,7 @@ import { runAgentLoop } from "../agent/loop";
 import { branch as gitBranch, commitPushPr, issue as ghIssue, prComments } from "./git-workflow";
 import { createAgentTool } from "../tools/agent";
 import { resolveAgentTypes } from "../agent/agent-types";
-import { resolveSkills } from "../agent/skills";
+import { resolveSkills, getSkill } from "../agent/skills";
 import { resolveWorkflows, getWorkflow, runWorkflow, composeWorkflow, type WorkflowEvent } from "../agent/workflow";
 import { filterChatModels, pickerWindow, searchModels, sortFreeFirst } from "../tui/model-picker";
 import { matchCommands, resolveSubmit } from "../tui/slash-complete";
@@ -367,9 +367,16 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   const conversationRef = useRef<ChatMessage[]>([]); // running provider-format history
 
   const customCommands = useMemo(() => loadCustomCommands(process.cwd()), []);
+  // Project skills are invocable by name too (/<skill> [args]); surface them in
+  // autocomplete alongside built-in and custom commands.
+  const projectSkills = useMemo(() => resolveSkills(process.cwd()), []);
   const slashNames = useMemo(
-    () => [...SLASH_COMMANDS, ...[...customCommands.keys()].map((n) => `/${n}`)],
-    [customCommands],
+    () => [
+      ...SLASH_COMMANDS,
+      ...[...customCommands.keys()].map((n) => `/${n}`),
+      ...projectSkills.map((s) => `/${s.name}`),
+    ],
+    [customCommands, projectSkills],
   );
 
   const [messages, setMessages] = useState<UiMessage[]>([]);
@@ -388,8 +395,12 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   const cursor = editor.cursor;
   // Live slash-command suggestions: shown while typing a command name (no space yet).
   const menuMatches = useMemo(
-    () => matchCommands(input, slashNames).map((n) => ({ name: n, desc: COMMAND_DESC[n] ?? customCommands.get(n.slice(1))?.description ?? "" })),
-    [input, slashNames, customCommands],
+    () => matchCommands(input, slashNames).map((n) => ({ name: n, desc:
+      COMMAND_DESC[n]
+      ?? customCommands.get(n.slice(1))?.description
+      ?? projectSkills.find((s) => s.name === n.slice(1))?.description
+      ?? "" })),
+    [input, slashNames, customCommands, projectSkills],
   );
   useEffect(() => { setMenuIdx(0); }, [input]); // reset highlight as the query changes
   // Guard against duplicate Enter events before React clears the input. On Windows,
@@ -1418,13 +1429,23 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         break;
       }
       default: {
-        const custom = customCommands.get((name ?? "").replace(/^\//, ""));
+        const bare = (name ?? "").replace(/^\//, "");
+        const custom = customCommands.get(bare);
         if (custom) {
           void submit(expandCommand(custom.body, arg));
-        } else {
-          const suggestion = closest(name ?? "", slashNames, 3);
-          setErrorLine(`Unknown command: ${name}${suggestion ? ` — did you mean ${suggestion}?` : ""}`);
+          break;
         }
+        // Invoke a project skill by name: /<skill> [args] loads its instructions
+        // (filling $ARGUMENTS/$1…, else appending args) and runs them. Skills are
+        // normally loaded by the agent via the Skill tool, but this lets you fire
+        // one directly.
+        const skill = getSkill(bare, process.cwd());
+        if (skill) {
+          void submit(expandCommand(skill.body, arg));
+          break;
+        }
+        const suggestion = closest(name ?? "", slashNames, 3);
+        setErrorLine(`Unknown command: ${name}${suggestion ? ` — did you mean ${suggestion}?` : ""}`);
       }
     }
   }
