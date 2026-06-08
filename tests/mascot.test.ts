@@ -1,5 +1,7 @@
 import { test, expect } from "bun:test";
-import { OWL, owlHalf, OWL_MICRO, MASCOT_NAME, MASCOT_BIO } from "../src/tui/mascot";
+import { OWL, owlHalf, dartEyes, OWL_MICRO, MASCOT_NAME, MASCOT_BIO } from "../src/tui/mascot";
+
+const countEyes = (rows: string[]) => rows.reduce((n, r) => n + [...r].filter((c) => c === "█").length, 0);
 
 // The owl is rendered row-by-row with per-glyph coloring, so any misaligned
 // row (a dropped or extra block from a future edit) would visibly break him.
@@ -34,6 +36,23 @@ test("owlHalf is ~half height and keeps the eyes", () => {
   expect(owlHalf().length).toBe(Math.ceil(OWL.length / 2));
   expect(owlHalf().length).toBeLessThan(OWL.length);
   expect(owlHalf().some((r) => r.includes("█"))).toBe(true);
+});
+
+test("dartEyes moves the gaze without losing pupils, changing width, or escaping the socket", () => {
+  const base = owlHalf();
+  for (const off of [-2, -1, 1, 2]) {
+    const darted = dartEyes(base, off);
+    // Same number of rows, each the same width.
+    expect(darted.length).toBe(base.length);
+    darted.forEach((r, i) => expect([...r].length).toBe([...base[i]!].length));
+    // No pupils gained or lost (they moved, didn't vanish or multiply).
+    expect(countEyes(darted)).toBe(countEyes(base));
+    // Never painted a pupil over the facial disc (only ░▒▓█ + space glyphs remain).
+    const glyphs = new Set(darted.join("").split(""));
+    for (const g of glyphs) expect(["░", "▒", "▓", "█", " "].includes(g)).toBe(true);
+  }
+  // A rightward dart actually shifts something (the result differs from center).
+  expect(dartEyes(base, 1).join("\n")).not.toBe(base.join("\n"));
 });
 
 test("Bubo's identity is intact", () => {

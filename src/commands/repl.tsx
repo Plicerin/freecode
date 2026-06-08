@@ -228,15 +228,15 @@ interface IntroProps {
   providerNote: string;
   hasKey: boolean;
   theme: ReturnType<typeof makeTheme>;
-  blink?: boolean;
+  eyeOffset?: number;
 }
 
-function Intro({ provider, model, endpoint, isLocal, providerNote, hasKey, theme, blink = false }: IntroProps): JSX.Element {
+function Intro({ provider, model, endpoint, isLocal, providerNote, hasKey, theme, eyeOffset = 0 }: IntroProps): JSX.Element {
   const label = (s: string) => <Text color={theme.dim}>{s.padEnd(10)}</Text>;
   return (
     <Box flexDirection="column" marginBottom={1}>
       <Box flexDirection="row" marginLeft={1}>
-        <Mascot theme={theme} blink={blink} />
+        <Mascot theme={theme} eyeOffset={eyeOffset} />
         <Box flexDirection="column" justifyContent="center" marginLeft={3}>
           <Banner />
           <Box marginTop={1}>
@@ -441,18 +441,21 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   // instead of the spinner/eye animation (the CLI analog of prefersReducedMotion).
   const reducedMotion = process.env.FREECODE_NO_ANIMATION === "1" || process.env.NO_ANIMATION === "1";
 
-  // Startup splash: <Static> can't animate (it writes once), so Bubo blinks in the
-  // dynamic region for a beat at launch, then `introReady` flips and the frozen
-  // half-size intro is committed to scrollback. Reduced motion skips straight to it.
+  // Startup splash: <Static> can't animate (it writes once), so Bubo darts his
+  // gaze in the dynamic region for a beat at launch, then `introReady` flips and
+  // the frozen half-size intro (eyes centered) is committed to scrollback.
+  // Reduced motion skips straight to it.
   const [introReady, setIntroReady] = useState(false);
   const [eyeTick, setEyeTick] = useState(0);
   useEffect(() => {
     if (reducedMotion) { setIntroReady(true); return; }
-    const blinkId = setInterval(() => setEyeTick((t) => t + 1), 240);
-    const settle = setTimeout(() => { clearInterval(blinkId); setIntroReady(true); }, 2400);
-    return () => { clearInterval(blinkId); clearTimeout(settle); };
+    const id = setInterval(() => setEyeTick((t) => t + 1), 220);
+    const settle = setTimeout(() => { clearInterval(id); setIntroReady(true); }, 3000);
+    return () => { clearInterval(id); clearTimeout(settle); };
   }, [reducedMotion]);
-  const introBlink = !introReady && eyeTick % 5 === 4; // a quick blink ~once/1.2s during the splash
+  // A look-around cycle: center → right → center → left, by eye-cell offset.
+  const EYE_DART = [0, 1, 2, 1, 0, -1, -2, -1];
+  const introEye = introReady ? 0 : (EYE_DART[eyeTick % EYE_DART.length] ?? 0);
 
   // One clock while a turn runs: ticks the spinner (~90ms) and, every few ticks,
   // Bubo's eyes; also marks the start so we can show elapsed time. Skipped under
@@ -1470,7 +1473,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           at the top where the frozen intro will land. */}
       {!introReady && (
         <Box paddingX={1}>
-          <Intro provider={config.provider} model={model} endpoint={endpoint} isLocal={isLocal} providerNote={providerReason(config.provider, config.source.provider)} hasKey={!!config.apiKey} theme={theme} blink={introBlink} />
+          <Intro provider={config.provider} model={model} endpoint={endpoint} isLocal={isLocal} providerNote={providerReason(config.provider, config.source.provider)} hasKey={!!config.apiKey} theme={theme} eyeOffset={introEye} />
         </Box>
       )}
 

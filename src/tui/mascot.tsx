@@ -96,13 +96,36 @@ export function owlHalf(): string[] {
   return OWL.filter((_, i) => i % 2 === 0);
 }
 
-/** Blink: the eyes (the only `█` glyphs) momentarily close to feather shading. */
-function closeEyes(rows: string[]): string[] {
-  return rows.map((r) => r.replace(/█/g, "▒"));
+// Eye-dart: the pupils (the only `█` glyphs) live in white sockets bounded by the
+// facial disc. Shifting each `█` run one cell toward `dir` — but only INTO a space,
+// never over the disc — moves Bubo's gaze while preserving every row's width.
+function shiftEyesOnce(rows: string[], dir: 1 | -1): string[] {
+  return rows.map((row) => {
+    const a = [...row];
+    const runs: Array<[number, number]> = [];
+    for (let i = 0; i < a.length; ) {
+      if (a[i] === "█") { let j = i; while (j < a.length && a[j] === "█") j++; runs.push([i, j]); i = j; }
+      else i++;
+    }
+    // Move outermost run first so a shift never collides with an un-moved run.
+    for (const [s, e] of dir > 0 ? runs.slice().reverse() : runs) {
+      if (dir > 0) { if (e < a.length && a[e] === " ") { a[e] = "█"; a[s] = " "; } }
+      else { if (s > 0 && a[s - 1] === " ") { a[s - 1] = "█"; a[e - 1] = " "; } }
+    }
+    return a.join("");
+  });
 }
 
-export function Mascot({ theme, blink = false }: { theme: Theme; blink?: boolean }): React.ReactElement {
-  const rows = blink ? closeEyes(owlHalf()) : owlHalf();
+/** Dart the gaze by `offset` cells (negative = left); the socket clamps it. */
+export function dartEyes(rows: string[], offset: number): string[] {
+  let out = rows;
+  const dir = offset >= 0 ? 1 : -1;
+  for (let k = 0; k < Math.abs(offset); k++) out = shiftEyesOnce(out, dir);
+  return out;
+}
+
+export function Mascot({ theme, eyeOffset = 0 }: { theme: Theme; eyeOffset?: number }): React.ReactElement {
+  const rows = eyeOffset ? dartEyes(owlHalf(), eyeOffset) : owlHalf();
   return (
     <Box flexDirection="column">
       {rows.map((row, i) => (
