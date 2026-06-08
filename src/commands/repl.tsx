@@ -1631,6 +1631,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         )}
         <Text>
           {planMode && <Text color={theme.hex.warning}>PLAN  </Text>}
+          <Text color={theme.dim}>{cwdBase}  </Text>
           <ConfidenceBadge state={confidence} theme={theme} />
           <Text dimColor>  · ctx </Text>
           <Text color={{ ok: theme.hex.success, warn: theme.hex.warning, crit: theme.hex.error }[contextTone(ctxFill)]}>{contextBar(ctxFill)}</Text>
