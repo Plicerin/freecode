@@ -42,6 +42,63 @@ export function parseBlocks(text: string): Block[] {
   return blocks;
 }
 
+// --- Inline prose formatting -------------------------------------------------
+// We deliberately support only `code`, **bold**, and *italic* (asterisks), NOT
+// underscores: a coding agent's prose is full of snake_case and __dunders__ that
+// must not be mistaken for emphasis. Emphasis also requires a non-space after the
+// opening marker (so "5 * 3" or "a * b" stays plain).
+
+export type InlineKind = "text" | "bold" | "italic" | "code";
+export interface InlineSpan {
+  text: string;
+  kind: InlineKind;
+}
+
+export function parseInline(text: string): InlineSpan[] {
+  const spans: InlineSpan[] = [];
+  let plain = "";
+  const flush = (): void => { if (plain) { spans.push({ text: plain, kind: "text" }); plain = ""; } };
+  const n = text.length;
+  let i = 0;
+  while (i < n) {
+    const c = text[i]!;
+    if (c === "`") {
+      const end = text.indexOf("`", i + 1);
+      if (end > i + 1) { flush(); spans.push({ text: text.slice(i + 1, end), kind: "code" }); i = end + 1; continue; }
+    } else if (c === "*" && text[i + 1] === "*") {
+      const end = text.indexOf("**", i + 2);
+      if (end > i + 2 && text[i + 2] !== " ") { flush(); spans.push({ text: text.slice(i + 2, end), kind: "bold" }); i = end + 2; continue; }
+    } else if (c === "*") {
+      const end = text.indexOf("*", i + 1);
+      if (end > i + 1 && text[i + 1] !== " " && text[end - 1] !== " ") { flush(); spans.push({ text: text.slice(i + 1, end), kind: "italic" }); i = end + 1; continue; }
+    }
+    plain += c;
+    i++;
+  }
+  flush();
+  return spans;
+}
+
+// --- Block-level prose lines (headings, list items) --------------------------
+
+export interface ProseLine {
+  kind: "heading" | "bullet" | "ordered" | "plain";
+  level?: number; // heading depth 1..6
+  marker?: string; // ordered-list number
+  indent: number; // nesting depth (2 spaces per level)
+  content: string; // text after the marker, still needing inline parsing
+}
+
+export function classifyLine(line: string): ProseLine {
+  const h = /^(#{1,6})\s+(.*)$/.exec(line);
+  if (h) return { kind: "heading", level: h[1]!.length, indent: 0, content: h[2]! };
+  const b = /^(\s*)[-*+]\s+(.*)$/.exec(line);
+  if (b) return { kind: "bullet", indent: Math.floor(b[1]!.length / 2), content: b[2]! };
+  const o = /^(\s*)(\d+)\.\s+(.*)$/.exec(line);
+  if (o) return { kind: "ordered", marker: o[2]!, indent: Math.floor(o[1]!.length / 2), content: o[3]! };
+  return { kind: "plain", indent: 0, content: line };
+}
+
 export type Kind = "kw" | "str" | "com" | "num" | "txt";
 export interface Token {
   text: string;
