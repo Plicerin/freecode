@@ -464,8 +464,9 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     if (queuedInputRef.current.length === 0) return;
     const next = queuedInputRef.current.shift()!;
     setQueuedCount(queuedInputRef.current.length);
+    // Already echoed + persisted at enqueue (skipEcho) — just run it.
     if (next.startsWith("/")) void runSlash(next);
-    else void submit(next);
+    else void submit(next, { skipEcho: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [busy, pending]);
 
@@ -576,7 +577,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     }
   }, []);
 
-  async function submit(prompt: string): Promise<{ text: string; aborted: boolean }> {
+  async function submit(prompt: string, opts?: { skipEcho?: boolean }): Promise<{ text: string; aborted: boolean }> {
     if (!prompt.trim() || busy) return { text: "", aborted: false };
     logActivity(`USER ${prompt.replace(/\s+/g, " ").trim().slice(0, 200)}`);
     setBusy(true);
@@ -589,9 +590,13 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       : prompt;
     const attachSuffix = [images.length ? `${images.length} image(s)` : "", files.length ? `${files.length} file(s)` : ""].filter(Boolean).join(", ");
     const id = `m-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-    setMessages((prev) => [...prev, { id, role: "user", text: prompt + (attachSuffix ? `  [${attachSuffix} attached]` : "") }]);
+    // Queued input was already shown as a user message + persisted at enqueue
+    // time (so it appears in history in the order it was typed); don't echo twice.
+    if (!opts?.skipEcho) {
+      setMessages((prev) => [...prev, { id, role: "user", text: prompt + (attachSuffix ? `  [${attachSuffix} attached]` : "") }]);
+      appendEvent(sessionRef.current, { kind: "user", text: prompt, ts: new Date().toISOString() });
+    }
     if (failed.length) setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: failed.join("\n") }]);
-    appendEvent(sessionRef.current, { kind: "user", text: prompt, ts: new Date().toISOString() });
     let buffer = "";
     let streamedAny = false;
     let aborted = false;
@@ -1548,11 +1553,17 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       if (!value.trim()) return;
       // Mid-turn input is queued, not run concurrently (submit/runSlash can't
       // overlap a live turn) — so the user's steering isn't silently dropped.
+      // Show it in the history right away (as the user's own message, persisted),
+      // so what you typed is visible in order; it's sent when the turn finishes.
       if (busy || pending) {
         queuedInputRef.current.push(value);
         setQueuedCount(queuedInputRef.current.length);
-        setMessages((prev) => [...prev, { id: `q-${Date.now()}`, role: "system", text:
-          `⏳ Queued (sends when the current turn finishes): ${value.length > 80 ? value.slice(0, 80) + "…" : value}` }]);
+        if (!value.startsWith("/")) {
+          setMessages((prev) => [...prev, { id: `q-${Date.now()}`, role: "user", text: `${value}  ⏳ queued` }]);
+          appendEvent(sessionRef.current, { kind: "user", text: value, ts: new Date().toISOString() });
+        } else {
+          setMessages((prev) => [...prev, { id: `q-${Date.now()}`, role: "system", text: `⏳ ${value} queued (runs when the current turn finishes)` }]);
+        }
         return;
       }
       if (value.startsWith("/")) {
