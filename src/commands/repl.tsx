@@ -35,7 +35,9 @@ import { MarkdownBody } from "../tui/markdown-render";
 import { logActivity, setActivityLog, activityState } from "../utils/activity";
 import { closest } from "../utils/fuzzy";
 import { resolveVerify, resolveQuickVerify, runVerify } from "../agent/verify";
-import { newSession, appendEvent, resumeSession, readSession, setSessionTitle, listSessionMetas, type Session, type SessionMeta } from "../session/manager";
+import { newSession, appendEvent, resumeSession, readSession, setSessionTitle, titleOf, listSessionMetas, type Session, type SessionMeta } from "../session/manager";
+import { setTerminalTitle } from "../tui/terminal-title";
+import { basename } from "node:path";
 import { historyFromEvents } from "../session/history";
 import { makeTheme } from "../tui/theme";
 import { Mascot, OWL_MICRO, OWL_FRAMES, MASCOT_BIO } from "../tui/mascot";
@@ -424,7 +426,13 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   // Exit cleanly: abort any in-flight turn first so spawned tool processes (e.g.
   // a running test suite) are signaled to die — otherwise their open pipes keep
   // the runtime alive and the process appears to hang after the UI closes.
+  // Terminal tab title = the session name (its /rename title, else the project
+  // folder). Reset to plain "freecode" on exit so the tab isn't left stale.
+  const cwdBase = basename(process.cwd());
+  const applyTabTitle = (name?: string): void => setTerminalTitle(`freecode · ${name?.trim() || cwdBase}`);
+
   const exitNow = (): void => {
+    setTerminalTitle("freecode");
     abortRef.current?.abort();
     approvalQueue.flush(); // unblock any sub-agents parked on a prompt so the process can die
     exit();
@@ -496,6 +504,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         ok: (e as { ok?: boolean }).ok,
       }));
     conversationRef.current = historyFromEvents(events);
+    applyTabTitle(titleOf(events as never));
     setMessages([...restored, { id: `s-${Date.now()}`, role: "system", text: `Resumed (${conversationRef.current.length} messages of context)` }]);
   }
 
@@ -526,6 +535,8 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     } else {
       sessionRef.current = newSession(cwd);
     }
+    // Title from the session's name if it has one (resume), else the project folder.
+    applyTabTitle(titleOf(readSession(sessionRef.current) as never));
     if (mcpStatus && mcpStatus.length > 0) {
       const ok = mcpStatus.filter((s) => s.ok);
       const toolCount = ok.reduce((n, s) => n + s.toolCount, 0);
@@ -720,6 +731,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         const cwd = process.cwd();
         sessionRef.current = newSession(cwd);
         conversationRef.current = [];
+        applyTabTitle(); // fresh session → back to the project-folder title
         setMessages([]);
         setCostUsd(0);
         setCtxFill(0);
@@ -752,6 +764,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           setErrorLine("Usage: /rename <name>");
         } else {
           setSessionTitle(sessionRef.current, arg.trim());
+          applyTabTitle(arg.trim());
           setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Renamed session to "${arg.trim()}"` }]);
         }
         break;
