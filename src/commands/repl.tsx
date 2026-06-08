@@ -777,6 +777,9 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   async function runSlash(cmd: string): Promise<void> {
     const [name, ...rest] = cmd.split(/\s+/);
     const arg = rest.join(" ");
+    // Echo the command into history so you can see what you ran — it's your
+    // input, and without this a slash command left no trace of itself.
+    setMessages((prev) => [...prev, { id: `cmd-${Date.now()}-${prev.length}`, role: "user", text: cmd }]);
     switch (name) {
       case "/models": // alias
       case "/model": {
@@ -1435,13 +1438,18 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           void submit(expandCommand(custom.body, arg));
           break;
         }
-        // Invoke a project skill by name: /<skill> [args] loads its instructions
-        // (filling $ARGUMENTS/$1…, else appending args) and runs them. Skills are
-        // normally loaded by the agent via the Skill tool, but this lets you fire
-        // one directly.
+        // Invoke a project skill by name: /<skill> [args]. The skill body is
+        // GUIDANCE for the agent to follow, not your message — so we frame it as
+        // such and submit with skipEcho (the command was already echoed above),
+        // otherwise the agent reads the dumped body as a spec you pasted.
         const skill = getSkill(bare, process.cwd());
         if (skill) {
-          void submit(expandCommand(skill.body, arg));
+          const task = arg.trim();
+          const expanded = expandCommand(skill.body, task);
+          const framed = task
+            ? `Apply the "${skill.name}" skill below to the task — follow its guidance, don't restate it.\n\nTASK: ${task}\n\n--- skill: ${skill.name} ---\n${expanded}`
+            : `Adopt the "${skill.name}" skill below as your operating guidance for what I ask next. Acknowledge in one line that it's active, then wait for my request — do NOT restate the skill or ask for a spec yet.\n\n--- skill: ${skill.name} ---\n${expanded}`;
+          void submit(framed, { skipEcho: true });
           break;
         }
         const suggestion = closest(name ?? "", slashNames, 3);
