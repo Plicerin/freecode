@@ -120,6 +120,7 @@ describe("Provider registry", () => {
       webSearchProvider: "duckduckgo",
       theme: "dark",
       maxTurns: 5,
+      maxRequestsPerMinute: 0,
       contextThreshold: 0.8,
       enablePromptCache: true,
       enableExtendedThinking: false,

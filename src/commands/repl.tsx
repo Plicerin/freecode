@@ -760,6 +760,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           `verifyMode   ${config.verifyMode}`,
           `theme        ${config.theme}`,
           `maxTurns     ${config.maxTurns}`,
+          `maxRPM       ${config.maxRequestsPerMinute > 0 ? config.maxRequestsPerMinute : "off"}`,
           `webSearch    ${config.webSearchProvider}`,
           `promptCache  ${config.enablePromptCache}`,
         ];

@@ -20,6 +20,7 @@ export interface CliFlags {
   permissionMode?: "manual" | "auto" | "bypass";
   theme?: "dark" | "light";
   maxTurns?: number;
+  maxRequestsPerMinute?: number;
   webSearchProvider?: "duckduckgo" | "tavily" | "exa" | "firecrawl";
   enableExtendedThinking?: boolean;
   verifyMode?: "off" | "on" | "strict";
@@ -245,6 +246,13 @@ export function loadConfig(opts: LoadOptions): ResolvedConfig {
     DEFAULTS.maxTurns,
   );
 
+  // MRM (max requests/min) throttle: flag > env (FREECODE_MAX_RPM) > settings > off.
+  const rpmEnv = envValueFor("FREECODE_MAX_RPM");
+  const maxRpm = opts.flags.maxRequestsPerMinute
+    ?? (rpmEnv !== undefined ? Number.parseInt(rpmEnv, 10) : undefined)
+    ?? settings.maxRequestsPerMinute
+    ?? 0;
+
   debug.log("config resolved", {
     provider: finalProvider,
     model: finalModel,
@@ -268,6 +276,7 @@ export function loadConfig(opts: LoadOptions): ResolvedConfig {
     webSearchProvider: webPick.value,
     theme: themePick.value,
     maxTurns: turnsPick.value ?? DEFAULTS.maxTurns,
+    maxRequestsPerMinute: Number.isFinite(maxRpm) && maxRpm > 0 ? maxRpm : 0,
     contextThreshold: settings.contextThreshold ?? DEFAULTS.contextThreshold,
     enablePromptCache: settings.enablePromptCache ?? DEFAULTS.enablePromptCache,
     enableExtendedThinking: opts.flags.enableExtendedThinking ?? settings.enableExtendedThinking ?? DEFAULTS.enableExtendedThinking,

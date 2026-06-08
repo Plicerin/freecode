@@ -15,6 +15,7 @@ interface ParsedArgs {
   permissionMode?: "manual" | "auto" | "bypass";
   theme?: "dark" | "light";
   maxTurns?: number;
+  maxRpm?: number;
   webSearchProvider?: "duckduckgo" | "tavily" | "exa" | "firecrawl";
   thinking?: boolean;
   verifyMode?: "off" | "on" | "strict";
@@ -38,6 +39,7 @@ program
   .option("--permission-mode <mode>", "manual|auto|bypass")
   .option("--theme <name>", "dark|light")
   .option("--max-turns <n>", "Maximum agent loop turns", (v) => Number.parseInt(v, 10))
+  .option("--max-rpm <n>", "Throttle to N provider requests per minute (MRM; 0 = off)", (v) => Number.parseInt(v, 10))
   .option("--web-search <provider>", "duckduckgo|tavily|exa|firecrawl")
   .option("--thinking", "Enable extended thinking / reasoning", false)
   .option("--verify-mode <mode>", "off|on|strict (auto-verify after changes)")
@@ -84,6 +86,7 @@ async function main(): Promise<void> {
     permissionMode: opts.permissionMode,
     theme: opts.theme,
     maxTurns: opts.maxTurns,
+    maxRequestsPerMinute: opts.maxRpm,
     webSearchProvider: opts.webSearchProvider,
     enableExtendedThinking: opts.thinking ? true : undefined,
     verifyMode: opts.verifyMode,

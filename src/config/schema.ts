@@ -63,6 +63,8 @@ export const SettingsSchema = z.object({
   theme: ThemeNameSchema.optional(),
   maxTurns: z.number().int().positive().optional(),
   contextThreshold: z.number().min(0.1).max(1).optional(),
+  /** MRM: throttle to at most N provider requests per minute (0/unset = off). */
+  maxRequestsPerMinute: z.number().int().nonnegative().optional(),
   enablePromptCache: z.boolean().optional(),
   enableExtendedThinking: z.boolean().optional(),
   extraEnv: z.record(z.string()).optional(),
@@ -83,6 +85,7 @@ export const ResolvedConfigSchema = z.object({
   theme: ThemeNameSchema.default("dark"),
   maxTurns: z.number().int().positive().default(50),
   contextThreshold: z.number().min(0.1).max(1).default(0.8),
+  maxRequestsPerMinute: z.number().int().nonnegative().default(0), // 0 = unthrottled
   enablePromptCache: z.boolean().default(true),
   enableExtendedThinking: z.boolean().default(false),
   mcpServers: z.record(McpServerSchema).optional(),

@@ -9,6 +9,8 @@ import { debug } from "../utils/debug";
 import { loadTokens } from "../auth/store";
 import { ANTHROPIC_OAUTH_BETAS } from "../auth/anthropic-oauth";
 import { isExpired } from "../auth/oauth";
+import { RateLimitedProvider } from "./rate-limited";
+import { RateLimiter } from "../agent/rate-limit";
 
 /** OpenAI-compatible endpoints live under /v1; ensure the base URL has it. */
 function ensureV1(url: string): string {
@@ -17,6 +19,19 @@ function ensureV1(url: string): string {
 }
 
 export function buildProvider(config: ResolvedConfig): Provider {
+  const base = buildBaseProvider(config);
+  // MRM throttle: when set, gate every chat request through a shared limiter so
+  // the cap is global across the main agent, sub-agents, and workflows.
+  const rpm = config.maxRequestsPerMinute ?? 0;
+  if (rpm > 0) {
+    debug.log("rate limiting enabled", { maxRequestsPerMinute: rpm });
+    return new RateLimitedProvider(base, new RateLimiter(rpm, undefined, undefined, (ms) =>
+      debug.log("throttled — waiting", { ms })));
+  }
+  return base;
+}
+
+function buildBaseProvider(config: ResolvedConfig): Provider {
   const { provider, baseUrl, apiKey, model } = config;
   debug.log("building provider", { provider, baseUrl, hasKey: !!apiKey, model });
 
