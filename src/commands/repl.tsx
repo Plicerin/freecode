@@ -1588,11 +1588,12 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   }
 
   useInput((input2, key) => {
-    // Paste diagnostics: FREECODE_PASTE_DEBUG=1 logs every input chunk (control
-    // chars JSON-escaped) to ~/.freecode/paste-debug.log so the exact way the
-    // terminal/Ink delivers a paste can be inspected. Off by default.
+    // Input diagnostics: FREECODE_PASTE_DEBUG=1 logs every keypress to
+    // ~/.freecode/paste-debug.log — the exact chunk + key flags + the state the
+    // history/menu decision reads — so paste AND history-scroll bugs are
+    // inspectable instead of guessed. Off by default.
     if (process.env.FREECODE_PASTE_DEBUG) {
-      try { appendFileSync(`${APP_DIR}/paste-debug.log`, JSON.stringify({ input: input2, len: input2.length, ret: key.return, esc: key.escape }) + "\n"); } catch { /* ignore */ }
+      try { appendFileSync(`${APP_DIR}/paste-debug.log`, JSON.stringify({ input: input2, len: input2.length, up: !!key.upArrow, down: !!key.downArrow, ret: !!key.return, esc: !!key.escape, histIdx: historyIdxRef.current, menu: menuMatches.length, picker: !!picker, modelPicker: !!modelPicker, pending: !!pending }) + "\n"); } catch { /* ignore */ }
     }
     if (key.ctrl && input2 === "c") {
       exitNow();
