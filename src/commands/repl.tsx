@@ -297,9 +297,13 @@ function MessageLine({ m, theme }: { m: UiMessage; theme: ReturnType<typeof make
   if (m.role === "reasoning") {
     return <Text color={theme.dim} italic>{"💭 "}{m.text}</Text>;
   }
+  // YOUR messages stand out: emoji + bold + brand color, so they're easy to find
+  // when scanning back through the transcript.
+  if (m.role === "user") {
+    return <Text color={theme.user} bold>{"🧑 "}{m.text}</Text>;
+  }
   return (
     <Text>
-      {m.role === "user" && <Text color={theme.user}>› </Text>}
       {m.role === "tool" && <Text color={theme.tool}>⚙ </Text>}
       {m.role === "system" && <Text color={theme.dim}>· </Text>}
       <Text color={m.role === "ledger" ? theme.dim : undefined} dimColor={m.role === "ledger"}>{m.text}</Text>
