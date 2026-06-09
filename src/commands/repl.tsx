@@ -3,6 +3,8 @@ import type { JSX } from "react";
 import { Box, Static, Text, useApp, useInput } from "ink";
 import { loadConfig, type CliFlags } from "../config/loader";
 import { buildProvider } from "../providers/registry";
+import { detectLocalContextWindow } from "../providers/local-context";
+import { zodToJsonSchema } from "../providers/schema-util";
 import { buildToolRegistry, toolListToSystemPrompt } from "../tools/registry";
 import { createPermissionEngine, approvalDecisionForKey, type ApprovalCallback, type ApprovalDecision, type ApprovalRequest } from "../permissions/modes";
 import { runAgentLoop } from "../agent/loop";
@@ -375,6 +377,11 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   );
   const sessionRef = useRef<Session>(undefined as unknown as Session);
   const conversationRef = useRef<ChatMessage[]>([]); // running provider-format history
+  // The context window a LOCAL server actually loaded the model with (LM Studio),
+  // which can be far below the model's name-based max. Overrides contextWindowFor
+  // for compaction + the overflow guard when detected. See the effect below.
+  const detectedWindowRef = useRef<number | null>(null);
+  const windowFor = (m: string): number => detectedWindowRef.current ?? contextWindowFor(m);
 
   const customCommands = useMemo(() => loadCustomCommands(process.cwd()), []);
   // Project skills are invocable by name too (/<skill> [args]); surface them in
@@ -505,6 +512,31 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     if (process.stdout.isTTY) process.stdout.write(BRACKET_PASTE_ON);
     return () => { if (process.stdout.isTTY) process.stdout.write(BRACKET_PASTE_OFF); };
   }, []);
+
+  // For a LOCAL provider, ask the server what context it actually loaded the
+  // model with (e.g. LM Studio's 4096 vs the model's 128k max) and size
+  // compaction/the overflow guard to THAT — and warn loudly if freecode's own
+  // system prompt + tools already crowd the window (the silent-empty-response trap).
+  useEffect(() => {
+    let cancelled = false;
+    detectedWindowRef.current = null;
+    (async () => {
+      const w = await detectLocalContextWindow(config.provider, config.baseUrl, model);
+      if (cancelled || !w) return;
+      detectedWindowRef.current = w;
+      trackerRef.current.setWindow(w);
+      setCtxFill(trackerRef.current.contextFill());
+      const sysTok = Math.ceil(toolListToSystemPrompt(tools).length / 4);
+      const toolTok = Math.ceil(JSON.stringify(tools.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters ?? zodToJsonSchema(t.schema) }))).length / 4);
+      const overhead = sysTok + toolTok;
+      const tight = overhead + 1024 > w;
+      setMessages((prev) => [...prev, { id: `ctx-${Date.now()}`, role: tight ? "warning" : "system", text: tight
+        ? `${config.provider} loaded "${model}" with only a ${w.toLocaleString()}-token context, but freecode's system prompt + tools need ~${overhead.toLocaleString()} — almost no room to respond (you'll get empty/truncated replies). Raise the model's Context Length in ${config.provider}; it supports far more.`
+        : `${config.provider}: "${model}" is loaded with a ${w.toLocaleString()}-token context (detected) — compaction sized to that.` }]);
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config.provider, config.baseUrl, model]);
 
   // When the app is idle (no turn running, no approval pending), every message
   // is final — flush them all to <Static>. During a turn `settled` is frozen,
@@ -676,7 +708,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         ? baseTools
         : [...baseTools, createAgentTool(() => ({
             provider, model, tools: baseTools, permission, promptUser,
-            hooks: config.hooks, contextWindow: contextWindowFor(model),
+            hooks: config.hooks, contextWindow: windowFor(model),
             // Live sub-agent progress: render each interior tool call as a dim,
             // indented line so a long sub-agent run visibly moves (no frozen
             // spinner until the final report).
@@ -700,7 +732,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         prompt: effectivePrompt,
         images,
         history: conversationRef.current,
-        contextWindow: contextWindowFor(model),
+        contextWindow: windowFor(model),
         contextThreshold: config.contextThreshold,
         enablePromptCache: config.enablePromptCache,
         enableExtendedThinking: config.enableExtendedThinking,
@@ -1314,7 +1346,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         try {
           const res = await runWorkflow(wf, {
             provider, model, tools, permission, promptUser,
-            hooks: config.hooks, contextWindow: contextWindowFor(model),
+            hooks: config.hooks, contextWindow: windowFor(model),
             input: rest.join(" "), cwd: process.cwd(), signal: controller.signal,
             onEvent: (e) => {
               const line = workflowEventLine(e);
@@ -1349,7 +1381,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
             `Plan: ${wf.description}\n${plan}\n▶ Running ${wf.stages.length} stage${wf.stages.length > 1 ? "s" : ""}… (esc to abort)` }]);
           const res = await runWorkflow(wf, {
             provider, model, tools, permission, promptUser,
-            hooks: config.hooks, contextWindow: contextWindowFor(model),
+            hooks: config.hooks, contextWindow: windowFor(model),
             input: task, cwd: process.cwd(), signal: controller.signal,
             onEvent: (e) => {
               const line = workflowEventLine(e);
