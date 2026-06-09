@@ -32,7 +32,7 @@ import { executeBench, formatBenchPlain } from "./bench";
 import { previewToolResult } from "../tui/preview";
 import { type Confidence, nextConfidence } from "../tui/confidence";
 import { MarkdownBody } from "../tui/markdown-render";
-import { BRACKET_PASTE_ON, BRACKET_PASTE_OFF, stripPasteMarkers, pastePlaceholder, expandPastes } from "../tui/paste";
+import { BRACKET_PASTE_ON, BRACKET_PASTE_OFF, hasPasteStart, pastePlaceholder, expandPastes } from "../tui/paste";
 import { logActivity, setActivityLog, activityState } from "../utils/activity";
 import { closest } from "../utils/fuzzy";
 import { resolveVerify, resolveQuickVerify, runVerify } from "../agent/verify";
@@ -460,6 +460,9 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   // Multi-line pastes are collapsed to a "[#N +L lines]" chip in the input; the
   // real content is kept here and substituted back in at submit (Claude-Code style).
   const pasteRef = useRef<{ next: number; map: Map<number, string> }>({ next: 1, map: new Map() });
+  // While a bracketed paste is arriving across chunks, the per-line pieces collect
+  // here (null = not currently inside a paste).
+  const pasteCollectRef = useRef<string[] | null>(null);
 
   // Exit cleanly: abort any in-flight turn first so spawned tool processes (e.g.
   // a running test suite) are signaled to die — otherwise their open pipes keep
@@ -1555,22 +1558,33 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       abortRef.current?.abort();
       return;
     }
-    // Paste handling: a bracketed paste (or any multi-char chunk carrying a
-    // newline) is pasted text, not typing. Collapse a multi-line paste to a chip
-    // and stash the content; insert a single-line paste as-is.
-    {
-      const { content: pasted, marked } = stripPasteMarkers(input2);
-      if (marked || (pasted.length > 1 && /\r|\n/.test(pasted))) {
-        if (/\r|\n/.test(pasted)) {
+    // Bracketed paste, assembled across chunks. Ink strips the ESC and splits a
+    // paste into one chunk per line (and may deliver inter-line newlines as
+    // Enter), which leaked the "[200~"/"[201~" markers and joined lines. Collect
+    // the line-pieces until the end marker, then collapse a multi-line paste to a
+    // chip (single-line → inserted inline).
+    if (hasPasteStart(input2) || pasteCollectRef.current) {
+      if (hasPasteStart(input2)) pasteCollectRef.current = [];
+      if (key.return) return; // swallow a mid-paste newline; the join restores it
+      const s = input2.split(String.fromCharCode(27)).join("");
+      const startAt = s.indexOf("[200~");
+      let body = startAt >= 0 ? s.slice(startAt + 5) : s;
+      const endAt = body.indexOf("[201~");
+      if (endAt >= 0) body = body.slice(0, endAt);
+      if (body) pasteCollectRef.current!.push(body);
+      if (endAt >= 0) {
+        const content = pasteCollectRef.current!.join("\n");
+        pasteCollectRef.current = null;
+        if (content.includes("\n")) {
           const id = pasteRef.current.next++;
-          pasteRef.current.map.set(id, pasted.replace(/\r\n?/g, "\n"));
-          const chip = pastePlaceholder(id, pasted);
+          pasteRef.current.map.set(id, content);
+          const chip = pastePlaceholder(id, content);
           setEditor((e) => ({ text: e.text.slice(0, e.cursor) + chip + e.text.slice(e.cursor), cursor: e.cursor + chip.length }));
-        } else if (pasted) {
-          setEditor((e) => ({ text: e.text.slice(0, e.cursor) + pasted + e.text.slice(e.cursor), cursor: e.cursor + pasted.length }));
+        } else if (content) {
+          setEditor((e) => ({ text: e.text.slice(0, e.cursor) + content + e.text.slice(e.cursor), cursor: e.cursor + content.length }));
         }
-        return;
       }
+      return;
     }
     if (key.ctrl && input2 === "u") {
       setEditor({ text: "", cursor: 0 });
@@ -1675,9 +1689,10 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       return;
     }
     // Insert printable input. Strip control characters so stray DEL/BS bytes
-    // from key bursts are never inserted (which previously pushed the caret).
+    // from key bursts are never inserted (which previously pushed the caret), and
+    // strip any leaked bracketed-paste markers as a backstop.
     if (input2 && !key.ctrl && !key.meta) {
-      const clean = input2.replace(/[\x00-\x1F\x7F]/g, "");
+      const clean = input2.replace(/[\x00-\x1F\x7F]/g, "").split("[200~").join("").split("[201~").join("");
       if (clean) {
         if (historyIdx !== null) setHistoryIdx(null); // typing = leave history-browse so the menu works again
         setEditor((e) => ({ text: e.text.slice(0, e.cursor) + clean + e.text.slice(e.cursor), cursor: e.cursor + clean.length }));

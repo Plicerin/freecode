@@ -2,7 +2,7 @@
 // chip back to the real content at submit. (The keystroke wiring is verified live
 // — the harness can't drive a terminal paste.)
 import { test, expect, describe } from "bun:test";
-import { stripPasteMarkers, isMultilinePaste, pastePlaceholder, expandPastes, countLines } from "../src/tui/paste";
+import { stripPasteMarkers, isMultilinePaste, pastePlaceholder, expandPastes, countLines, assembleChunks, hasPasteStart, hasPasteEnd } from "../src/tui/paste";
 
 const ESC = String.fromCharCode(27);
 const wrap = (s: string) => `${ESC}[200~${s}${ESC}[201~`;
@@ -32,6 +32,32 @@ describe("isMultilinePaste", () => {
   });
   test("a single-line paste is not collapsed (no newline)", () => {
     expect(isMultilinePaste(wrap("just one long line of pasted text"))).toBe(false);
+  });
+});
+
+describe("assembleChunks (cross-chunk reassembly, the real Ink case)", () => {
+  test("single chunk with markers + inner newline", () => {
+    expect(assembleChunks([wrap("alpha\nbeta")])).toBe("alpha\nbeta");
+  });
+  test("ESC-STRIPPED markers, split one-chunk-per-line (the observed bug)", () => {
+    // Ink dropped the ESC and split on the newline → two chunks, no newline byte.
+    expect(assembleChunks(["[200~the text South America's", "Soul of Exploration[201~"]))
+      .toBe("the text South America's\nSoul of Exploration");
+  });
+  test("three lines across chunks", () => {
+    expect(assembleChunks(["[200~one", "two", "three[201~"])).toBe("one\ntwo\nthree");
+  });
+  test("markers stripped, never leak into the content", () => {
+    const r = assembleChunks(["[200~hello[201~"]);
+    expect(r).toBe("hello");
+    expect(r.includes("200~")).toBe(false);
+    expect(r.includes("201~")).toBe(false);
+  });
+  test("hasPasteStart/End detect markers with or without ESC", () => {
+    expect(hasPasteStart("[200~x")).toBe(true);
+    expect(hasPasteStart(`${ESC}[200~x`)).toBe(true);
+    expect(hasPasteEnd("x[201~")).toBe(true);
+    expect(hasPasteStart("plain")).toBe(false);
   });
 });
 

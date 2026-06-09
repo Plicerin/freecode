@@ -39,6 +39,46 @@ export function pastePlaceholder(id: number, content: string): string {
   return `[#${id} +${countLines(content)} lines]`;
 }
 
+// Literal markers (Ink delivers them WITHOUT the leading ESC, and splits a paste
+// into one chunk per line — so the ESC-based detection above misses them).
+const LIT_START = "[200~";
+const LIT_END = "[201~";
+
+/** Strip ESC bytes from a chunk (Ink sometimes keeps them, sometimes not). */
+function dropEsc(s: string): string {
+  return s.split(ESC).join("");
+}
+
+/** Does this chunk begin / end a bracketed paste (markers with or without ESC)? */
+export function hasPasteStart(chunk: string): boolean {
+  return dropEsc(chunk).includes(LIT_START);
+}
+export function hasPasteEnd(chunk: string): boolean {
+  return dropEsc(chunk).includes(LIT_END);
+}
+
+/** Reassemble a bracketed paste that the terminal/Ink split across chunks — one
+ *  per line, markers possibly sans ESC, inter-line newlines dropped. Feed it the
+ *  chunks (and "\n" for any Enter seen mid-paste); returns the content once the
+ *  end marker appears, else null (still collecting). Stateless: pass the parts
+ *  collected so far. (The REPL keeps the running list in a ref.) */
+export function assembleChunks(chunks: string[]): string {
+  const parts: string[] = [];
+  let collecting = false;
+  for (const raw of chunks) {
+    const s = dropEsc(raw);
+    const startAt = s.indexOf(LIT_START);
+    if (startAt >= 0) collecting = true;
+    if (!collecting) continue;
+    let body = startAt >= 0 ? s.slice(startAt + LIT_START.length) : s;
+    const endAt = body.indexOf(LIT_END);
+    if (endAt >= 0) body = body.slice(0, endAt);
+    if (body) parts.push(body);
+    if (endAt >= 0) break;
+  }
+  return parts.join("\n");
+}
+
 const PLACEHOLDER_RE = /\[#(\d+) \+\d+ lines\]/g;
 
 /** Substitute each chip back to its full content for the message actually sent.
