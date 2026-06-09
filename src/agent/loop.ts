@@ -88,6 +88,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
   let total: TokenUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, thinking: 0 };
   let turns = 0;
   let aborted = false;
+  let lastTurnToolCalls = 0; // tool-call count of the most recent turn (outer scope)
 
   // Auto-verify gate state.
   const verifyMode = opts.verifyMode ?? "off";
@@ -181,6 +182,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
     let turnToolCalls: ToolCall[] = [];
     let sawError = false;
     let emitted = false;
+    let endReason: string | undefined; // why the provider stopped this turn
 
     // Stream events live (dispatch as they arrive) so the UI can render tokens
     // incrementally. Retry only applies before the first event (e.g. a 429 at
@@ -190,6 +192,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
         turnText = "";
         turnToolCalls = [];
         sawError = false;
+        endReason = undefined;
         for await (const e of opts.provider.stream(req)) {
           emitted = true;
           switch (e.type) {
@@ -212,6 +215,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
               }
               break;
             case "end":
+              endReason = e.reason;
               if (e.reason === "error") aborted = true;
               break;
             case "error":
@@ -228,6 +232,15 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
     );
 
     messages.push({ role: "assistant", content: turnText, toolCalls: turnToolCalls });
+    lastTurnToolCalls = turnToolCalls.length;
+
+    // Make a silent stop legible: a reply cut off at the token cap (a truncated
+    // tool call parses to nothing, so the turn looks "done"), or an empty reply.
+    if (endReason === "max_tokens") {
+      opts.onEvent({ type: "error", error: "⚠ The model's reply hit the output token limit and was cut off (finish_reason=length) — it may have stopped mid-task. Raise the model's max output, simplify the step, or tell it to continue." });
+    } else if (turnToolCalls.length === 0 && !turnText.trim() && !sawError) {
+      opts.onEvent({ type: "error", error: "⚠ The model returned an empty response — the turn ended without text or a tool call. This is usually the model, not freecode." });
+    }
 
     if (sawError) break;
     if (turnToolCalls.length === 0) {
@@ -369,6 +382,12 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
     }
 
     if (aborted) break;
+  }
+
+  // Exhausted the turn budget (the loop didn't break early via a no-tool-calls
+  // "done") — the task is likely unfinished. Surface it instead of ending quietly.
+  if (!aborted && lastTurnToolCalls > 0 && turns >= opts.maxTurns) {
+    opts.onEvent({ type: "error", error: `⚠ Stopped after ${turns} turns (the max-turns cap, ${opts.maxTurns}). The task may be unfinished — raise maxTurns (or --max-turns) or tell it to continue.` });
   }
 
   if (verifyFailed && !aborted) {

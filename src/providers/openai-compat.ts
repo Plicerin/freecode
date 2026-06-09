@@ -168,7 +168,10 @@ export class OpenAICompatProvider implements Provider {
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let finishReason: string | undefined;
     const toolAcc = new Map<number, { id?: string; name?: string; args: string }>();
+    const endReason = (): "end_turn" | "max_tokens" | "tool_use" =>
+      finishReason === "length" ? "max_tokens" : finishReason === "tool_calls" ? "tool_use" : "end_turn";
 
     try {
     while (true) {
@@ -201,7 +204,7 @@ export class OpenAICompatProvider implements Provider {
               toolAcc.delete(idx);
             }
           }
-          yield { type: "end", reason: "end_turn" };
+          yield { type: "end", reason: endReason() };
           return;
         }
         if (!data) continue;
@@ -232,7 +235,10 @@ export class OpenAICompatProvider implements Provider {
           }
         }
         if (choice?.finish_reason) {
-          // handled by [DONE] or end of stream
+          // Remember WHY generation stopped — "length" means the reply was cut
+          // off at the token cap (a truncated tool call then parses to nothing,
+          // and the turn looks "done" when it wasn't).
+          finishReason = choice.finish_reason;
         }
         if (chunk.usage) {
           const usage: TokenUsage = {
@@ -249,7 +255,7 @@ export class OpenAICompatProvider implements Provider {
     } finally {
       watchdog.clear();
     }
-    yield { type: "end", reason: "end_turn" };
+    yield { type: "end", reason: endReason() };
   }
 }
 

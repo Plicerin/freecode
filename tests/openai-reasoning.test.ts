@@ -56,6 +56,22 @@ describe("reasoning_effort (opt-in)", () => {
   });
 });
 
+describe("finish_reason → end reason", () => {
+  test("length (truncated) maps to max_tokens so the loop can flag it", async () => {
+    stubFetch('data: {"choices":[{"delta":{"content":"cut o"},"finish_reason":"length"}]}\n\ndata: [DONE]\n\n');
+    const events = await drain({ model: "m", messages: [{ role: "user", content: "x" }], stream: true });
+    const end = events.find((e) => e.type === "end") as { reason?: string } | undefined;
+    expect(end?.reason).toBe("max_tokens");
+  });
+
+  test("stop maps to end_turn", async () => {
+    stubFetch('data: {"choices":[{"delta":{"content":"done"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
+    const events = await drain({ model: "m", messages: [{ role: "user", content: "x" }], stream: true });
+    const end = events.find((e) => e.type === "end") as { reason?: string } | undefined;
+    expect(end?.reason).toBe("end_turn");
+  });
+});
+
 describe("reasoning channel", () => {
   test("reasoning_content is surfaced as thinking_delta, kept out of the answer", async () => {
     stubFetch(
