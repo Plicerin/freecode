@@ -2,7 +2,7 @@
 
 **Benchmark:** Anthropic Claude Code v2.1.x (feature surface from its public CHANGELOG).
 **Method:** diff of Claude Code's authoritative feature surface against freecode's *verified* current state. The official repo is docs/changelog only, so this tracks features, not source.
-**Date:** 2026-06-04
+**Date:** 2026-06-04 · **last updated:** 2026-06-09
 
 Pursued in stages. "Done" is per-item and checkable — never a single blanket "are we at parity" gate.
 
@@ -40,10 +40,10 @@ Agent loop + streaming · tools: Bash, Read/Write/Edit, Glob, Grep, ViewImage, W
 
 ## Tier B — substantial but lean-feasible
 - [ ] **Richer hooks** — add SessionStart/End, UserPromptSubmit, Notification, SubagentStop, PreCompact + rich outputs (`additionalContext`, `sessionTitle`, `reloadSkills`). *(freecode has 3: Pre/PostToolUse, Stop.)*
-- [ ] **Scheduling/automation** — `/schedule` (cron), `/loop`, `/goal`.
+- [~] **Scheduling/automation** — `/goal` shipped (autonomous iterate-until-DONE, 12-cycle cap, esc/`/goal stop`, `src/agent/goal.ts`, tested); `/schedule` (cron) + `/loop` pending.
 - [ ] **Granular permissions** — per-pattern Bash/path/domain allow-deny rules, `keybindings.json`, managed/org settings, sandbox.
 - [ ] **`AskUserQuestion` tool** — interactive multiple-choice prompting.
-- [ ] **Session depth** — prompt history (Ctrl+R), transcript view (Ctrl+O / `/expand`), `/clear`, `/status`, **session-fork `/branch`** (distinct from the git `/branch` already shipped), `/color`/`/theme`.
+- [~] **Session depth** — [x] `/expand [n]` reveals the full output of a truncated tool result (the transcript shows an 8-line preview; full output lives in context). Pending: prompt history search (Ctrl+R), `/clear`, `/status`, **session-fork `/branch`** (distinct from the git `/branch` already shipped), `/color`/`/theme`.
 - [ ] **LSP integration** — `workspaceSymbol`, language-server ops.
 
 ## Tier C — observability/polish (cheap, good for momentum)
@@ -58,12 +58,16 @@ Agent loop + streaming · tools: Bash, Read/Write/Edit, Glob, Grep, ViewImage, W
   - [x] **stall timeout** on all three streaming providers (`src/providers/stall-timeout.ts`): idle watchdog aborts if no bytes for `FREECODE_STREAM_TIMEOUT_MS` (default 120s); resets per chunk so long valid streams survive; timeouts are retryable before the first token.
   - [x] **concurrency cap on sub-agent fan-out** (`src/utils/concurrency.ts`, tested): a workflow stage now runs at most N sub-agents at once (`mapWithConcurrency`, default 4, `FREECODE_WORKFLOW_CONCURRENCY`), preserving result order — no more unbounded `Promise.all` spawn. Plus a runaway ceiling: a workflow is refused up front if it would spawn >32 total sub-agents (`maxTasks`). 4 tests (cap respected, serial at 1, empty/over-size; workflow ceiling + ordering under a cap).
   - [x] **MRM throttle** (`src/agent/rate-limit.ts`, `src/providers/rate-limited.ts`, tested): a max-requests-per-minute cap that paces provider calls under a rolling 60s window (avoids 429s / runaway spend). Config `maxRequestsPerMinute`, `--max-rpm`, or `FREECODE_MAX_RPM`; 0 = off. Applied by wrapping the provider in `buildProvider`, so the cap is GLOBAL across the main agent, sub-agents, workflows, and headless/background runs. Pure decision + injected-clock limiter; shown in `/config`. 8 tests.
+  - [x] **first-byte stall timeout** (`stall-timeout.ts`): a separate, shorter ceiling for connect/time-to-first-token (60s, `FREECODE_STREAM_FIRST_BYTE_MS`) on top of the 120s mid-stream idle — a model id the endpoint accepts but never streams (rate/usage limit, capacity) now fails in ~1 min, not 2. Tested.
+  - [x] **reasoning-model handling** (`src/providers/openai-compat.ts`): capture the `reasoning_content` channel (gpt-oss et al.) → thinking (was dropped); opt-in `reasoning_effort` (`FREECODE_REASONING_EFFORT`); map `finish_reason` into the end reason. Tested.
+  - [x] **search runtime bounds**: grep killed after 60s + `--max-filesize` (`FREECODE_GREP_TIMEOUT_MS`); glob walk-wait capped (`FREECODE_GLOB_TIMEOUT_MS`) — a broad search / plan-mode investigation can't freeze the agent for 16 minutes. Tested.
+  - [x] **context-overflow guard** (`loop.ts` + `token-estimate.ts`): estimate the outgoing prompt and stop with a clear error before the provider 400s on a negative `max_tokens` (NIM). Tested.
   - [ ] per-run cost ceiling.
-- [ ] **Agent-behavior evals** — a scripted regression harness for *behavior*, not just units (e.g. "this prompt must NOT call WebSearch"). Every bug this session was found in production, not by a test.
-- [ ] **Loop/repetition guards** — detect an agent repeating an identical failing call or spamming a tool (the WebSearch("the next") class).
+- [ ] **Agent-behavior evals** — a scripted regression harness for *behavior*, not just units (e.g. "this prompt must NOT call WebSearch"). **Every bug across the 2026-06-08/09 session was found in production, not by a test** — this remains the highest-leverage open item.
+- [~] **Loop/repetition guards** — [x] **degeneration guard** (`src/agent/degeneration.ts`, tested): abort a turn when model output collapses into runaway repetition (a char ×≥200, or 100+ tokens <10% distinct). [ ] identical-failing-call / tool-spam detection (the WebSearch("the next") class) beyond the existing consecutive-failure circuit-breaker.
 - [ ] **Prompt-injection defense** — WebFetch/WebSearch/FileRead pull untrusted text into context; nothing guards against "ignore previous instructions" in fetched content.
 - [ ] **Plugin install trust** — `/plugins install <git-url>` clones arbitrary repos with no signing/review/allowlist.
-- [ ] **Windows correctness** — several bugs were `\r\n`/PowerShell-specific (duplicate-submit, etc.); no cross-platform test pass.
+- [~] **Windows correctness** — the 2026-06-08/09 session was almost entirely Windows-specific production bugs, now fixed: `detached:true` broke background-process output capture (and made `python` look like a clean exit 0); PowerShell ~600ms cold-start crossed the background startup-grace window; bracketed-paste arrives ESC-stripped + split-per-line; grep/glob unbounded on big trees. Still no systematic cross-platform CI pass.
 
 ## Tier I — identity: self-improvement (freecode's headline feature)
 *The thesis: the model is frozen (a CLI can't fine-tune the API), so what compounds is the HARNESS. freecode watches its own work and proposes durable, inspectable, consented artifacts that make the next session faster/cheaper/more correct. It's the only feature whose value GROWS with use (a moat that deepens), and it's one a model vendor structurally won't build (it catalogues the model's recurring mistakes as files). freecode is uniquely positioned because it already has the three required substrates: the **activity log** (observation), **skills/rules** (the artifact format), and the **verify gate + provenance ledger** (measurement).*
@@ -85,11 +89,23 @@ IDE extensions (VS Code/JetBrains) · voice mode · Chrome connector · Remote C
   - [ ] auto-refresh the minted key on 401 in the hot path (today: manual `auth refresh`).
 
 ## freecode's net-new (Claude Code does NOT have these — keep them)
-Verify gate · provenance ledger · `/log` activity audit · secret redaction across tool output *and* logs · repeated-failure circuit-breaker · perf ghost (`/bench`) · encrypted key vault · multi-provider breadth (Anthropic + OpenAI-compat family + Gemini + GitHub Models + Ollama/LM Studio/NIM) vs Claude Code's Anthropic + Bedrock/Vertex
+Verify gate · provenance ledger · **overclaim guard** (flag a sweeping success claim no passing check backs) · `/log` activity audit · secret redaction across tool output *and* logs · repeated-failure circuit-breaker · degeneration guard · **`freecode probe`** (one-shot: exact request body + raw streamed response, to make provider behavior observable) · **tokens/sec speedometer** · **turn-end legibility** (truncation/empty/max-turns surfaced, not silent) · perf ghost (`/bench`) · encrypted key vault · multi-provider breadth (Anthropic + OpenAI-compat family + Gemini + GitHub Models + Ollama/LM Studio/NIM) vs Claude Code's Anthropic + Bedrock/Vertex
 
 ---
 
 ## Shipped
+- **2026-06-08/09 — Reliability + UX hardening sweep (Tier R, Windows, Tier B/C)** — a session of almost entirely production-found bugs (the Tier-R thesis in action). 36 commits; highlights:
+  - **`/goal`** (`src/agent/goal.ts`, tested): autonomous iterate-until-`GOAL: DONE`, 12-cycle cap, esc/`/goal stop`.
+  - **Reasoning models driven correctly** (`openai-compat.ts`, tested): `reasoning_content` channel captured → dim 💭 thinking bubble (was dropped); opt-in `reasoning_effort`; `finish_reason` mapped to the end reason.
+  - **Turn-end legibility** (`loop.ts`, tested): truncation (`finish_reason=length`), empty reply, and max-turns are surfaced instead of "activity just ends"; per-turn output cap raised 8192→16384 (`FREECODE_MAX_OUTPUT_TOKENS`) after large `FileWrite`s were silently truncated.
+  - **`runInBackground` for Bash** (`tools/bash.ts`, tested): start a dev server/watcher detached (foreground servers hit the timeout); fixed the `detached:true`-on-Windows bug that broke output capture and made `python` look like a clean exit; startup-grace widened past PowerShell cold-start; early-exit surfaces the captured log.
+  - **Search runtime bounds** (`tools/grep.ts`, `tools/glob.ts`, tested): grep killed after 60s + `--max-filesize`; glob walk-wait capped — a broad search / plan-mode investigation can't hang for 16 minutes.
+  - **First-byte stall timeout** (`stall-timeout.ts`, tested): a short connect/first-token ceiling (60s) so a non-responding model fails fast, not in 120s; names rate/usage limit as a suspect.
+  - **Context-overflow guard** (`loop.ts`, `token-estimate.ts`, tested): estimate the outgoing prompt; stop with a clear error before the provider 400s on a negative `max_tokens`.
+  - **WebFetch refuses binary** (`web-fetch.ts`, tested): a `.wasm` decoded into the prompt overflowed context; now content-type + byte-sniff rejection.
+  - **Degeneration guard** (`agent/degeneration.ts`, tested) + **overclaim guard** (`agent/overclaim.ts`, tested).
+  - **`freecode probe`** (`commands/probe.ts`): one real request → exact HTTP body + streamed response (reasoning/text/tool_call/error/usage), to make provider behavior observable instead of inferred (used live to prove gpt-oss works + NIM was throttling).
+  - **TUI/UX**: prose markdown (bold/italic/headings/lists); multi-line paste → `[#N +L lines]` chip with cross-chunk bracketed-paste assembly; mid-turn input queued + echoed; history-browse no longer hijacked by the slash menu; **tokens/sec speedometer**; **`/expand`** a truncated tool result; `/<skill>` invocation + slash-command echo; remember last provider/model; `/model` search + free-model float; `/provider` auto-opens the picker.
 - **2026-06-04 — Stage 1: Git/PR workflow** (`src/commands/git-workflow.ts`, tested): `/branch`, `/commit-push-pr`, `/issue`, `/pr-comments`, `/security-review`, `/autofix-pr`. Slash surface 22 → 28.
 - **2026-06-04 — Sub-agents foundation** (`src/agent/subagent.ts`, `src/tools/agent.ts`, tested): the `Agent` tool — orchestrator dispatches an autonomous sub-agent (fresh context, same tools minus Agent, verify off), final message returned as the tool result. Recursion-safe; wired into REPL (non-plan-mode) + headless. 3 tests (final-message semantics, dispatch, recursion guard).
 - **2026-06-05 — Subagent types + `/agents`** (`src/agent/agent-types.ts`, tested): built-in types `general`/`explore`/`code-reviewer` with specialization prompts + tool allowlists; user/project agents from `.freecode/agents/*.md` (frontmatter `description`/`tools`), project overrides built-in; `Agent` tool gains `subagent_type` (validated, types listed in its description); `/agents` command. 4 tests (resolution, project override, allowlist enforcement, unknown-type rejection).
