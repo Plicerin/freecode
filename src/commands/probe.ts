@@ -6,7 +6,7 @@
 import { loadConfig, type CliFlags } from "../config/loader";
 import { buildProvider } from "../providers/registry";
 import { buildToolRegistry, toolListToSystemPrompt } from "../tools/registry";
-import { streamIdleMs } from "../providers/stall-timeout";
+import { streamFirstByteMs } from "../providers/stall-timeout";
 import type { ChatRequest, StreamEvent, ToolDefinition } from "../providers/types";
 
 function mask(key?: string): string {
@@ -84,8 +84,8 @@ export async function runProbe(argv: string[]): Promise<void> {
     return realFetch(url as never, init as never);
   }) as unknown as typeof fetch;
 
-  const idleS = Math.round(streamIdleMs() / 1000);
-  process.stdout.write(`── response ── (awaiting first byte; aborts after ~${idleS}s of silence)\n`);
+  const firstS = Math.round(streamFirstByteMs() / 1000);
+  process.stdout.write(`── response ── (awaiting first byte; aborts after ~${firstS}s if the model never responds)\n`);
   const t0 = Date.now();
   let text = "", reasoning = "", toolCalls = 0, errored = "", firstByteMs = -1;
   try {
@@ -109,7 +109,7 @@ export async function runProbe(argv: string[]): Promise<void> {
 
   process.stdout.write(
     `\n── summary (${Date.now() - t0}ms) ──\n` +
-    `first event: ${firstByteMs < 0 ? "NEVER — no response received (model id wrong? endpoint stalled?)" : firstByteMs + "ms"}\n` +
+    `first event: ${firstByteMs < 0 ? "NEVER — no response received (model not provisioned on this endpoint, or the backend stalled)" : firstByteMs + "ms"}\n` +
     `reasoning: ${reasoning.length} chars\n` +
     `text:      ${text.length} chars\n` +
     `tool calls: ${toolCalls}\n` +

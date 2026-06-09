@@ -3,7 +3,7 @@ import { friendlyError, makeError } from "./friendly-errors";
 import { zodToJsonSchema } from "./schema-util";
 import { debug } from "../utils/debug";
 import { getEnv } from "../utils/env";
-import { createStallTimeout, streamIdleMs } from "./stall-timeout";
+import { createStallTimeout, streamIdleMs, streamFirstByteMs } from "./stall-timeout";
 
 // Open reasoning models (gpt-oss, deepseek-r1, qwq, "reasoner"s) accept a
 // reasoning_effort. Setting it MAY help multi-step work, but it can also backfire
@@ -142,12 +142,14 @@ export class OpenAICompatProvider implements Provider {
       }));
     }
     debug.log("openai-compat request", { url, model: req.model, provider: this.id });
-    // Idle watchdog: abort if the stream goes silent (no headers, or no bytes for
-    // streamIdleMs). Without this a stalled socket hangs in reader.read() forever.
+    // Idle watchdog: abort if the stream goes silent. A SHORT first-byte ceiling
+    // catches a request the endpoint accepts but never streams (a 2-minute hang
+    // otherwise); a generous idle ceiling covers long mid-stream gaps.
     const idleMs = streamIdleMs();
-    const watchdog = createStallTimeout(req.signal, idleMs);
+    const firstByteMs = streamFirstByteMs();
+    const watchdog = createStallTimeout(req.signal, idleMs, firstByteMs);
     const timeoutError = (): Error =>
-      makeError(this.id, `${this.opts.providerName} stream timed out (no data for ${Math.round(idleMs / 1000)}s)`, "timeout", true);
+      makeError(this.id, `${this.opts.providerName} stream timed out — no response from "${req.model}". It may not be provisioned on this account/endpoint, or the backend stalled; verify it serves on ${this.baseUrl}.`, "timeout", true);
     let resp: Response;
     try {
       resp = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal: watchdog.signal });

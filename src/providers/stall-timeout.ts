@@ -19,6 +19,17 @@ export function streamIdleMs(): number {
   return Number.isFinite(n) && n > 0 ? n : 120_000;
 }
 
+/** Shorter ceiling for the FIRST byte specifically (connect + time-to-first-
+ *  token). A healthy hosted model first-bytes in well under a second; a request
+ *  that the endpoint accepts but never streams (e.g. a model not provisioned on
+ *  the account, or a backend that stalls) would otherwise hang for the full idle
+ *  window. 60s leaves room for a cold model load. */
+export function streamFirstByteMs(): number {
+  const raw = getEnv("FREECODE_STREAM_FIRST_BYTE_MS");
+  const n = raw ? Number(raw) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : 60_000;
+}
+
 export interface StallTimeout {
   /** Pass this to fetch(); it aborts on user-cancel OR on idle timeout. */
   signal: AbortSignal;
@@ -30,11 +41,12 @@ export interface StallTimeout {
   timedOut(): boolean;
 }
 
-export function createStallTimeout(userSignal: AbortSignal | undefined, idleMs: number): StallTimeout {
+export function createStallTimeout(userSignal: AbortSignal | undefined, idleMs: number, firstByteMs?: number): StallTimeout {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
   let cleared = false;
+  let gotFirst = false; // first chunk seen → switch from first-byte to idle ceiling
 
   const onUserAbort = (): void => controller.abort();
   if (userSignal) {
@@ -43,10 +55,11 @@ export function createStallTimeout(userSignal: AbortSignal | undefined, idleMs: 
   }
 
   const arm = (): void => {
+    const ms = gotFirst ? idleMs : (firstByteMs ?? idleMs);
     timer = setTimeout(() => {
       timedOut = true;
       controller.abort();
-    }, idleMs);
+    }, ms);
     // Don't let the watchdog timer keep the process alive on its own.
     (timer as { unref?: () => void }).unref?.();
   };
@@ -65,6 +78,7 @@ export function createStallTimeout(userSignal: AbortSignal | undefined, idleMs: 
     signal: controller.signal,
     reset() {
       if (cleared || controller.signal.aborted) return;
+      gotFirst = true; // a chunk (or clean EOF) arrived; future gaps use the idle ceiling
       if (timer) clearTimeout(timer);
       arm();
     },
