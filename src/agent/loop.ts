@@ -59,6 +59,10 @@ export interface AgentLoopOptions {
   enablePromptCache?: boolean;
   enableExtendedThinking?: boolean;
   hooks?: HooksConfig;
+  /** Tools that EXIST but are filtered out right now (e.g. write/exec tools in
+   *  plan mode) — so a call to one gets a clear "restricted" message, not the
+   *  misleading "tool not found". */
+  restrictedToolNames?: string[];
   /** Auto-verify gate: run these checks after a file-changing turn. */
   verifyPlan?: VerifyPlan;
   verifyMode?: "off" | "on" | "strict";
@@ -304,9 +308,12 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
       if (opts.signal?.aborted) { aborted = true; break; }
       const tool = tools.find((t) => t.name === call.name);
       if (!tool) {
-        const result = { id: call.id, output: "", ok: false, durationMs: 0 };
-        messages.push({ role: "tool", toolCallId: call.id, content: `Error: tool ${call.name} not found` });
-        opts.onEvent({ type: "tool_result", result: { ...result, output: `Error: tool ${call.name} not found` } });
+        const restricted = opts.restrictedToolNames?.includes(call.name);
+        const msg = restricted
+          ? `${call.name} is unavailable in plan mode (read-only). Don't try to run commands or edit files — investigate with FileRead/Grep/Glob and PROPOSE a plan. The user runs /plan to exit plan mode and let you act.`
+          : `Error: tool ${call.name} not found`;
+        messages.push({ role: "tool", toolCallId: call.id, content: msg });
+        opts.onEvent({ type: "tool_result", result: { id: call.id, output: msg, ok: false, durationMs: 0 } });
         continue;
       }
       const argsSummary = JSON.stringify(call.arguments).slice(0, 200);

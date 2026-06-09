@@ -722,6 +722,8 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     try {
       // Plan mode: read-only tools (permission=safe) + a plan-only system prompt.
       const baseTools = planMode ? tools.filter((t) => t.permission === "safe") : tools;
+      // Tools hidden by plan mode — so a call to one gets a clear "read-only" note.
+      const restrictedToolNames = planMode ? tools.filter((t) => t.permission !== "safe").map((t) => t.name) : [];
       // Sub-agents (Tier A): offer the Agent tool outside plan mode. The getter
       // reads the live provider/model so a mid-session switch is honoured; the
       // sub-agent's toolset is baseTools (no Agent) — recursion-safe by design.
@@ -758,6 +760,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         enablePromptCache: config.enablePromptCache,
         enableExtendedThinking: config.enableExtendedThinking,
         hooks: config.hooks,
+        restrictedToolNames,
         verifyPlan,
         verifyMode: vmode,
         permission,
