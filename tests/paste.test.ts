@@ -2,7 +2,7 @@
 // chip back to the real content at submit. (The keystroke wiring is verified live
 // — the harness can't drive a terminal paste.)
 import { test, expect, describe } from "bun:test";
-import { stripPasteMarkers, isMultilinePaste, pastePlaceholder, expandPastes, countLines, assembleChunks, hasPasteStart, hasPasteEnd } from "../src/tui/paste";
+import { stripPasteMarkers, isMultilinePaste, pastePlaceholder, expandPastes, countLines, assembleChunks, hasPasteStart, hasPasteEnd, shouldCollapse } from "../src/tui/paste";
 
 const ESC = String.fromCharCode(27);
 const wrap = (s: string) => `${ESC}[200~${s}${ESC}[201~`;
@@ -61,7 +61,24 @@ describe("assembleChunks (cross-chunk reassembly, the real Ink case)", () => {
   });
 });
 
+describe("shouldCollapse", () => {
+  test("multi-line always collapses", () => {
+    expect(shouldCollapse("a\nb")).toBe(true);
+  });
+  test("a long single line collapses; a short one does not", () => {
+    expect(shouldCollapse("x".repeat(250))).toBe(true);
+    expect(shouldCollapse("short single line")).toBe(false);
+  });
+});
+
 describe("placeholder + expand round-trip", () => {
+  test("a long single-line paste gets a char chip that round-trips", () => {
+    const content = "y".repeat(300);
+    const chip = pastePlaceholder(7, content);
+    expect(chip).toBe("[#7 +300 chars]");
+    expect(expandPastes(chip, new Map([[7, content]]))).toBe(content);
+  });
+
   test("chip shows the line count, expand restores the exact content", () => {
     const content = "first\nsecond\nthird";
     expect(countLines(content)).toBe(3);

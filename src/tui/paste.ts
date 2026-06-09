@@ -34,9 +34,15 @@ export function countLines(content: string): number {
   return content.split(/\r\n|\r|\n/).length;
 }
 
+/** Worth collapsing to a chip? Multi-line, or a long single line. */
+export function shouldCollapse(content: string, maxInline = 200): boolean {
+  return content.includes("\n") || content.length > maxInline;
+}
+
 /** The chip shown inline in the input for a collapsed paste. */
 export function pastePlaceholder(id: number, content: string): string {
-  return `[#${id} +${countLines(content)} lines]`;
+  const lines = countLines(content);
+  return lines > 1 ? `[#${id} +${lines} lines]` : `[#${id} +${content.length} chars]`;
 }
 
 // Literal markers (Ink delivers them WITHOUT the leading ESC, and splits a paste
@@ -79,7 +85,7 @@ export function assembleChunks(chunks: string[]): string {
   return parts.join("\n");
 }
 
-const PLACEHOLDER_RE = /\[#(\d+) \+\d+ lines\]/g;
+const PLACEHOLDER_RE = /\[#(\d+) \+\d+ (?:lines|chars)\]/g;
 
 /** Substitute each chip back to its full content for the message actually sent.
  *  A chip whose paste is gone (user deleted it / unknown id) is left as-is. */

@@ -20,7 +20,8 @@ import { reapJobs } from "../background/registry";
 import { formatJobLine } from "./background-cli";
 import { analyzeSession, applyProposal, dedupeProposals, transcriptFromMessages, type Proposal } from "../agent/self-improve";
 import { ensureStat, listStats, decayCandidates, verifyTrend, pruneArtifact } from "../agent/learn-stats";
-import { readFileSync as readFileForLearn } from "node:fs";
+import { readFileSync as readFileForLearn, appendFileSync } from "node:fs";
+import { APP_DIR } from "../utils/paths";
 import { ContextTracker } from "../agent/context";
 import { priceFor, contextWindowFor } from "../agent/pricing";
 import { contextBar, contextTone, formatTokens } from "../tui/context-bar";
@@ -32,7 +33,7 @@ import { executeBench, formatBenchPlain } from "./bench";
 import { previewToolResult } from "../tui/preview";
 import { type Confidence, nextConfidence } from "../tui/confidence";
 import { MarkdownBody } from "../tui/markdown-render";
-import { BRACKET_PASTE_ON, BRACKET_PASTE_OFF, hasPasteStart, pastePlaceholder, expandPastes } from "../tui/paste";
+import { BRACKET_PASTE_ON, BRACKET_PASTE_OFF, hasPasteStart, pastePlaceholder, expandPastes, shouldCollapse } from "../tui/paste";
 import { logActivity, setActivityLog, activityState } from "../utils/activity";
 import { closest } from "../utils/fuzzy";
 import { resolveVerify, resolveQuickVerify, runVerify } from "../agent/verify";
@@ -1501,6 +1502,12 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   }
 
   useInput((input2, key) => {
+    // Paste diagnostics: FREECODE_PASTE_DEBUG=1 logs every input chunk (control
+    // chars JSON-escaped) to ~/.freecode/paste-debug.log so the exact way the
+    // terminal/Ink delivers a paste can be inspected. Off by default.
+    if (process.env.FREECODE_PASTE_DEBUG) {
+      try { appendFileSync(`${APP_DIR}/paste-debug.log`, JSON.stringify({ input: input2, len: input2.length, ret: key.return, esc: key.escape }) + "\n"); } catch { /* ignore */ }
+    }
     if (key.ctrl && input2 === "c") {
       exitNow();
       return;
@@ -1575,7 +1582,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       if (endAt >= 0) {
         const content = pasteCollectRef.current!.join("\n");
         pasteCollectRef.current = null;
-        if (content.includes("\n")) {
+        if (shouldCollapse(content)) {
           const id = pasteRef.current.next++;
           pasteRef.current.map.set(id, content);
           const chip = pastePlaceholder(id, content);
