@@ -464,6 +464,11 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   // not wall-clock that includes tool-execution pauses).
   const burstCharsRef = useRef(0);
   const burstStartRef = useRef<number | null>(null);
+  // Run-level totals (across all bursts of one submit) for the persistent
+  // per-turn "⚡ N tok/s" summary: chars produced + ms actually spent generating
+  // (excludes tool-execution pauses).
+  const genCharsRef = useRef(0);
+  const genMsRef = useRef(0);
   // Messages typed WHILE a turn is running are queued, not dropped. submit()
   // refuses to run concurrently (returns early if busy), so without this a line
   // entered mid-turn vanished on Enter — the user couldn't steer the agent. We
@@ -659,6 +664,8 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     streamIdRef.current = null;
     burstCharsRef.current = 0;
     burstStartRef.current = null;
+    genCharsRef.current = 0;
+    genMsRef.current = 0;
     try {
       // Plan mode: read-only tools (permission=safe) + a plan-only system prompt.
       const baseTools = planMode ? tools.filter((t) => t.permission === "safe") : tools;
@@ -709,6 +716,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           if ((e.type === "thinking_delta" || e.type === "text_delta") && e.text) {
             if (burstStartRef.current === null) burstStartRef.current = Date.now();
             burstCharsRef.current += e.text.length;
+            genCharsRef.current += e.text.length;
           }
           if (e.type === "thinking_delta" && e.text) {
             // Reasoning channel (gpt-oss et al.) — stream into a dim 💭 bubble so
@@ -749,6 +757,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           } else if (e.type === "tool_call" && e.call) {
             streamIdRef.current = null; // text after a tool call starts a fresh bubble
             thinkIdRef.current = null; // and a fresh reasoning bubble next step
+            if (burstStartRef.current !== null) genMsRef.current += Date.now() - burstStartRef.current; // bank this burst's gen time
             burstCharsRef.current = 0; burstStartRef.current = null; // new burst → reset the speedometer
             const call = e.call;
             const tid = `t-${call.id ?? Math.random().toString(36).slice(2, 8)}`;
@@ -800,6 +809,12 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         setMessages((prev) => [...prev, { id: `a-${t0}`, role: "assistant", text: buffer }]);
       }
       appendEvent(sessionRef.current, { kind: "assistant", text: buffer, ts: new Date().toISOString(), usage: result.usage as unknown as Record<string, number> });
+      // Persistent speedometer: bank the final burst's time, then show the run's
+      // generation throughput as a dim line that stays in the transcript (the
+      // live "Working…" readout vanishes when the turn ends).
+      if (burstStartRef.current !== null) { genMsRef.current += Date.now() - burstStartRef.current; burstStartRef.current = null; }
+      const genSpeed = formatSpeed(tokensPerSecond(estTokens(genCharsRef.current), genMsRef.current));
+      if (genSpeed) setMessages((prev) => [...prev, { id: `spd-${t0}`, role: "system", text: `⚡ ${genSpeed} (generation)` }]);
       debug.log("turn complete", { turns: result.turns, usage: result.usage });
     } catch (err) {
       if (degenerated) {
