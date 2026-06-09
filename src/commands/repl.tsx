@@ -422,6 +422,11 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   useEffect(() => { submitGuard.current = false; }, [input]);
   const historyRef = useRef<string[]>([]); // submitted prompts, oldest first
   const [historyIdx, setHistoryIdx] = useState<number | null>(null); // null = editing live input
+  // Synchronous mirror of historyIdx. The input handler decides history-vs-menu
+  // from THIS (always current), not the state value — Ink can fire a held/fast
+  // arrow before the re-render lands, and a stale historyIdx let the slash menu
+  // hijack scrolling at a recalled /command. Updated alongside every setHistoryIdx.
+  const historyIdxRef = useRef<number | null>(null);
   const draftRef = useRef(""); // live input saved while browsing history
   // The slash menu is "open" only while TYPING a command — not when a /command
   // was recalled via history (else up/down would hijack to menu-nav and you'd be
@@ -1637,28 +1642,34 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     }
     if (key.ctrl && input2 === "a") { setEditor((e) => ({ ...e, cursor: 0 })); return; }            // line start
     if (key.ctrl && input2 === "e") { setEditor((e) => ({ ...e, cursor: e.text.length })); return; } // line end
-    // When the slash-command menu is open, up/down navigate it (not history).
-    if (menuOpen && key.upArrow) { setMenuIdx((i) => Math.max(0, i - 1)); return; }
-    if (menuOpen && key.downArrow) { setMenuIdx((i) => Math.min(menuMatches.length - 1, i + 1)); return; }
-    // Command history (up/down).
+    // The slash menu owns up/down ONLY when NOT browsing history. Decide from the
+    // REF (always current), so a held/fast arrow can't slip through on a stale
+    // render and let the menu hijack scrolling at a recalled /command.
+    const browsing = historyIdxRef.current !== null;
+    if (!browsing && menuMatches.length > 0 && key.upArrow) { setMenuIdx((i) => Math.max(0, i - 1)); return; }
+    if (!browsing && menuMatches.length > 0 && key.downArrow) { setMenuIdx((i) => Math.min(menuMatches.length - 1, i + 1)); return; }
+    // Command history (up/down) — all reads/writes go through historyIdxRef so
+    // navigation stays correct even under key auto-repeat.
     if (key.upArrow) {
       const h = historyRef.current;
       if (h.length === 0) return;
-      const idx = historyIdx === null ? h.length - 1 : Math.max(0, historyIdx - 1);
-      if (historyIdx === null) draftRef.current = input;
-      setHistoryIdx(idx);
+      const cur = historyIdxRef.current;
+      const idx = cur === null ? h.length - 1 : Math.max(0, cur - 1);
+      if (cur === null) draftRef.current = input;
+      historyIdxRef.current = idx; setHistoryIdx(idx);
       setEditor({ text: h[idx]!, cursor: h[idx]!.length });
       return;
     }
     if (key.downArrow) {
-      if (historyIdx === null) return;
+      const cur = historyIdxRef.current;
+      if (cur === null) return;
       const h = historyRef.current;
-      if (historyIdx >= h.length - 1) {
-        setHistoryIdx(null);
+      if (cur >= h.length - 1) {
+        historyIdxRef.current = null; setHistoryIdx(null);
         setEditor({ text: draftRef.current, cursor: draftRef.current.length });
       } else {
-        const idx = historyIdx + 1;
-        setHistoryIdx(idx);
+        const idx = cur + 1;
+        historyIdxRef.current = idx; setHistoryIdx(idx);
         setEditor({ text: h[idx]!, cursor: h[idx]!.length });
       }
       return;
@@ -1690,7 +1701,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         if (h[h.length - 1] !== value) h.push(value);
       }
       setEditor({ text: "", cursor: 0 });
-      setHistoryIdx(null);
+      historyIdxRef.current = null; setHistoryIdx(null);
       pasteRef.current = { next: 1, map: new Map() }; // chips consumed; reset for the next line
       if (!value.trim()) return;
       // Mid-turn input is queued, not run concurrently (submit/runSlash can't
@@ -1722,7 +1733,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     if (key.backspace || key.delete) bs = 1;
     else if (input2 && /^[\x08\x7f]+$/.test(input2)) bs = input2.length;
     if (bs > 0) {
-      if (historyIdx !== null) setHistoryIdx(null); // editing a recalled line = leave browse mode
+      if (historyIdxRef.current !== null) { historyIdxRef.current = null; setHistoryIdx(null); } // editing a recalled line = leave browse mode
       setEditor((e) => {
         const c = Math.max(0, e.cursor - bs);
         return { text: e.text.slice(0, c) + e.text.slice(e.cursor), cursor: c };
@@ -1735,7 +1746,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     if (input2 && !key.ctrl && !key.meta) {
       const clean = input2.replace(/[\x00-\x1F\x7F]/g, "").split("[200~").join("").split("[201~").join("");
       if (clean) {
-        if (historyIdx !== null) setHistoryIdx(null); // typing = leave history-browse so the menu works again
+        if (historyIdxRef.current !== null) { historyIdxRef.current = null; setHistoryIdx(null); } // typing = leave history-browse so the menu works again
         setEditor((e) => ({ text: e.text.slice(0, e.cursor) + clean + e.text.slice(e.cursor), cursor: e.cursor + clean.length }));
       }
     }
