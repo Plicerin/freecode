@@ -32,6 +32,7 @@ import { executeBench, formatBenchPlain } from "./bench";
 import { previewToolResult } from "../tui/preview";
 import { type Confidence, nextConfidence } from "../tui/confidence";
 import { MarkdownBody } from "../tui/markdown-render";
+import { BRACKET_PASTE_ON, BRACKET_PASTE_OFF, stripPasteMarkers, pastePlaceholder, expandPastes } from "../tui/paste";
 import { logActivity, setActivityLog, activityState } from "../utils/activity";
 import { closest } from "../utils/fuzzy";
 import { resolveVerify, resolveQuickVerify, runVerify } from "../agent/verify";
@@ -452,6 +453,9 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   // hold them here and drain one when the turn finishes (see the effect below).
   const queuedInputRef = useRef<string[]>([]);
   const [queuedCount, setQueuedCount] = useState(0);
+  // Multi-line pastes are collapsed to a "[#N +L lines]" chip in the input; the
+  // real content is kept here and substituted back in at submit (Claude-Code style).
+  const pasteRef = useRef<{ next: number; map: Map<number, string> }>({ next: 1, map: new Map() });
 
   // Exit cleanly: abort any in-flight turn first so spawned tool processes (e.g.
   // a running test suite) are signaled to die — otherwise their open pipes keep
@@ -463,10 +467,19 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
 
   const exitNow = (): void => {
     setTerminalTitle("freecode");
+    if (process.stdout.isTTY) process.stdout.write(BRACKET_PASTE_OFF);
     abortRef.current?.abort();
     approvalQueue.flush(); // unblock any sub-agents parked on a prompt so the process can die
     exit();
   };
+
+  // Bracketed paste: ask the terminal to wrap pasted text so a multi-line paste
+  // arrives as one burst (collapsible to a chip) instead of raw newlines that
+  // strip or fire a premature submit. Restored on unmount.
+  useEffect(() => {
+    if (process.stdout.isTTY) process.stdout.write(BRACKET_PASTE_ON);
+    return () => { if (process.stdout.isTTY) process.stdout.write(BRACKET_PASTE_OFF); };
+  }, []);
 
   // When the app is idle (no turn running, no approval pending), every message
   // is final — flush them all to <Static>. During a turn `settled` is frozen,
@@ -1538,6 +1551,23 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       abortRef.current?.abort();
       return;
     }
+    // Paste handling: a bracketed paste (or any multi-char chunk carrying a
+    // newline) is pasted text, not typing. Collapse a multi-line paste to a chip
+    // and stash the content; insert a single-line paste as-is.
+    {
+      const { content: pasted, marked } = stripPasteMarkers(input2);
+      if (marked || (pasted.length > 1 && /\r|\n/.test(pasted))) {
+        if (/\r|\n/.test(pasted)) {
+          const id = pasteRef.current.next++;
+          pasteRef.current.map.set(id, pasted.replace(/\r\n?/g, "\n"));
+          const chip = pastePlaceholder(id, pasted);
+          setEditor((e) => ({ text: e.text.slice(0, e.cursor) + chip + e.text.slice(e.cursor), cursor: e.cursor + chip.length }));
+        } else if (pasted) {
+          setEditor((e) => ({ text: e.text.slice(0, e.cursor) + pasted + e.text.slice(e.cursor), cursor: e.cursor + pasted.length }));
+        }
+        return;
+      }
+    }
     if (key.ctrl && input2 === "u") {
       setEditor({ text: "", cursor: 0 });
       return;
@@ -1594,13 +1624,15 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       // Slash-command palette: when the suggestion menu is open, Enter runs the
       // HIGHLIGHTED command, completing a partial (e.g. "/age" → "/agents"). Tab
       // instead fills it into the box (for commands that take arguments).
-      const value = resolveSubmit(input, menuMatches.map((m) => m.name), menuIdx);
+      // Substitute any paste chips ("[#N +L lines]") back to their full content.
+      const value = expandPastes(resolveSubmit(input, menuMatches.map((m) => m.name), menuIdx), pasteRef.current.map);
       if (value.trim()) {
         const h = historyRef.current;
         if (h[h.length - 1] !== value) h.push(value);
       }
       setEditor({ text: "", cursor: 0 });
       setHistoryIdx(null);
+      pasteRef.current = { next: 1, map: new Map() }; // chips consumed; reset for the next line
       if (!value.trim()) return;
       // Mid-turn input is queued, not run concurrently (submit/runSlash can't
       // overlap a live turn) — so the user's steering isn't silently dropped.
