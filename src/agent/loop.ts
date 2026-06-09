@@ -8,6 +8,7 @@ import { toolListToSystemPrompt } from "../tools/registry";
 import { ContextTracker } from "./context";
 import { estimateMessagesTokens, trimToFit } from "./token-estimate";
 import { overclaimWarning } from "./overclaim";
+import { looksLikeTextToolCall } from "./text-tool-call";
 import { getEnv } from "../utils/env";
 import { summarizeConversation } from "./summarize";
 import { runHooks } from "./hooks";
@@ -261,6 +262,8 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
     // tool call parses to nothing, so the turn looks "done"), or an empty reply.
     if (endReason === "max_tokens") {
       opts.onEvent({ type: "error", error: "⚠ The model's reply hit the output token limit and was cut off (finish_reason=length) — it may have stopped mid-task. Raise the model's max output, simplify the step, or tell it to continue." });
+    } else if (turnToolCalls.length === 0 && looksLikeTextToolCall(turnText)) {
+      opts.onEvent({ type: "error", error: "⚠ The model wrote a tool call as TEXT (e.g. <function_calls>) instead of calling the tool — the provider isn't parsing this model's tool-call format into a structured call, so freecode can't run it. Use a model with provider-supported tool calling, or check the model's tool template/settings (common with some local models in LM Studio/Ollama)." });
     } else if (turnToolCalls.length === 0 && !turnText.trim() && !sawError && !producedText) {
       // Only flag a TRULY empty run — not a benign empty turn after the model
       // already gave a real answer (which is just it having nothing more to add).
