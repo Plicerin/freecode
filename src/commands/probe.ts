@@ -22,7 +22,7 @@ function flagValue(argv: string[], name: string): string | undefined {
 
 export async function runProbe(argv: string[]): Promise<void> {
   const withTools = argv.includes("--tools");
-  const overrideNames = new Set(["--provider", "--model", "--base-url", "--api-key"]);
+  const overrideNames = new Set(["--provider", "--model", "--base-url", "--api-key", "--max-tokens"]);
   // Positional args (the prompt) are everything that isn't a flag or a flag value.
   const prompt = argv
     .filter((a, i) => !a.startsWith("--") && !overrideNames.has(argv[i - 1] ?? ""))
@@ -53,6 +53,10 @@ export async function runProbe(argv: string[]): Promise<void> {
     `prompt:    ${JSON.stringify(prompt)}\n\n`,
   );
 
+  // Reasoning models can spend hundreds of tokens before acting; a small cap
+  // truncates them mid-thought and looks like "no tool call". Default 4096,
+  // --max-tokens overrides.
+  const maxTok = Math.max(1, parseInt(flagValue(argv, "--max-tokens") || "", 10) || 4096);
   const provider = buildProvider(config);
   const req: ChatRequest = {
     model: config.model,
@@ -60,7 +64,7 @@ export async function runProbe(argv: string[]): Promise<void> {
     messages: [{ role: "user", content: prompt }],
     tools: toolDefs,
     stream: true,
-    maxTokens: 1024,
+    maxTokens: maxTok,
     enableExtendedThinking: config.enableExtendedThinking,
   };
 
