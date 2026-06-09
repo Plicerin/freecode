@@ -34,6 +34,7 @@ import { previewToolResult } from "../tui/preview";
 import { type Confidence, nextConfidence } from "../tui/confidence";
 import { MarkdownBody } from "../tui/markdown-render";
 import { BRACKET_PASTE_ON, BRACKET_PASTE_OFF, hasPasteStart, pastePlaceholder, expandPastes, shouldCollapse } from "../tui/paste";
+import { tokensPerSecond, estTokens, formatSpeed } from "../tui/speed";
 import { logActivity, setActivityLog, activityState } from "../utils/activity";
 import { closest } from "../utils/fuzzy";
 import { resolveVerify, resolveQuickVerify, runVerify } from "../agent/verify";
@@ -452,6 +453,11 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   const abortRef = useRef<AbortController | null>(null);
   const streamIdRef = useRef<string | null>(null); // id of the assistant bubble currently streaming
   const thinkIdRef = useRef<string | null>(null); // id of the reasoning bubble currently streaming
+  // Live tokens/sec speedometer: chars produced in the current generation burst
+  // and when it started (reset on each tool call so it tracks the live stream,
+  // not wall-clock that includes tool-execution pauses).
+  const burstCharsRef = useRef(0);
+  const burstStartRef = useRef<number | null>(null);
   // Messages typed WHILE a turn is running are queued, not dropped. submit()
   // refuses to run concurrently (returns early if busy), so without this a line
   // entered mid-turn vanished on Enter — the user couldn't steer the agent. We
@@ -645,6 +651,8 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     const controller = new AbortController();
     abortRef.current = controller;
     streamIdRef.current = null;
+    burstCharsRef.current = 0;
+    burstStartRef.current = null;
     try {
       // Plan mode: read-only tools (permission=safe) + a plan-only system prompt.
       const baseTools = planMode ? tools.filter((t) => t.permission === "safe") : tools;
@@ -690,6 +698,12 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         promptUser,
         signal: controller.signal,
         onEvent: (e) => {
+          // Speedometer: count every produced char (reasoning + answer) and start
+          // the clock on the first token of this generation burst.
+          if ((e.type === "thinking_delta" || e.type === "text_delta") && e.text) {
+            if (burstStartRef.current === null) burstStartRef.current = Date.now();
+            burstCharsRef.current += e.text.length;
+          }
           if (e.type === "thinking_delta" && e.text) {
             // Reasoning channel (gpt-oss et al.) — stream into a dim 💭 bubble so
             // you can see the model actually working through the problem.
@@ -729,6 +743,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           } else if (e.type === "tool_call" && e.call) {
             streamIdRef.current = null; // text after a tool call starts a fresh bubble
             thinkIdRef.current = null; // and a fresh reasoning bubble next step
+            burstCharsRef.current = 0; burstStartRef.current = null; // new burst → reset the speedometer
             const call = e.call;
             const tid = `t-${call.id ?? Math.random().toString(36).slice(2, 8)}`;
             setMessages((prev) => [...prev, { id: tid, role: "tool", text: `→ ${call.name}(${JSON.stringify(call.arguments).slice(0, 120)})`, toolName: call.name }]);
@@ -1709,6 +1724,10 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
 
   const endpoint = defaultEndpoint(config.provider, config.baseUrl);
   const isLocal = config.provider === "ollama" || config.provider === "lmstudio";
+  // Live speedometer (recomputed each render; the spinner tick drives re-render).
+  const speedText = busy && burstStartRef.current
+    ? formatSpeed(tokensPerSecond(estTokens(burstCharsRef.current), Date.now() - burstStartRef.current))
+    : "";
 
   return (
     <Box flexDirection="column">
@@ -1751,7 +1770,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           ))}
           {busy && (
             <Text color={theme.hex.warning}>
-              {reducedMotion ? "•" : SPINNER_FRAMES[tick % SPINNER_FRAMES.length]} Working… <Text dimColor>({Math.max(0, Math.floor((Date.now() - busyStartRef.current) / 1000))}s · esc to interrupt{queuedCount > 0 ? ` · ${queuedCount} queued` : ""})</Text>
+              {reducedMotion ? "•" : SPINNER_FRAMES[tick % SPINNER_FRAMES.length]} Working… <Text dimColor>({Math.max(0, Math.floor((Date.now() - busyStartRef.current) / 1000))}s · esc to interrupt{queuedCount > 0 ? ` · ${queuedCount} queued` : ""}{speedText ? ` · ⚡ ${speedText}` : ""})</Text>
             </Text>
           )}
           {errorLine && <Text color={theme.hex.error}>! {errorLine}</Text>}
