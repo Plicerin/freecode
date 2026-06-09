@@ -149,7 +149,7 @@ export class OpenAICompatProvider implements Provider {
     const firstByteMs = streamFirstByteMs();
     const watchdog = createStallTimeout(req.signal, idleMs, firstByteMs);
     const timeoutError = (): Error =>
-      makeError(this.id, `${this.opts.providerName} stream timed out — no response from "${req.model}". It may not be provisioned on this account/endpoint, or the backend stalled; verify it serves on ${this.baseUrl}.`, "timeout", true);
+      makeError(this.id, `${this.opts.providerName} stream timed out — no response from "${req.model}". Common causes: a hit rate/daily usage limit, the backend is stalled or at capacity, or the model isn't served on ${this.baseUrl}. (Over-quota requests often hang silently rather than returning an error.)`, "timeout", true);
     let resp: Response;
     try {
       resp = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal: watchdog.signal });

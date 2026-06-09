@@ -109,7 +109,7 @@ export async function runProbe(argv: string[]): Promise<void> {
 
   process.stdout.write(
     `\n── summary (${Date.now() - t0}ms) ──\n` +
-    `first event: ${firstByteMs < 0 ? "NEVER — no response received (model not provisioned on this endpoint, or the backend stalled)" : firstByteMs + "ms"}\n` +
+    `first event: ${firstByteMs < 0 ? "NEVER — no response (rate/usage limit hit, backend at capacity, or model not served here)" : firstByteMs + "ms"}\n` +
     `reasoning: ${reasoning.length} chars\n` +
     `text:      ${text.length} chars\n` +
     `tool calls: ${toolCalls}\n` +
