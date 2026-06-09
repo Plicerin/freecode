@@ -1,7 +1,7 @@
 // Reading a local server's ACTUAL loaded context (LM Studio) so freecode sizes
 // compaction to reality instead of the model's name-based max.
 import { test, expect, describe } from "bun:test";
-import { parseLmStudioContext } from "../src/providers/local-context";
+import { parseLmStudioContext, parseLoadedLmStudioModels } from "../src/providers/local-context";
 
 const payload = JSON.stringify({
   data: [
@@ -26,5 +26,23 @@ describe("parseLmStudioContext", () => {
   });
   test("tolerates a bare array (no data wrapper)", () => {
     expect(parseLmStudioContext(JSON.stringify([{ id: "x", state: "loaded", loaded_context_length: 8192 }]), "x")).toBe(8192);
+  });
+});
+
+describe("parseLoadedLmStudioModels", () => {
+  test("returns only loaded models with their context lengths", () => {
+    const json = JSON.stringify({ data: [
+      { id: "a", state: "loaded", loaded_context_length: 8192 },
+      { id: "b", state: "not-loaded", max_context_length: 128000 },
+      { id: "c", state: "loaded" }, // loaded but no ctx reported → null
+    ] });
+    expect(parseLoadedLmStudioModels(json)).toEqual([
+      { id: "a", contextLength: 8192 },
+      { id: "c", contextLength: null },
+    ]);
+  });
+  test("empty when nothing loaded / junk", () => {
+    expect(parseLoadedLmStudioModels(JSON.stringify({ data: [{ id: "x", state: "not-loaded" }] }))).toEqual([]);
+    expect(parseLoadedLmStudioModels("nope")).toEqual([]);
   });
 });

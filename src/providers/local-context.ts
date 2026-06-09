@@ -27,11 +27,43 @@ export function parseLmStudioContext(jsonText: string, modelId: string): number 
   }
 }
 
-/** Best-effort: ask a LOCAL provider what context the model is actually loaded
- *  with. Returns null when unknown, not local, or unreachable — never throws, so
- *  a missing/older server just falls back to the name-based guess. */
+export interface LoadedModel {
+  id: string;
+  contextLength: number | null;
+}
+
+/** Every model LM Studio currently has LOADED, with its loaded context length.
+ *  Lets freecode follow what's actually serving instead of a stale model id. */
+export function parseLoadedLmStudioModels(jsonText: string): LoadedModel[] {
+  try {
+    const json = JSON.parse(jsonText) as { data?: LmModel[] } | LmModel[];
+    const list = Array.isArray(json) ? json : (json.data ?? []);
+    return list
+      .filter((m) => m.state === "loaded" && typeof m.id === "string")
+      .map((m) => ({ id: m.id!, contextLength: typeof m.loaded_context_length === "number" && m.loaded_context_length > 0 ? m.loaded_context_length : null }));
+  } catch {
+    return [];
+  }
+}
+
+/** Best-effort: which models a LOCAL provider currently has loaded (LM Studio).
+ *  [] when not local / unreachable — never throws. */
+export async function detectLocalModels(provider: string, baseUrl: string | undefined): Promise<LoadedModel[]> {
+  if (provider !== "lmstudio") return [];
+  const root = (baseUrl ?? "http://127.0.0.1:1234/v1").replace(/\/v1\/?$/, "");
+  try {
+    const resp = await fetch(`${root}/api/v0/models`, { signal: AbortSignal.timeout(2000) });
+    if (!resp.ok) return [];
+    return parseLoadedLmStudioModels(await resp.text());
+  } catch {
+    return [];
+  }
+}
+
+/** Best-effort: the context the given model is loaded with. Falls back to the
+ *  name-based guess (null) when unknown / not local / unreachable. */
 export async function detectLocalContextWindow(provider: string, baseUrl: string | undefined, modelId: string): Promise<number | null> {
-  if (provider !== "lmstudio") return null; // only LM Studio exposes this today
+  if (provider !== "lmstudio") return null;
   const root = (baseUrl ?? "http://127.0.0.1:1234/v1").replace(/\/v1\/?$/, "");
   try {
     const resp = await fetch(`${root}/api/v0/models`, { signal: AbortSignal.timeout(2000) });

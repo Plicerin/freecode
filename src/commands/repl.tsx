@@ -3,7 +3,7 @@ import type { JSX } from "react";
 import { Box, Static, Text, useApp, useInput } from "ink";
 import { loadConfig, type CliFlags } from "../config/loader";
 import { buildProvider } from "../providers/registry";
-import { detectLocalContextWindow } from "../providers/local-context";
+import { detectLocalModels } from "../providers/local-context";
 import { zodToJsonSchema } from "../providers/schema-util";
 import { buildToolRegistry, toolListToSystemPrompt } from "../tools/registry";
 import { createPermissionEngine, approvalDecisionForKey, type ApprovalCallback, type ApprovalDecision, type ApprovalRequest } from "../permissions/modes";
@@ -382,6 +382,9 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   // for compaction + the overflow guard when detected. See the effect below.
   const detectedWindowRef = useRef<number | null>(null);
   const windowFor = (m: string): number => detectedWindowRef.current ?? contextWindowFor(m);
+  // Dedups the local-model detection announcement so the effect re-running after
+  // an auto model-switch doesn't repeat the message.
+  const lastLocalDetectRef = useRef<string>("");
 
   const customCommands = useMemo(() => loadCustomCommands(process.cwd()), []);
   // Project skills are invocable by name too (/<skill> [args]); surface them in
@@ -513,26 +516,38 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     return () => { if (process.stdout.isTTY) process.stdout.write(BRACKET_PASTE_OFF); };
   }, []);
 
-  // For a LOCAL provider, ask the server what context it actually loaded the
-  // model with (e.g. LM Studio's 4096 vs the model's 128k max) and size
-  // compaction/the overflow guard to THAT — and warn loudly if freecode's own
-  // system prompt + tools already crowd the window (the silent-empty-response trap).
+  // For a LOCAL provider (LM Studio), follow what the server ACTUALLY has loaded:
+  // auto-select the loaded model if the configured one isn't loaded (so freecode
+  // doesn't cling to a stale id), and size compaction to that model's real loaded
+  // context — warning loudly if freecode's prompt+tools already crowd the window.
   useEffect(() => {
     let cancelled = false;
     detectedWindowRef.current = null;
     (async () => {
-      const w = await detectLocalContextWindow(config.provider, config.baseUrl, model);
-      if (cancelled || !w) return;
-      detectedWindowRef.current = w;
-      trackerRef.current.setWindow(w);
-      setCtxFill(trackerRef.current.contextFill());
-      const sysTok = Math.ceil(toolListToSystemPrompt(tools).length / 4);
-      const toolTok = Math.ceil(JSON.stringify(tools.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters ?? zodToJsonSchema(t.schema) }))).length / 4);
-      const overhead = sysTok + toolTok;
-      const tight = overhead + 1024 > w;
-      setMessages((prev) => [...prev, { id: `ctx-${Date.now()}`, role: tight ? "warning" : "system", text: tight
-        ? `${config.provider} loaded "${model}" with only a ${w.toLocaleString()}-token context, but freecode's system prompt + tools need ~${overhead.toLocaleString()} — almost no room to respond (you'll get empty/truncated replies). Raise the model's Context Length in ${config.provider}; it supports far more.`
-        : `${config.provider}: "${model}" is loaded with a ${w.toLocaleString()}-token context (detected) — compaction sized to that.` }]);
+      const loaded = await detectLocalModels(config.provider, config.baseUrl);
+      if (cancelled || loaded.length === 0) return;
+      const chosen = loaded.find((m) => m.id === model) ?? loaded[0]!;
+      detectedWindowRef.current = chosen.contextLength;
+      if (chosen.contextLength) { trackerRef.current.setWindow(chosen.contextLength); setCtxFill(trackerRef.current.contextFill()); }
+      const key = `${config.provider}:${chosen.id}:${chosen.contextLength}`;
+      if (lastLocalDetectRef.current === key) return; // already handled this state
+      lastLocalDetectRef.current = key;
+      if (chosen.id !== model) {
+        // The configured model isn't loaded — use what LM Studio is actually serving.
+        setModel(chosen.id);
+        trackerRef.current.setPricing(priceFor(chosen.id, config.provider));
+        writeLastSession({ provider: config.provider, model: chosen.id });
+        setMessages((prev) => [...prev, { id: `lm-${Date.now()}`, role: "system", text: `${config.provider}: "${model}" isn't loaded — switched to the loaded model "${chosen.id}".` }]);
+      }
+      if (chosen.contextLength) {
+        const sysTok = Math.ceil(toolListToSystemPrompt(tools).length / 4);
+        const toolTok = Math.ceil(JSON.stringify(tools.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters ?? zodToJsonSchema(t.schema) }))).length / 4);
+        const overhead = sysTok + toolTok;
+        const tight = overhead + 1024 > chosen.contextLength;
+        setMessages((prev) => [...prev, { id: `ctx-${Date.now()}`, role: tight ? "warning" : "system", text: tight
+          ? `${config.provider} loaded "${chosen.id}" with only a ${chosen.contextLength!.toLocaleString()}-token context, but freecode's prompt + tools need ~${overhead.toLocaleString()} — almost no room to respond. Raise its Context Length in ${config.provider}.`
+          : `${config.provider}: "${chosen.id}" loaded with a ${chosen.contextLength!.toLocaleString()}-token context (detected) — compaction sized to that.` }]);
+      }
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
