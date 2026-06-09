@@ -45,6 +45,16 @@ describe("turn-end surfacing", () => {
     expect(e.some((m) => /empty response/i.test(m))).toBe(true);
   });
 
+  test("an empty turn AFTER a real answer is NOT flagged (benign trailing turn)", async () => {
+    // Turn 1: answer + a tool call (so the loop continues). Turn 2: empty.
+    let n = 0;
+    const noop: Tool = { name: "Noop", description: "no-op", schema: z.object({}), permission: "safe", async run() { return { ok: true, output: "ok" }; } };
+    const p = new ScriptedProvider(() => (n++ === 0
+      ? [{ type: "text_delta", delta: "Done — cleaned up the stale manifests." }, { type: "tool_call", call: { id: "c1", name: "Noop", arguments: {} } }, { type: "end", reason: "tool_use" }]
+      : [{ type: "end", reason: "end_turn" }]));
+    expect(errors(await run(p, [noop]))).toEqual([]); // no empty-response warning
+  });
+
   test("a normal text reply does NOT trip either warning", async () => {
     const p = new ScriptedProvider(() => [
       { type: "text_delta", delta: "All set — here's the summary." },

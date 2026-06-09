@@ -99,6 +99,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
   let turns = 0;
   let aborted = false;
   let lastTurnToolCalls = 0; // tool-call count of the most recent turn (outer scope)
+  let producedText = false; // did the model say anything useful at all this run?
 
   // Auto-verify gate state.
   const verifyMode = opts.verifyMode ?? "off";
@@ -248,9 +249,12 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
     // tool call parses to nothing, so the turn looks "done"), or an empty reply.
     if (endReason === "max_tokens") {
       opts.onEvent({ type: "error", error: "⚠ The model's reply hit the output token limit and was cut off (finish_reason=length) — it may have stopped mid-task. Raise the model's max output, simplify the step, or tell it to continue." });
-    } else if (turnToolCalls.length === 0 && !turnText.trim() && !sawError) {
+    } else if (turnToolCalls.length === 0 && !turnText.trim() && !sawError && !producedText) {
+      // Only flag a TRULY empty run — not a benign empty turn after the model
+      // already gave a real answer (which is just it having nothing more to add).
       opts.onEvent({ type: "error", error: "⚠ The model returned an empty response — the turn ended without text or a tool call. This is usually the model, not freecode." });
     }
+    if (turnText.trim()) producedText = true;
 
     if (sawError) break;
     if (turnToolCalls.length === 0) {
