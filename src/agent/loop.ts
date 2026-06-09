@@ -8,6 +8,7 @@ import { toolListToSystemPrompt } from "../tools/registry";
 import { ContextTracker } from "./context";
 import { estimateMessagesTokens } from "./token-estimate";
 import { overclaimWarning } from "./overclaim";
+import { getEnv } from "../utils/env";
 import { summarizeConversation } from "./summarize";
 import { runHooks } from "./hooks";
 import { runVerify, type VerifyPlan } from "./verify";
@@ -62,8 +63,17 @@ export interface AgentLoopOptions {
   verifyMode?: "off" | "on" | "strict";
 }
 
+/** Per-turn output-token cap. 8192 truncates a large FileWrite (a whole game.js,
+ *  a full index.html) mid-write — the turn then ends and the user has to say
+ *  "continue". 16k fits most modern models; FREECODE_MAX_OUTPUT_TOKENS overrides. */
+function maxOutputTokens(): number {
+  const n = Number(getEnv("FREECODE_MAX_OUTPUT_TOKENS"));
+  return Number.isFinite(n) && n > 0 ? n : 16384;
+}
+
 export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: number; usage: TokenUsage; aborted: boolean; messages: ChatMessage[] }> {
   const tools = opts.tools;
+  const maxOut = maxOutputTokens();
   const messages: ChatMessage[] = [
     ...(opts.history ?? []),
     { role: "user", content: opts.prompt, ...(opts.images?.length ? { images: opts.images } : {}) },
@@ -172,7 +182,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
         parameters: t.parameters,
       })),
       stream: true,
-      maxTokens: 8192,
+      maxTokens: maxOut,
       enablePromptCache: opts.enablePromptCache,
       enableExtendedThinking: opts.enableExtendedThinking,
       signal: opts.signal,
