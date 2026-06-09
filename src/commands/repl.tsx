@@ -420,6 +420,10 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   const historyRef = useRef<string[]>([]); // submitted prompts, oldest first
   const [historyIdx, setHistoryIdx] = useState<number | null>(null); // null = editing live input
   const draftRef = useRef(""); // live input saved while browsing history
+  // The slash menu is "open" only while TYPING a command — not when a /command
+  // was recalled via history (else up/down would hijack to menu-nav and you'd be
+  // stuck on it, and Enter would run the highlighted item, not what you recalled).
+  const menuOpen = menuMatches.length > 0 && historyIdx === null;
   const [busy, setBusy] = useState(false);
   const [showTasks, setShowTasks] = useState(false);
   const [errorLine, setErrorLine] = useState<string | null>(null);
@@ -1579,8 +1583,8 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     if (key.ctrl && input2 === "a") { setEditor((e) => ({ ...e, cursor: 0 })); return; }            // line start
     if (key.ctrl && input2 === "e") { setEditor((e) => ({ ...e, cursor: e.text.length })); return; } // line end
     // When the slash-command menu is open, up/down navigate it (not history).
-    if (menuMatches.length > 0 && key.upArrow) { setMenuIdx((i) => Math.max(0, i - 1)); return; }
-    if (menuMatches.length > 0 && key.downArrow) { setMenuIdx((i) => Math.min(menuMatches.length - 1, i + 1)); return; }
+    if (menuOpen && key.upArrow) { setMenuIdx((i) => Math.max(0, i - 1)); return; }
+    if (menuOpen && key.downArrow) { setMenuIdx((i) => Math.min(menuMatches.length - 1, i + 1)); return; }
     // Command history (up/down).
     if (key.upArrow) {
       const h = historyRef.current;
@@ -1607,7 +1611,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     if (key.leftArrow) { setEditor((e) => ({ ...e, cursor: Math.max(0, e.cursor - 1) })); return; }
     if (key.rightArrow) { setEditor((e) => ({ ...e, cursor: Math.min(e.text.length, e.cursor + 1) })); return; }
     if (key.tab) {
-      if (menuMatches.length > 0) {
+      if (menuOpen) {
         // Complete the highlighted suggestion from the live menu.
         const pick = menuMatches[Math.min(menuIdx, menuMatches.length - 1)]!.name;
         setEditor({ text: pick + " ", cursor: pick.length + 1 });
@@ -1625,7 +1629,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       // HIGHLIGHTED command, completing a partial (e.g. "/age" → "/agents"). Tab
       // instead fills it into the box (for commands that take arguments).
       // Substitute any paste chips ("[#N +L lines]") back to their full content.
-      const value = expandPastes(resolveSubmit(input, menuMatches.map((m) => m.name), menuIdx), pasteRef.current.map);
+      const value = expandPastes(resolveSubmit(input, menuOpen ? menuMatches.map((m) => m.name) : [], menuIdx), pasteRef.current.map);
       if (value.trim()) {
         const h = historyRef.current;
         if (h[h.length - 1] !== value) h.push(value);
@@ -1663,6 +1667,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     if (key.backspace || key.delete) bs = 1;
     else if (input2 && /^[\x08\x7f]+$/.test(input2)) bs = input2.length;
     if (bs > 0) {
+      if (historyIdx !== null) setHistoryIdx(null); // editing a recalled line = leave browse mode
       setEditor((e) => {
         const c = Math.max(0, e.cursor - bs);
         return { text: e.text.slice(0, c) + e.text.slice(e.cursor), cursor: c };
@@ -1673,7 +1678,10 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     // from key bursts are never inserted (which previously pushed the caret).
     if (input2 && !key.ctrl && !key.meta) {
       const clean = input2.replace(/[\x00-\x1F\x7F]/g, "");
-      if (clean) setEditor((e) => ({ text: e.text.slice(0, e.cursor) + clean + e.text.slice(e.cursor), cursor: e.cursor + clean.length }));
+      if (clean) {
+        if (historyIdx !== null) setHistoryIdx(null); // typing = leave history-browse so the menu works again
+        setEditor((e) => ({ text: e.text.slice(0, e.cursor) + clean + e.text.slice(e.cursor), cursor: e.cursor + clean.length }));
+      }
     }
   });
 
@@ -1814,7 +1822,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
 
       {/* Slash-command suggestions render BELOW the input so typing a command
           never shoves the input box up/down — the input stays put. */}
-      {!pending && !modelPicker && !picker && menuMatches.length > 0 && (
+      {!pending && !modelPicker && !picker && menuOpen && (
         <Box flexDirection="column" paddingX={1}>
           {menuMatches.map((m, i) => {
             const sel = i === Math.min(menuIdx, menuMatches.length - 1);
