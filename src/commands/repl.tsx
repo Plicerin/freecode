@@ -37,6 +37,7 @@ import { type Confidence, nextConfidence } from "../tui/confidence";
 import { MarkdownBody } from "../tui/markdown-render";
 import { BRACKET_PASTE_ON, BRACKET_PASTE_OFF, hasPasteStart, pastePlaceholder, expandPastes, shouldCollapse } from "../tui/paste";
 import { tokensPerSecond, estTokens, formatSpeed } from "../tui/speed";
+import { isLanModelEndpoint } from "../tui/endpoint";
 import { logActivity, setActivityLog, activityState } from "../utils/activity";
 import { closest } from "../utils/fuzzy";
 import { resolveVerify, resolveQuickVerify, runVerify } from "../agent/verify";
@@ -180,6 +181,7 @@ function defaultEndpoint(provider: string, baseUrl?: string): string {
     case "anthropic": return "https://api.anthropic.com";
     case "ollama": return "http://localhost:11434/v1";
     case "lmstudio": return "http://127.0.0.1:1234/v1";
+    case "llama-server": return "http://127.0.0.1:8080/v1";
     case "nim": return "https://integrate.api.nvidia.com/v1";
     case "openrouter": return "https://openrouter.ai/api/v1";
     default: return "(default)";
@@ -210,7 +212,7 @@ function providerReason(provider: string, source: string): string {
       if (process.env[flag]) return flag;
       const keyVar: Record<string, string> = {
         anthropic: "ANTHROPIC_API_KEY", openai: "OPENAI_API_KEY", gemini: "GEMINI_API_KEY",
-        "github-models": "GITHUB_TOKEN", nim: "NVIDIA_API_KEY", ollama: "OLLAMA_HOST", lmstudio: "LMSTUDIO_HOST",
+        "github-models": "GITHUB_TOKEN", nim: "NVIDIA_API_KEY", ollama: "OLLAMA_HOST", lmstudio: "LMSTUDIO_HOST", "llama-server": "LLAMA_SERVER_HOST",
       };
       return keyVar[provider] && process.env[keyVar[provider]!] ? keyVar[provider]! : "env";
     }
@@ -315,7 +317,7 @@ export async function startRepl(opts: ReplOptions = {}): Promise<void> {
   let config = loadConfig({ flags: opts.flags ?? {} });
 
   // First-run onboarding: no key anywhere for a cloud provider → collect them.
-  const localProvider = ["ollama", "lmstudio", "mock"].includes(config.provider);
+  const localProvider = ["ollama", "lmstudio", "llama-server", "mock"].includes(config.provider);
   if (!Vault.exists() && !config.apiKey && !localProvider && !opts.resumeId) {
     const { runOnboarding } = await import("./onboarding");
     await runOnboarding();
@@ -1000,7 +1002,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       case "/doctor": {
         const { execSync } = await import("node:child_process");
         const tryExec = (cmd: string): string | null => { try { return execSync(cmd, { cwd: process.cwd(), encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { return null; } };
-        const local = ["ollama", "lmstudio", "mock"].includes(config.provider);
+        const local = ["ollama", "lmstudio", "llama-server", "mock"].includes(config.provider);
         const lines = [
           "freecode doctor",
           `  cwd          ${process.cwd()}`,
@@ -1446,7 +1448,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         break;
       }
       case "/provider": {
-        const KNOWN = ["anthropic", "openai", "gemini", "github-models", "openrouter", "bedrock", "vertex", "ollama", "lmstudio", "nim", "mock"];
+        const KNOWN = ["anthropic", "openai", "gemini", "github-models", "openrouter", "bedrock", "vertex", "ollama", "lmstudio", "llama-server", "nim", "mock"];
         if (arg) {
           if (!KNOWN.includes(arg)) {
             const suggestion = closest(arg, KNOWN, 4);
@@ -1462,7 +1464,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           trackerRef.current.setWindow(contextWindowFor(newCfg.model));
           writeLastSession({ provider: newCfg.provider, model: newCfg.model, baseUrl: newCfg.baseUrl });
           setCtxFill(trackerRef.current.contextFill());
-          const local = ["ollama", "lmstudio", "mock"].includes(newCfg.provider);
+          const local = ["ollama", "lmstudio", "llama-server", "mock"].includes(newCfg.provider);
           const text = !newCfg.apiKey && !local
             ? `Switched to ${arg} (model ${newCfg.model}) — but no API key found. Add one with:  freecode auth add ${arg}`
             : `Switched to ${arg} — pick a model:`;
@@ -1988,7 +1990,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           <Text dimColor>  · ctx </Text>
           <Text color={{ ok: theme.hex.success, warn: theme.hex.warning, crit: theme.hex.error }[contextTone(ctxFill)]}>{contextBar(ctxFill)}</Text>
           <Text dimColor> {Math.round(ctxFill * 100)}%{ctxTokens > 0 ? ` (${formatTokens(ctxTokens)}/${formatTokens(trackerRef.current.window())})` : ""} · </Text>
-          <Text color={theme.dim}>{config.provider}:</Text>
+          <Text color={theme.dim}>{isLanModelEndpoint(config.provider, config.baseUrl) ? "🌐 " : ""}{config.provider}:</Text>
           <Text color={theme.hex.assistant}>{model}</Text>
           <Text dimColor>  cost </Text>
           <Text color={theme.hex.success}>${costUsd.toFixed(4)}</Text>

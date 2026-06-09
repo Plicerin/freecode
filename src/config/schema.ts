@@ -10,6 +10,7 @@ export const ProviderIdSchema = z.enum([
   "vertex",
   "ollama",
   "lmstudio",
+  "llama-server",
   "nim",
   "mock",
 ]);

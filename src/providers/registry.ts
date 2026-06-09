@@ -84,6 +84,14 @@ function buildBaseProvider(config: ResolvedConfig): Provider {
         defaultModel: model,
         authHeader: "none",
       });
+    case "llama-server":
+      return new OpenAICompatProvider("llama-server", "llama.cpp server", {
+        apiKey,
+        baseUrl: ensureV1(baseUrl ?? "http://127.0.0.1:8080/v1"),
+        providerName: "llama-server",
+        defaultModel: model,
+        authHeader: "lmstudio", // optional/no key, like LM Studio
+      });
     case "nim":
       return new OpenAICompatProvider("nim", "NVIDIA NIM", {
         apiKey,

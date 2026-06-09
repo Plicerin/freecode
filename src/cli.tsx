@@ -32,7 +32,7 @@ program
   .option("--resume <session-id>", "Resume a previous session")
   .option("--serve", "Start gRPC server (binds --port)", false)
   .option("--port <n>", "gRPC server port", "50051")
-  .option("--provider <id>", "Override provider (anthropic|openai|gemini|github-models|bedrock|vertex|ollama|lmstudio)")
+  .option("--provider <id>", "Override provider (anthropic|openai|gemini|github-models|bedrock|vertex|ollama|lmstudio|llama-server|nim|openrouter)")
   .option("--model <id>", "Override model")
   .option("--base-url <url>", "Override base URL")
   .option("--api-key <key>", "Override API key")

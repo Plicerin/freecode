@@ -91,6 +91,7 @@ function providerEnvKey(p: ProviderId): string | undefined {
     case "vertex": return "GOOGLE_APPLICATION_CREDENTIALS";
     case "ollama": return "OLLAMA_HOST";
     case "lmstudio": return "LMSTUDIO_HOST";
+    case "llama-server": return "LLAMA_SERVER_HOST";
     case "nim": return getEnv("NVIDIA_API_KEY") ? "NVIDIA_API_KEY" : "NVIDIA_NIM_API_KEY";
     default: return undefined;
   }
@@ -102,7 +103,7 @@ function providerEnvKey(p: ProviderId): string | undefined {
 // (e.g. openai) sits in the vault.
 // Does this provider have a key we can actually use? Local providers need none.
 function hasUsableKey(p: ProviderId): boolean {
-  if (p === "ollama" || p === "lmstudio") return true;
+  if (p === "ollama" || p === "lmstudio" || p === "llama-server") return true;
   if (vaultApiKey(p)) return true;
   const envKey = providerEnvKey(p);
   return !!(envKey && getEnv(envKey));
@@ -134,6 +135,7 @@ function providerBaseUrlEnv(p: ProviderId): string | undefined {
     case "vertex": return getEnv("VERTEX_BASE_URL");
     case "ollama": return getEnv("OLLAMA_HOST");
     case "lmstudio": return getEnv("LMSTUDIO_HOST");
+    case "llama-server": return getEnv("LLAMA_SERVER_HOST");
     case "nim": return getEnv("NVIDIA_NIM_BASE_URL") ?? getEnv("NIM_BASE_URL");
     default: return undefined;
   }
@@ -146,6 +148,7 @@ function providerBaseUrlDefault(p: ProviderId): string | undefined {
     case "openrouter": return "https://openrouter.ai/api/v1";
     case "ollama": return "http://127.0.0.1:11434";
     case "lmstudio": return "http://127.0.0.1:1234";
+    case "llama-server": return "http://127.0.0.1:8080";
     case "nim": return "https://integrate.api.nvidia.com/v1";
     default: return undefined;
   }
@@ -162,6 +165,7 @@ function defaultModelFor(p: ProviderId): string {
     case "vertex": return "gemini-2.5-flash";
     case "ollama": return "llama3.2";
     case "lmstudio": return "local-model";
+    case "llama-server": return "local-model";
     case "nim": return "meta/llama-3.1-70b-instruct";
     case "mock": return "mock-1";
     default: return "claude-sonnet-4-5";
