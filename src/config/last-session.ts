@@ -12,6 +12,9 @@ import type { ProviderId } from "./schema";
 export interface LastSession {
   provider?: ProviderId;
   model?: string;
+  /** Base URL last used (e.g. a remote llama-server over Tailscale) so it's
+   *  restored next launch without re-passing --base-url. */
+  baseUrl?: string;
 }
 
 function defaultPath(): string {
@@ -28,7 +31,7 @@ export function readLastSession(path?: string): LastSession {
   try {
     if (!existsSync(p)) return {};
     const parsed = JSON.parse(readFileSync(p, "utf8")) as LastSession;
-    return { provider: parsed.provider, model: parsed.model };
+    return { provider: parsed.provider, model: parsed.model, baseUrl: parsed.baseUrl };
   } catch {
     return {};
   }
@@ -39,7 +42,7 @@ export function writeLastSession(s: LastSession, path?: string): void {
   const p = path ?? defaultPath();
   try {
     mkdirSync(dirname(p), { recursive: true });
-    writeFileSync(p, JSON.stringify({ provider: s.provider, model: s.model }, null, 2));
+    writeFileSync(p, JSON.stringify({ provider: s.provider, model: s.model, baseUrl: s.baseUrl }, null, 2));
   } catch {
     /* remembering must never break a run */
   }

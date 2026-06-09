@@ -540,7 +540,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         // The configured model isn't loaded — use what LM Studio is actually serving.
         setModel(chosen.id);
         trackerRef.current.setPricing(priceFor(chosen.id, config.provider));
-        writeLastSession({ provider: config.provider, model: chosen.id });
+        writeLastSession({ provider: config.provider, model: chosen.id, baseUrl: config.baseUrl });
         setMessages((prev) => [...prev, { id: `lm-${Date.now()}`, role: "system", text: `${config.provider}: "${model}" isn't loaded — switched to the loaded model "${chosen.id}".` }]);
       }
       if (chosen.contextLength) {
@@ -670,7 +670,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     // Title from the session's name if it has one (resume), else the project folder.
     applyTabTitle(titleOf(readSession(sessionRef.current) as never));
     // Remember this session's provider/model so the next launch reopens here.
-    writeLastSession({ provider: config.provider, model });
+    writeLastSession({ provider: config.provider, model, baseUrl: config.baseUrl });
     if (mcpStatus && mcpStatus.length > 0) {
       const ok = mcpStatus.filter((s) => s.ok);
       const toolCount = ok.reduce((n, s) => n + s.toolCount, 0);
@@ -918,7 +918,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           trackerRef.current.setPricing(priceFor(arg, config.provider));
           trackerRef.current.setWindow(contextWindowFor(arg));
           setCtxFill(trackerRef.current.contextFill());
-          writeLastSession({ provider: config.provider, model: arg });
+          writeLastSession({ provider: config.provider, model: arg, baseUrl: config.baseUrl });
           setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Model switched to ${arg} (provider: ${config.provider}). Active from your next message.` }]);
         } else {
           // No arg: open the interactive arrow-key picker (↑/↓ select, type to
@@ -1460,7 +1460,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           setModel(newCfg.model);
           trackerRef.current.setPricing(priceFor(newCfg.model, newCfg.provider));
           trackerRef.current.setWindow(contextWindowFor(newCfg.model));
-          writeLastSession({ provider: newCfg.provider, model: newCfg.model });
+          writeLastSession({ provider: newCfg.provider, model: newCfg.model, baseUrl: newCfg.baseUrl });
           setCtxFill(trackerRef.current.contextFill());
           const local = ["ollama", "lmstudio", "mock"].includes(newCfg.provider);
           const text = !newCfg.apiKey && !local
@@ -1639,7 +1639,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           trackerRef.current.setPricing(priceFor(sel, config.provider));
           trackerRef.current.setWindow(contextWindowFor(sel));
           setCtxFill(trackerRef.current.contextFill());
-          writeLastSession({ provider: config.provider, model: sel });
+          writeLastSession({ provider: config.provider, model: sel, baseUrl: config.baseUrl });
           setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Model switched to ${sel} (provider: ${config.provider}). Active from your next message.` }]);
         }
         return;

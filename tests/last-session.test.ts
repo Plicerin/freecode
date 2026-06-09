@@ -25,6 +25,31 @@ describe("store", () => {
     expect(readLastSession(p)).toEqual({ provider: "anthropic", model: "claude-opus-4-8" });
     expect(readLastSession(join(tmpdir(), "does-not-exist.json"))).toEqual({});
   });
+
+  test("round-trips a remembered base URL (remote endpoint)", () => {
+    const p = tmp();
+    writeLastSession({ provider: "lmstudio", model: "m", baseUrl: "https://host.ts.net/v1" }, p);
+    expect(readLastSession(p)).toEqual({ provider: "lmstudio", model: "m", baseUrl: "https://host.ts.net/v1" });
+  });
+});
+
+describe("base-URL memory", () => {
+  test("remembered base URL applies to the same provider; flag overrides; other provider ignores it", () => {
+    const p = tmp();
+    const prev = process.env.LMSTUDIO_HOST;
+    delete process.env.LMSTUDIO_HOST;
+    try {
+      writeLastSession({ provider: "lmstudio", model: "m", baseUrl: "https://remote.ts.net/v1" }, p);
+      // same provider → remembered URL wins over the localhost default
+      expect(loadConfig({ flags: { provider: "lmstudio" }, ...noFiles(p) }).baseUrl).toBe("https://remote.ts.net/v1");
+      // explicit --base-url flag still wins
+      expect(loadConfig({ flags: { provider: "lmstudio", baseUrl: "http://127.0.0.1:1234/v1" }, ...noFiles(p) }).baseUrl).toBe("http://127.0.0.1:1234/v1");
+      // a different provider does NOT inherit the lmstudio URL
+      expect(loadConfig({ flags: { provider: "ollama" }, ...noFiles(p) }).baseUrl).not.toBe("https://remote.ts.net/v1");
+    } finally {
+      if (prev === undefined) delete process.env.LMSTUDIO_HOST; else process.env.LMSTUDIO_HOST = prev;
+    }
+  });
 });
 
 describe("loader precedence", () => {

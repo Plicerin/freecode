@@ -122,18 +122,31 @@ function firstProviderWithKey(): ProviderId | undefined {
   return vaultProviders.length ? (vaultProviders[0] as ProviderId) : undefined;
 }
 
-function providerBaseUrl(p: ProviderId): string | undefined {
+// An explicit base-URL env override (undefined when unset) — separate from the
+// hardcoded default below, so a remembered base URL can sit BETWEEN them: env
+// override wins, then remembered, then the provider's built-in default.
+function providerBaseUrlEnv(p: ProviderId): string | undefined {
   switch (p) {
     case "anthropic": return getEnv("ANTHROPIC_BASE_URL");
     case "openai": return getEnv("OPENAI_BASE_URL");
     case "gemini": return getEnv("GEMINI_BASE_URL");
-    case "github-models": return "https://models.inference.ai.azure.com";
-    case "openrouter": return getEnv("OPENROUTER_BASE_URL") ?? "https://openrouter.ai/api/v1";
-    case "bedrock": return undefined;
+    case "openrouter": return getEnv("OPENROUTER_BASE_URL");
     case "vertex": return getEnv("VERTEX_BASE_URL");
-    case "ollama": return getEnv("OLLAMA_HOST") ?? "http://127.0.0.1:11434";
-    case "lmstudio": return getEnv("LMSTUDIO_HOST") ?? "http://127.0.0.1:1234";
-    case "nim": return getEnv("NVIDIA_NIM_BASE_URL") ?? getEnv("NIM_BASE_URL") ?? "https://integrate.api.nvidia.com/v1";
+    case "ollama": return getEnv("OLLAMA_HOST");
+    case "lmstudio": return getEnv("LMSTUDIO_HOST");
+    case "nim": return getEnv("NVIDIA_NIM_BASE_URL") ?? getEnv("NIM_BASE_URL");
+    default: return undefined;
+  }
+}
+
+/** The provider's built-in default base URL (no env / no override). */
+function providerBaseUrlDefault(p: ProviderId): string | undefined {
+  switch (p) {
+    case "github-models": return "https://models.inference.ai.azure.com";
+    case "openrouter": return "https://openrouter.ai/api/v1";
+    case "ollama": return "http://127.0.0.1:11434";
+    case "lmstudio": return "http://127.0.0.1:1234";
+    case "nim": return "https://integrate.api.nvidia.com/v1";
     default: return undefined;
   }
 }
@@ -207,13 +220,16 @@ export function loadConfig(opts: LoadOptions): ResolvedConfig {
   );
   const finalModel = modelPick.value ?? defaultModelFor(finalProvider);
 
-  const envBaseUrl = providerBaseUrl(finalProvider);
+  // Precedence: flag > profile > env override > remembered (only if its provider
+  // matches) > the provider's built-in default. So a saved remote base URL sticks
+  // across launches but an explicit flag/env still wins.
+  const rememberedBaseUrl = last.provider === finalProvider ? last.baseUrl : undefined;
   const baseUrlPick = pick<string | undefined>(
     opts.flags.baseUrl,
     profile.baseUrl,
-    envBaseUrl,
-    undefined,
-    undefined,
+    providerBaseUrlEnv(finalProvider),
+    rememberedBaseUrl,
+    providerBaseUrlDefault(finalProvider),
   );
   const finalBaseUrl = baseUrlPick.value;
 
