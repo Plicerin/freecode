@@ -34,3 +34,17 @@ export function estimateMessagesTokens(messages: ChatMessage[], system?: string)
   }
   return total;
 }
+
+/** Last-resort shrink to fit a (small, local) window when compaction couldn't:
+ *  drop the OLDEST messages — keeping the first (original context) and the last
+ *  (the current request) — until the estimate is within budget. Returns the
+ *  trimmed list + how many were dropped (0 if it already fit or can't shrink). */
+export function trimToFit(messages: ChatMessage[], system: string | undefined, budgetTokens: number): { messages: ChatMessage[]; dropped: number } {
+  const msgs = [...messages];
+  let dropped = 0;
+  while (msgs.length > 2 && estimateMessagesTokens(msgs, system) > budgetTokens) {
+    msgs.splice(1, 1); // remove the oldest message after the head
+    dropped++;
+  }
+  return { messages: msgs, dropped };
+}

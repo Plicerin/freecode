@@ -6,7 +6,7 @@ import { isRetryable } from "../providers/friendly-errors";
 import { debug } from "../utils/debug";
 import { toolListToSystemPrompt } from "../tools/registry";
 import { ContextTracker } from "./context";
-import { estimateMessagesTokens } from "./token-estimate";
+import { estimateMessagesTokens, trimToFit } from "./token-estimate";
 import { overclaimWarning } from "./overclaim";
 import { getEnv } from "../utils/env";
 import { summarizeConversation } from "./summarize";
@@ -157,14 +157,26 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
     // letting the provider reject it — e.g. NIM computes max_tokens = window −
     // prompt and 400s on the resulting negative value. Reserve room for a reply.
     const reserve = Math.min(8192, Math.max(512, Math.floor(windowSize * 0.05)));
-    const finalEstimate = estimateMessagesTokens(messages, sys);
+    let finalEstimate = estimateMessagesTokens(messages, sys);
+    // Compaction summarizes the middle but keeps the recent tail; if a big chunk
+    // sits there it can stay over a small (local) window. Rather than dead-end,
+    // drop the oldest messages to fit — keep the first (context) and the latest.
+    if (finalEstimate + reserve > windowSize && messages.length > 2) {
+      const { messages: trimmed, dropped } = trimToFit(messages, sys, Math.max(0, windowSize - reserve));
+      if (dropped > 0) {
+        const fixed = sanitizeToolPairing(trimmed);
+        messages.splice(0, messages.length, ...fixed);
+        opts.onEvent({ type: "compacted", text: `Trimmed ${dropped} old message(s) to fit ${opts.model}'s ${windowSize.toLocaleString()}-token window.` });
+        finalEstimate = estimateMessagesTokens(messages, sys);
+      }
+    }
     if (finalEstimate + reserve > windowSize) {
       opts.onEvent({
         type: "error",
         error:
-          `This conversation (~${finalEstimate.toLocaleString()} tokens) no longer fits ${opts.model}'s ` +
-          `${windowSize.toLocaleString()}-token context window, even after compaction. ` +
-          `Start fresh with /new, or drop the large input (a big pasted file, or a fetched page/binary).`,
+          `This turn (~${finalEstimate.toLocaleString()} tokens) is too large for ${opts.model}'s ` +
+          `${windowSize.toLocaleString()}-token context window even after trimming — a single input is bigger than the window. ` +
+          `Start fresh with /new, or remove the large input (a big pasted file, or a fetched page/binary).`,
       });
       break;
     }

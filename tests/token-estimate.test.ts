@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { estimateTokens, estimateMessagesTokens } from "../src/agent/token-estimate";
+import { estimateTokens, estimateMessagesTokens, trimToFit } from "../src/agent/token-estimate";
 import type { ChatMessage } from "../src/providers/types";
 
 describe("estimateTokens", () => {
@@ -38,5 +38,26 @@ describe("estimateMessagesTokens", () => {
   test("a giant message dominates — the overflow signal we rely on", () => {
     const huge: ChatMessage[] = [{ role: "tool", toolCallId: "1", content: "Z".repeat(4_000_000) }];
     expect(estimateMessagesTokens(huge)).toBeGreaterThan(900_000);
+  });
+});
+
+describe("trimToFit", () => {
+  const msg = (n: number, chars: number): ChatMessage => ({ role: "user", content: `m${n}:` + "x".repeat(chars) });
+  test("drops oldest middle messages until within budget, keeping first + last", () => {
+    const msgs = [msg(0, 400), msg(1, 4000), msg(2, 4000), msg(3, 4000), msg(9, 400)]; // ~100 + 3×1000 + 100 tok
+    const { messages, dropped } = trimToFit(msgs, undefined, 600); // budget 600 tok
+    expect(dropped).toBeGreaterThan(0);
+    expect(estimateMessagesTokens(messages)).toBeLessThanOrEqual(600);
+    expect(messages[0]!.content).toMatch(/^m0:/); // first kept
+    expect(messages[messages.length - 1]!.content).toMatch(/^m9:/); // last kept
+  });
+  test("no-op when it already fits", () => {
+    const msgs = [msg(0, 40), msg(1, 40)];
+    expect(trimToFit(msgs, undefined, 10_000).dropped).toBe(0);
+  });
+  test("can't shrink below first+last (a single huge message stays)", () => {
+    const msgs = [msg(0, 40), msg(1, 4_000_000)];
+    const { dropped } = trimToFit(msgs, undefined, 100); // last is huge, only 2 left → can't drop
+    expect(dropped).toBe(0);
   });
 });
