@@ -10,7 +10,7 @@ export function previewToolResult(output: string, maxLines = 8, maxLineLen = 160
   let out = head.join("\n");
   const moreLines = lines.length - maxLines;
   if (moreLines > 0) {
-    out += `\n      … +${moreLines} more line${moreLines === 1 ? "" : "s"}`;
+    out += `\n      … +${moreLines} more line${moreLines === 1 ? "" : "s"} (/expand to view)`;
   } else if (out.length < output.length) {
     out += " …"; // a single long line was clipped
   }

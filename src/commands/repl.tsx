@@ -68,7 +68,7 @@ interface UiMessage {
   ok?: boolean;
 }
 
-const SLASH_COMMANDS = ["/model", "/models", "/new", "/resume", "/rename", "/context", "/cost", "/config", "/doctor", "/diff", "/commit", "/commit-push-pr", "/branch", "/issue", "/pr-comments", "/review", "/security-review", "/autofix-pr", "/explore", "/agents", "/skills", "/learn", "/goal", "/workflows", "/ultraplan", "/bg", "/plugins", "/provider", "/plan", "/verify", "/bench", "/log", "/mcp", "/help", "/compact", "/about", "/exit"];
+const SLASH_COMMANDS = ["/model", "/models", "/new", "/resume", "/rename", "/context", "/cost", "/config", "/doctor", "/diff", "/commit", "/commit-push-pr", "/branch", "/issue", "/pr-comments", "/review", "/security-review", "/autofix-pr", "/explore", "/agents", "/skills", "/learn", "/goal", "/expand", "/workflows", "/ultraplan", "/bg", "/plugins", "/provider", "/plan", "/verify", "/bench", "/log", "/mcp", "/help", "/compact", "/about", "/exit"];
 
 // Spinner frames — proof of life while a turn runs. Not the braille snake every
 // other CLI ships: this is Bubo's eye. He holds your gaze, glances right, glances
@@ -126,6 +126,7 @@ const COMMAND_DESC: Record<string, string> = {
   "/bg": "run a prompt as a detached background job, or list jobs (/bg [prompt])",
   "/learn": "self-improvement: propose (/learn), save (/learn save <n|all>), score (/learn stats), prune",
   "/goal": "work autonomously toward an objective until done (/goal <objective>, /goal stop)",
+  "/expand": "show the full output of a truncated tool result (/expand [n], n=1 = most recent)",
   "/plugins": "list/install/uninstall/enable/disable plugins (/plugins install <git-url|path>)",
   "/verify": "run the project's checks",
   "/bench": "race the performance ghost",
@@ -1078,6 +1079,24 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         } finally {
           goalActiveRef.current = false;
         }
+        break;
+      }
+      case "/expand": {
+        // The transcript shows only an 8-line preview of a tool result, but the
+        // FULL output is kept in the conversation context. Reveal it (terminals
+        // can't click the "+N more lines"). /expand [n] → nth-most-recent result.
+        const toolMsgs = conversationRef.current.filter((m) => m.role === "tool" && m.content);
+        if (!toolMsgs.length) { setErrorLine("Nothing to expand — no tool output in the current context."); break; }
+        const n = Math.max(1, parseInt(arg.trim() || "1", 10) || 1);
+        const target = toolMsgs[toolMsgs.length - n];
+        if (!target) { setErrorLine(`Only ${toolMsgs.length} tool result(s) in context — /expand 1..${toolMsgs.length}.`); break; }
+        const full = target.content;
+        const allLines = full.split("\n");
+        const CAP = 800;
+        const shown = allLines.length > CAP
+          ? allLines.slice(0, CAP).join("\n") + `\n… (+${allLines.length - CAP} more lines — full output is in the session log: /log)`
+          : full;
+        setMessages((prev) => [...prev, { id: `exp-${Date.now()}`, role: "system", text: `Full output of tool result #${n} (${allLines.length} lines):\n${shown}` }]);
         break;
       }
       case "/agents": {

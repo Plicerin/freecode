@@ -15,6 +15,7 @@ test("shows first N lines and a '+more' tail for long multi-line output", () => 
   expect(out).toMatch(/row 7/);
   expect(out).not.toMatch(/row 8\b/); // beyond the 8-line head
   expect(out).toMatch(/\+42 more lines/);
+  expect(out).toMatch(/\/expand to view/); // tells the user how to see the rest
 });
 
 test("short output passes through unchanged", () => {
