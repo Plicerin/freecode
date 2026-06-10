@@ -42,6 +42,9 @@ describe("per-provider memory", () => {
   test("each provider keeps its OWN model/url across switches", () => {
     const p = tmp();
     const prev = process.env.LMSTUDIO_HOST; delete process.env.LMSTUDIO_HOST;
+    // LLAMA_SERVER_HOST legitimately overrides the remembered URL, so clear it
+    // here or the assertion fails on any machine where it's set in the shell.
+    const prevLlama = process.env.LLAMA_SERVER_HOST; delete process.env.LLAMA_SERVER_HOST;
     try {
       // Use llama-server (remote URL), then switch to nim → nim is now last-used,
       // but the llama-server URL must NOT be wiped.
@@ -60,6 +63,7 @@ describe("per-provider memory", () => {
       expect(r.providers?.nim?.model).toBe("qwen/qwen3");
     } finally {
       if (prev === undefined) delete process.env.LMSTUDIO_HOST; else process.env.LMSTUDIO_HOST = prev;
+      if (prevLlama === undefined) delete process.env.LLAMA_SERVER_HOST; else process.env.LLAMA_SERVER_HOST = prevLlama;
     }
   });
 });
