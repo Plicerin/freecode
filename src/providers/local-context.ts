@@ -60,6 +60,27 @@ export async function detectLocalModels(provider: string, baseUrl: string | unde
   }
 }
 
+async function probeOk(url: string): Promise<boolean> {
+  try {
+    const r = await fetch(url, { method: "GET", cache: "no-store", signal: AbortSignal.timeout(1500) });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** Identify which kind of local OpenAI-compat server is behind a base URL from
+ *  its distinctive endpoint — so a llama.cpp server reached via the lmstudio
+ *  provider can be LABELED "llama-server", not "lmstudio". null = unknown. */
+export async function detectServerKind(baseUrl: string | undefined): Promise<"lmstudio" | "llama-server" | "ollama" | null> {
+  if (!baseUrl) return null;
+  const root = baseUrl.replace(/\/v1\/?$/, "");
+  if (await probeOk(`${root}/api/v0/models`)) return "lmstudio"; // LM Studio's native API
+  if (await probeOk(`${root}/props`)) return "llama-server"; // llama.cpp server props
+  if (await probeOk(`${root}/api/tags`)) return "ollama"; // Ollama's native API
+  return null;
+}
+
 /** Best-effort: the context the given model is loaded with. Falls back to the
  *  name-based guess (null) when unknown / not local / unreachable. */
 export async function detectLocalContextWindow(provider: string, baseUrl: string | undefined, modelId: string): Promise<number | null> {

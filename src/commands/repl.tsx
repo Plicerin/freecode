@@ -3,7 +3,7 @@ import type { JSX } from "react";
 import { Box, Static, Text, useApp, useInput } from "ink";
 import { loadConfig, type CliFlags } from "../config/loader";
 import { buildProvider } from "../providers/registry";
-import { detectLocalModels } from "../providers/local-context";
+import { detectLocalModels, detectServerKind } from "../providers/local-context";
 import { zodToJsonSchema } from "../providers/schema-util";
 import { buildToolRegistry, toolListToSystemPrompt } from "../tools/registry";
 import { createPermissionEngine, approvalDecisionForKey, type ApprovalCallback, type ApprovalDecision, type ApprovalRequest } from "../permissions/modes";
@@ -392,6 +392,9 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   // Dedups the local-model detection announcement so the effect re-running after
   // an auto model-switch doesn't repeat the message.
   const lastLocalDetectRef = useRef<string>("");
+  // Detected server kind for a local provider (e.g. a llama.cpp server reached via
+  // the lmstudio provider) → shown in the status line instead of the raw provider.
+  const [serverLabel, setServerLabel] = useState<string | null>(null);
 
   const customCommands = useMemo(() => loadCustomCommands(process.cwd()), []);
   // Project skills are invocable by name too (/<skill> [args]); surface them in
@@ -530,7 +533,15 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   useEffect(() => {
     let cancelled = false;
     detectedWindowRef.current = null;
+    setServerLabel(null);
     (async () => {
+      // Relabel: a llama.cpp server reached via the lmstudio provider (or any
+      // local-server provider whose endpoint is a different kind) shows its REAL
+      // kind in the status line — "llama-server", not "lmstudio".
+      if (["ollama", "lmstudio", "llama-server"].includes(config.provider)) {
+        const kind = await detectServerKind(config.baseUrl ?? undefined);
+        if (!cancelled && kind && kind !== config.provider) setServerLabel(kind);
+      }
       const loaded = await detectLocalModels(config.provider, config.baseUrl);
       if (cancelled || loaded.length === 0) return;
       const chosen = loaded.find((m) => m.id === model) ?? loaded[0]!;
@@ -2004,7 +2015,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           <Text dimColor>  · ctx </Text>
           <Text color={{ ok: theme.hex.success, warn: theme.hex.warning, crit: theme.hex.error }[contextTone(ctxFill)]}>{contextBar(ctxFill)}</Text>
           <Text dimColor> {Math.round(ctxFill * 100)}%{ctxTokens > 0 ? ` (${formatTokens(ctxTokens)}/${formatTokens(trackerRef.current.window())})` : ""} · </Text>
-          <Text color={theme.dim}>{isLanModelEndpoint(config.provider, config.baseUrl) ? "🌐 " : ""}{config.provider}:</Text>
+          <Text color={theme.dim}>{isLanModelEndpoint(config.provider, config.baseUrl) ? "🌐 " : ""}{serverLabel ?? config.provider}:</Text>
           <Text color={theme.hex.assistant}>{model}</Text>
           <Text dimColor>  cost </Text>
           <Text color={theme.hex.success}>${costUsd.toFixed(4)}</Text>
