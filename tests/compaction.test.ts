@@ -7,7 +7,7 @@ import type { Provider, ChatRequest, StreamEvent } from "../src/providers/types"
 import type { Tool } from "../src/tools/types";
 
 describe("ContextTracker.compact (V14)", () => {
-  it("keeps head + tail, summarizes the middle", async () => {
+  it("summarizes the middle into a leading USER message + keeps the tail", async () => {
     const tracker = new ContextTracker({ windowSize: 100, threshold: 0.5 });
     const messages = [
       { role: "user" as const, content: "first" },
@@ -19,8 +19,31 @@ describe("ContextTracker.compact (V14)", () => {
     ];
     const res = await tracker.compact(messages, async () => "SUMMARY");
     expect(res.removedCount).toBeGreaterThan(0);
-    expect(res.messages[0]).toEqual(messages[0]); // head preserved
-    expect(res.messages[1]?.content).toContain("SUMMARY"); // summary stub inserted
+    // No leading system message in this history → summary leads, as a USER msg.
+    expect(res.messages[0]?.role).toBe("user");
+    expect(res.messages[0]?.content).toContain("SUMMARY");
+  });
+
+  it("NEVER places a system message after position 0 (strict templates reject it)", async () => {
+    const tracker = new ContextTracker({ windowSize: 100, threshold: 0.5 });
+    // History with a genuine leading system message, then the conversation.
+    const messages = [
+      { role: "system" as const, content: "SYS" },
+      { role: "user" as const, content: "first" },
+      { role: "assistant" as const, content: "a1" },
+      { role: "user" as const, content: "u2" },
+      { role: "assistant" as const, content: "a2" },
+      { role: "user" as const, content: "u3" },
+      { role: "assistant" as const, content: "a3" },
+    ];
+    const res = await tracker.compact(messages, async () => "SUMMARY");
+    // Leading system message preserved at index 0…
+    expect(res.messages[0]?.role).toBe("system");
+    // …and the summary is a USER message, not a second/mid system message.
+    expect(res.messages[1]?.role).toBe("user");
+    expect(res.messages[1]?.content).toContain("SUMMARY");
+    // The invariant: no system message anywhere past index 0.
+    expect(res.messages.slice(1).some((m) => m.role === "system")).toBe(false);
   });
 
   it("never leaves an orphan tool message at the tail boundary", async () => {

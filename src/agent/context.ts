@@ -90,7 +90,11 @@ export class ContextTracker extends EventEmitter {
     if (messages.length <= 2) {
       return { messages, removedCount: 0, summaryTokens: 0 };
     }
-    const head = messages[0];
+    // Only preserve a separate head if it's a genuine LEADING system message.
+    // (freecode passes the real system prompt out-of-band, so messages[0] is
+    // normally the first user turn — folding it into the summary is fine.)
+    const hasSystemHead = messages[0]?.role === "system";
+    const head = hasSystemHead ? messages[0] : undefined;
     const tailCount = Math.max(2, Math.floor(messages.length * 0.3));
     let tailStart = messages.length - tailCount;
     // Don't let the kept tail begin with an orphaned tool result (a `tool`
@@ -100,15 +104,18 @@ export class ContextTracker extends EventEmitter {
       tailStart += 1;
     }
     const tail = messages.slice(tailStart);
-    const toSummarize = messages.slice(1, tailStart);
+    const toSummarize = messages.slice(hasSystemHead ? 1 : 0, tailStart);
     if (toSummarize.length === 0) {
       return { messages, removedCount: 0, summaryTokens: 0 };
     }
     const summary = await summarize(toSummarize);
     const summaryTokens = Math.ceil(summary.length / 4);
+    // The summary must be a USER message, never a mid-conversation `system` one:
+    // strict chat templates (qwen on NIM) reject "System message must be at the
+    // beginning" with a 500 when a system message lands after position 0.
     const summaryMsg: ChatMessage = {
-      role: "system",
-      content: `[Context summary: ${summary}]`,
+      role: "user",
+      content: `[Summary of earlier conversation: ${summary}]`,
     };
     const next: ChatMessage[] = head ? [head, summaryMsg, ...tail] : [summaryMsg, ...tail];
     debug.log("compacted context", { removed: toSummarize.length, summaryTokens });
