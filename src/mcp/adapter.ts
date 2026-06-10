@@ -7,8 +7,14 @@ import type { McpClient, McpToolDef } from "./client";
 const PASSTHROUGH = z.record(z.unknown());
 
 /** Tool/function names must be [a-zA-Z0-9_-], max 64 chars (OpenAI's limit). */
-function sanitizeName(s: string): string {
+export function sanitizeName(s: string): string {
   return s.replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
+/** The prefix every tool from a given MCP server carries (`<server>__`) — lets
+ *  the manager find and remove a server's tools when it's unloaded live. */
+export function mcpToolPrefix(serverName: string): string {
+  return `${sanitizeName(serverName)}__`;
 }
 
 function normalizeSchema(schema: Record<string, unknown> | undefined): Record<string, unknown> {

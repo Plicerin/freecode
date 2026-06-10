@@ -58,7 +58,7 @@ import { debug } from "../utils/debug";
 import type { Tool } from "../tools/types";
 import { bashShellName } from "../tools/bash";
 import type { ChatMessage } from "../providers/types";
-import type { McpServerStatus } from "../mcp/manager";
+import type { McpManager, McpServerStatus } from "../mcp/manager";
 
 export interface ReplOptions {
   flags?: CliFlags;
@@ -66,6 +66,8 @@ export interface ReplOptions {
   initialPrompt?: string;
   extraTools?: Tool[];
   mcpStatus?: McpServerStatus[];
+  /** Live MCP manager — lets `/mcp add|remove` hot-load servers without a restart. */
+  mcp?: McpManager;
 }
 
 interface UiMessage {
@@ -342,6 +344,7 @@ export async function startRepl(opts: ReplOptions = {}): Promise<void> {
       initialPrompt={opts.initialPrompt}
       extraTools={mcp.tools}
       mcpStatus={mcp.status}
+      mcp={mcp}
     />,
   );
   try {
@@ -355,13 +358,17 @@ export async function startRepl(opts: ReplOptions = {}): Promise<void> {
   }
 }
 
-export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: ReplOptions): JSX.Element {
+export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mcp }: ReplOptions): JSX.Element {
   const { exit } = useApp();
   // Config is stateful so /provider can switch the active provider live
   // (re-resolving that provider's key/baseUrl/model from the vault + settings).
   const [config, setConfig] = useState(() => loadConfig({ flags: flags ?? {} }));
   const theme = useMemo(() => makeTheme(config.theme), [config.theme]);
   const provider = useMemo(() => buildProvider(config), [config]);
+  // MCP tools/status live in state so `/mcp add|remove` can hot-load servers
+  // without a restart. Seeded from the manager's startup connections.
+  const [mcpTools, setMcpTools] = useState<Tool[]>(() => mcp?.tools ?? extraTools ?? []);
+  const [mcpStatusState, setMcpStatusState] = useState<McpServerStatus[]>(() => mcp?.status ?? mcpStatus ?? []);
   const tools = useMemo(
     () => [
       ...buildToolRegistry({
@@ -372,9 +379,9 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           defaultBackend: config.webSearchProvider,
         },
       }),
-      ...(extraTools ?? []),
+      ...mcpTools,
     ],
-    [config.webSearchProvider, extraTools],
+    [config.webSearchProvider, mcpTools],
   );
   const permission = useMemo(
     () => createPermissionEngine(config.permissionMode, (async () => "allow") as ApprovalCallback),
@@ -1708,36 +1715,53 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           const parsed = parseMcpAdd(subArg);
           if ("error" in parsed) { setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: parsed.error }]); break; }
           try {
-            addMcpServer(parsed.name, parsed.server);
-            const cmd = [parsed.server.command, ...(parsed.server.args ?? [])].join(" ");
-            setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `✓ Added MCP server "${parsed.name}" (${cmd}) → ${SETTINGS_PATH}\nRestart freecode to load it — MCP servers spawn at startup.` }]);
+            addMcpServer(parsed.name, parsed.server); // persist to settings.json
           } catch (err) {
             setErrorLine(`Couldn't write settings: ${err instanceof Error ? err.message : String(err)}`);
+            break;
+          }
+          const cmd = [parsed.server.command, ...(parsed.server.args ?? [])].join(" ");
+          if (mcp) {
+            // Hot-load: connect now and inject its tools into the live session —
+            // no restart. (Usable on your next message.)
+            setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Connecting MCP server "${parsed.name}" (${cmd})…` }]);
+            const st = await mcp.startServer(parsed.name, parsed.server);
+            setMcpTools([...mcp.tools]);
+            setMcpStatusState([...mcp.status]);
+            setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: st.ok
+              ? `✓ "${parsed.name}" connected — ${st.toolCount} tool(s) available now (saved to ${SETTINGS_PATH}).`
+              : `Saved "${parsed.name}" to ${SETTINGS_PATH}, but it failed to connect: ${st.error}` }]);
+          } else {
+            setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `✓ Added MCP server "${parsed.name}" (${cmd}) → ${SETTINGS_PATH}\nRestart freecode to load it.` }]);
           }
           break;
         }
         if (sub === "remove" || sub === "rm") {
           const name = subArg.trim();
           if (!name) { setErrorLine("Usage: /mcp remove <name>"); break; }
-          const removed = removeMcpServer(name);
-          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: removed ? `✓ Removed MCP server "${name}". Restart freecode to apply.` : `No MCP server named "${name}" in ${SETTINGS_PATH}.` }]);
+          const removedCfg = removeMcpServer(name);
+          let unloaded = false;
+          if (mcp) { unloaded = await mcp.stopServer(name); setMcpTools([...mcp.tools]); setMcpStatusState([...mcp.status]); }
+          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: (removedCfg || unloaded)
+            ? `✓ Removed MCP server "${name}"${unloaded ? " and unloaded it from this session" : ""}.`
+            : `No MCP server named "${name}" in ${SETTINGS_PATH}.` }]);
           break;
         }
         // No subcommand: show LIVE status (this session) + CONFIGURED servers +
         // how to add one without hand-editing files.
-        const live = (mcpStatus ?? []).map((s) => s.ok ? `  ● ${s.name} — ${s.toolCount} tool(s)` : `  ✗ ${s.name} — ${s.error ?? "failed"}`);
+        const live = (mcpStatusState ?? []).map((s) => s.ok ? `  ● ${s.name} — ${s.toolCount} tool(s)` : `  ✗ ${s.name} — ${s.error ?? "failed"}`);
         const configured = Object.entries(listConfiguredMcp());
         const cfgLines = configured.map(([n, c]) => `  · ${n}: ${[c.command, ...(c.args ?? [])].join(" ")}${c.disabled ? "  (disabled)" : ""}`);
         const usage = [
-          "Add one without editing files:",
+          "Add one (connects immediately, no restart, no JSON editing):",
           "  /mcp add <name> [ENV=value ...] <command> [args...]",
           "  e.g. /mcp add github npx -y @modelcontextprotocol/server-github",
           "  /mcp remove <name>",
-          `Config file: ${SETTINGS_PATH}${existsSync(SETTINGS_PATH) ? "" : " (will be created)"}`,
+          `Saved to: ${SETTINGS_PATH}${existsSync(SETTINGS_PATH) ? "" : " (will be created)"}`,
         ].join("\n");
         const body = [
-          live.length ? `Running this session:\n${live.join("\n")}` : "No MCP servers running this session.",
-          configured.length ? `Configured (restart to load changes):\n${cfgLines.join("\n")}` : "",
+          live.length ? `Connected this session:\n${live.join("\n")}` : "No MCP servers connected.",
+          configured.length ? `Configured:\n${cfgLines.join("\n")}` : "",
           usage,
         ].filter(Boolean).join("\n\n");
         setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: body }]);
