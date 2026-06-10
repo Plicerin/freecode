@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "bun run src/cli.tsx",
     "build": "bun build src/cli.tsx --target=bun --outdir=dist",
-    "build:exe": "bun build --compile src/cli.tsx --outfile=dist/freecode.exe",
+    "build:exe": "bun run scripts/build-exe.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "serve": "bun run src/commands/serve.ts"

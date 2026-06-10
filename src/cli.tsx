@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { type CliFlags } from "./config/loader";
 import { debug } from "./utils/debug";
+import { VERSION } from "./version";
 
 interface ParsedArgs {
   prompt?: string;
@@ -26,7 +27,7 @@ const program = new Command();
 program
   .name("freecode")
   .description("Provider-agnostic coding agent CLI (REPL + headless)")
-  .version("0.1.0")
+  .version(VERSION)
   .option("-p, --print", "Headless: print response to stdout and exit", false)
   .option("--prompt <text>", "Prompt to send (used with --print)")
   .option("--resume <session-id>", "Resume a previous session")
