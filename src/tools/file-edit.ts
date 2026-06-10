@@ -43,17 +43,44 @@ function replaceOnce(haystack: string, needle: string, repl: string): string {
   return i < 0 ? haystack : haystack.slice(0, i) + repl + haystack.slice(i + needle.length);
 }
 
-/**
- * Find oldText in the file, tolerating the two things that make exact matching
- * fail in the real world: CRLF vs LF line endings (every multi-line edit on a
- * Windows file) and a copied line-number gutter. Matching is done in LF space;
- * the caller re-applies the file's real line endings on write.
- */
-function locateOldText(fileLF: string, oldText: string): string | null {
-  for (const cand of [toLF(oldText), stripGutter(toLF(oldText))]) {
-    if (cand && fileLF.includes(cand)) return cand;
+// Last-resort match: locate oldText ignoring each line's LEADING/TRAILING
+// whitespace (the #1 reason edits fail — the model reconstructs a block with
+// slightly different indentation). Returns the EXACT file substring to replace,
+// but ONLY when the normalized block matches in exactly one place — never guess.
+export function flexLocate(fileLF: string, oldText: string): string | null {
+  const norm = (l: string) => l.trim();
+  let oldLines = stripGutter(toLF(oldText)).split("\n");
+  while (oldLines.length && oldLines[oldLines.length - 1]!.trim() === "") oldLines.pop();
+  while (oldLines.length && oldLines[0]!.trim() === "") oldLines = oldLines.slice(1);
+  if (oldLines.length === 0) return null;
+  const fileLines = fileLF.split("\n");
+  const normOld = oldLines.map(norm);
+  const hits: number[] = [];
+  for (let i = 0; i + oldLines.length <= fileLines.length; i++) {
+    let ok = true;
+    for (let j = 0; j < oldLines.length; j++) {
+      if (norm(fileLines[i + j]!) !== normOld[j]) { ok = false; break; }
+    }
+    if (ok) hits.push(i);
+    if (hits.length > 1) return null; // ambiguous → refuse rather than edit the wrong block
   }
-  return null;
+  if (hits.length !== 1) return null;
+  return fileLines.slice(hits[0]!, hits[0]! + oldLines.length).join("\n");
+}
+
+/**
+ * Find oldText in the file, tolerating what makes exact matching fail in the real
+ * world: CRLF vs LF line endings, a copied line-number gutter, and (as a last
+ * resort) per-line indentation/whitespace drift. Matching is done in LF space;
+ * the caller re-applies the file's real line endings on write. `flexible` flags
+ * the indentation-tolerant path so callers can note it.
+ */
+function locateOldText(fileLF: string, oldText: string): { match: string; flexible: boolean } | null {
+  for (const cand of [toLF(oldText), stripGutter(toLF(oldText))]) {
+    if (cand && fileLF.includes(cand)) return { match: cand, flexible: false };
+  }
+  const flex = flexLocate(fileLF, oldText);
+  return flex !== null ? { match: flex, flexible: true } : null;
 }
 
 export const FileEditTool: Tool<z.infer<typeof ArgsSchema>> = {
@@ -74,10 +101,11 @@ export const FileEditTool: Tool<z.infer<typeof ArgsSchema>> = {
       const eol = original.includes("\r\n") ? "\r\n" : "\n";
       const fileLF = toLF(original);
       const newLF = toLF(args.newText);
-      const oldLF = locateOldText(fileLF, args.oldText);
-      if (oldLF === null) {
-        return { ok: false, output: "", error: "oldText not found in file (no match). Copy the exact text from the file (line endings are handled for you; do not include the line-number prefix from FileRead)." };
+      const located = locateOldText(fileLF, args.oldText);
+      if (located === null) {
+        return { ok: false, output: "", error: "oldText not found in file (no unique match — even ignoring indentation). Re-read the file to get its CURRENT exact text (it may have changed since your last read), copy the lines verbatim WITHOUT the line-number prefix, and try again. For a big change, the unifiedDiff mode is more forgiving." };
       }
+      const oldLF = located.match;
       const matches = countOccurrences(fileLF, oldLF);
       if (matches > 1 && !args.replaceAll) {
         return { ok: false, output: "", error: `oldText is not unique (${matches} matches). Add surrounding context to make it unique, or set replaceAll: true.` };
@@ -90,7 +118,8 @@ export const FileEditTool: Tool<z.infer<typeof ArgsSchema>> = {
         return { ok: false, output: "", error: `Write failed: ${String(err)}` };
       }
       const diff = createTwoFilesPatch(args.path, args.path, fileLF, updatedLF, "before", "after");
-      return { ok: true, output: diff, metadata: { mode: "replace", replacements: args.replaceAll ? matches : 1, eol: eol === "\r\n" ? "crlf" : "lf" } };
+      const note = located.flexible ? "(matched ignoring indentation/whitespace) " : "";
+      return { ok: true, output: note + diff, metadata: { mode: "replace", replacements: args.replaceAll ? matches : 1, eol: eol === "\r\n" ? "crlf" : "lf", flexible: located.flexible } };
     }
 
     if (args.unifiedDiff) {
