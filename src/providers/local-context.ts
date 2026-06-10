@@ -27,6 +27,30 @@ export function parseLmStudioContext(jsonText: string, modelId: string): number 
   }
 }
 
+interface LlamaProps {
+  default_generation_settings?: { n_ctx?: number };
+  n_ctx?: number;
+  total_slots?: number;
+}
+
+/** Parse llama.cpp server's /props payload → the PER-SLOT context the model is
+ *  loaded with (what a single request actually gets). Prefer
+ *  default_generation_settings.n_ctx (already per-slot in recent llama.cpp);
+ *  else split the global n_ctx across the slots. null if absent / non-positive. */
+export function parseLlamaServerContext(jsonText: string): number | null {
+  try {
+    const json = JSON.parse(jsonText) as LlamaProps;
+    const perSlot = json.default_generation_settings?.n_ctx;
+    if (typeof perSlot === "number" && perSlot > 0) return perSlot;
+    const total = json.n_ctx;
+    const slots = json.total_slots && json.total_slots > 0 ? json.total_slots : 1;
+    if (typeof total === "number" && total > 0) return Math.floor(total / slots);
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export interface LoadedModel {
   id: string;
   contextLength: number | null;
@@ -79,6 +103,20 @@ export async function detectServerKind(baseUrl: string | undefined): Promise<"lm
   if (await probeOk(`${root}/props`)) return "llama-server"; // llama.cpp server props
   if (await probeOk(`${root}/api/tags`)) return "ollama"; // Ollama's native API
   return null;
+}
+
+/** Best-effort: the context a llama.cpp server has loaded, via /props. null when
+ *  unreachable / not a llama-server. Independent of which provider id freecode
+ *  used — a llama-server reached through the lmstudio provider still works. */
+export async function detectLlamaServerContext(baseUrl: string | undefined): Promise<number | null> {
+  const root = (baseUrl ?? "http://127.0.0.1:8080/v1").replace(/\/v1\/?$/, "");
+  try {
+    const resp = await fetch(`${root}/props`, { cache: "no-store", signal: AbortSignal.timeout(2000) });
+    if (!resp.ok) return null;
+    return parseLlamaServerContext(await resp.text());
+  } catch {
+    return null;
+  }
 }
 
 /** Best-effort: the context the given model is loaded with. Falls back to the

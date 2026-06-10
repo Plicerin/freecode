@@ -3,7 +3,7 @@ import type { JSX } from "react";
 import { Box, Static, Text, useApp, useInput } from "ink";
 import { loadConfig, type CliFlags } from "../config/loader";
 import { buildProvider } from "../providers/registry";
-import { detectLocalModels, detectServerKind } from "../providers/local-context";
+import { detectLocalModels, detectServerKind, detectLlamaServerContext } from "../providers/local-context";
 import { zodToJsonSchema } from "../providers/schema-util";
 import { buildToolRegistry, toolListToSystemPrompt } from "../tools/registry";
 import { createPermissionEngine, approvalDecisionForKey, type ApprovalCallback, type ApprovalDecision, type ApprovalRequest } from "../permissions/modes";
@@ -535,13 +535,30 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     detectedWindowRef.current = null;
     setServerLabel(null);
     (async () => {
+      if (!["ollama", "lmstudio", "llama-server"].includes(config.provider)) return;
       // Relabel: a llama.cpp server reached via the lmstudio provider (or any
       // local-server provider whose endpoint is a different kind) shows its REAL
       // kind in the status line — "llama-server", not "lmstudio".
-      if (["ollama", "lmstudio", "llama-server"].includes(config.provider)) {
-        const kind = await detectServerKind(config.baseUrl ?? undefined);
-        if (!cancelled && kind && kind !== config.provider) setServerLabel(kind);
+      const kind = await detectServerKind(config.baseUrl ?? undefined);
+      if (cancelled) return;
+      if (kind && kind !== config.provider) setServerLabel(kind);
+
+      // llama.cpp server: no per-model API, but /props reports the loaded n_ctx —
+      // so freecode sizes compaction to the REAL window (e.g. 256K) instead of
+      // guessing 128K from the model name. Works even via the lmstudio provider.
+      if (kind === "llama-server" || config.provider === "llama-server") {
+        const win = await detectLlamaServerContext(config.baseUrl ?? undefined);
+        if (cancelled || !win) return;
+        detectedWindowRef.current = win;
+        trackerRef.current.setWindow(win);
+        setCtxFill(trackerRef.current.contextFill());
+        const key = `llama-server:${config.baseUrl}:${win}`;
+        if (lastLocalDetectRef.current === key) return;
+        lastLocalDetectRef.current = key;
+        setMessages((prev) => [...prev, { id: `ctx-${Date.now()}`, role: "system", text: `llama-server: ${win.toLocaleString()}-token context detected (/props) — compaction sized to that.` }]);
+        return;
       }
+
       const loaded = await detectLocalModels(config.provider, config.baseUrl);
       if (cancelled || loaded.length === 0) return;
       const chosen = loaded.find((m) => m.id === model) ?? loaded[0]!;
