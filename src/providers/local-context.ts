@@ -52,7 +52,7 @@ export async function detectLocalModels(provider: string, baseUrl: string | unde
   if (provider !== "lmstudio") return [];
   const root = (baseUrl ?? "http://127.0.0.1:1234/v1").replace(/\/v1\/?$/, "");
   try {
-    const resp = await fetch(`${root}/api/v0/models`, { signal: AbortSignal.timeout(2000) });
+    const resp = await fetch(`${root}/api/v0/models`, { cache: "no-store", signal: AbortSignal.timeout(2000) });
     if (!resp.ok) return [];
     return parseLoadedLmStudioModels(await resp.text());
   } catch {
@@ -66,7 +66,7 @@ export async function detectLocalContextWindow(provider: string, baseUrl: string
   if (provider !== "lmstudio") return null;
   const root = (baseUrl ?? "http://127.0.0.1:1234/v1").replace(/\/v1\/?$/, "");
   try {
-    const resp = await fetch(`${root}/api/v0/models`, { signal: AbortSignal.timeout(2000) });
+    const resp = await fetch(`${root}/api/v0/models`, { cache: "no-store", signal: AbortSignal.timeout(2000) });
     if (!resp.ok) return null;
     return parseLmStudioContext(await resp.text(), modelId);
   } catch {

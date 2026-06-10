@@ -78,7 +78,9 @@ export class OpenAICompatProvider implements Provider {
       const headers: Record<string, string> = {};
       const auth = this.opts.authHeader ?? "bearer";
       if (auth !== "none" && this.apiKey) headers["authorization"] = `Bearer ${this.apiKey}`;
-      const resp = await fetch(`${this.baseUrl}/models`, { headers, signal: AbortSignal.timeout(8000) });
+      // no-store: providers with dozens of models that change daily (OpenRouter)
+      // must return the LIVE list each time the picker opens, never a cached copy.
+      const resp = await fetch(`${this.baseUrl}/models`, { headers, cache: "no-store", signal: AbortSignal.timeout(8000) });
       if (!resp.ok) return fallback;
       const json = (await resp.json()) as { data?: Array<{ id?: string }> };
       const ids = (json.data ?? []).map((m) => m.id).filter((x): x is string => !!x);
