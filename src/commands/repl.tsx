@@ -37,7 +37,7 @@ import { previewToolResult } from "../tui/preview";
 import { type Confidence, nextConfidence } from "../tui/confidence";
 import { MarkdownBody } from "../tui/markdown-render";
 import { BRACKET_PASTE_ON, BRACKET_PASTE_OFF, hasPasteStart, pastePlaceholder, expandPastes, shouldCollapse } from "../tui/paste";
-import { tokensPerSecond, estTokens, formatSpeed } from "../tui/speed";
+import { tokensPerSecond, estTokens, formatSpeed, streamHealth } from "../tui/speed";
 import { isLanModelEndpoint } from "../tui/endpoint";
 import { CONSULT_PROVIDERS, supervisorPrompt, consultBanner } from "../tui/consult";
 import type { ResolvedConfig } from "../config/schema";
@@ -394,14 +394,17 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   // for compaction + the overflow guard when detected. See the effect below.
   const detectedWindowRef = useRef<number | null>(null);
   const windowFor = (m: string): number => detectedWindowRef.current ?? contextWindowFor(m);
-  // Connection-health colour for the live "Working…" line: teal while the stream is
-  // flowing, amber once it's gone quiet, coral when it's been silent long enough to
-  // look stalled (the lead-up to the stream-stall timeout). Recomputed each tick.
+  // Connection/throughput-health colour for the live "Working…" line: teal while
+  // healthy, amber when slow/quiet, coral when silent ≥20s OR crawling. The idle
+  // watchdog can't see a CRAWL (a trickle of tokens keeps the stream "alive"), so
+  // we fold live tok/s in: a sustained <2 tok/s burst is as bad as silence.
+  // Recomputed each spinner tick.
   const workingHealthColor = (): string => {
-    const idleMs = Date.now() - lastActivityRef.current;
-    if (idleMs < 5_000) return theme.hex.success;
-    if (idleMs < 20_000) return theme.hex.warning;
-    return theme.hex.error;
+    const start = burstStartRef.current;
+    const burstMs = start ? Date.now() - start : 0;
+    const tps = start ? tokensPerSecond(estTokens(burstCharsRef.current), burstMs) : null;
+    const health = streamHealth(Date.now() - lastActivityRef.current, burstMs, tps);
+    return health === "stalled" ? theme.hex.error : health === "slow" ? theme.hex.warning : theme.hex.success;
   };
   // Dedups the local-model detection announcement so the effect re-running after
   // an auto model-switch doesn't repeat the message.
@@ -478,6 +481,8 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   // Last moment the in-flight turn produced ANY stream activity (token, tool call,
   // usage). Drives the "Working…" health colour — how long we've been silent.
   const lastActivityRef = useRef(0);
+  // Emit the "generating very slowly" warning at most once per turn.
+  const crawlWarnedRef = useRef(false);
   const [pending, setPending] = useState<ApprovalRequest | null>(null);
   // Interactive resume picker: when open, ↑/↓ choose and Enter resumes.
   const [picker, setPicker] = useState<{ items: SessionMeta[]; idx: number } | null>(null);
@@ -669,6 +674,28 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     const id = setInterval(() => setTick((t) => t + 1), 90);
     return () => clearInterval(id);
   }, [busy, reducedMotion]);
+
+  // Crawl watchdog: the idle stall-timeout can't catch a stream that trickles
+  // (e.g. 0.2 tok/s on a throttled/overloaded endpoint or a huge prompt) — bytes
+  // keep arriving so it never looks silent, yet the turn can run for ~half an hour
+  // doing nothing useful. Surface ONE visible warning per turn when a generation
+  // burst has crawled (<2 tok/s) for over a minute, so it's never a mystery hang.
+  useEffect(() => {
+    if (!busy) { crawlWarnedRef.current = false; return; }
+    const id = setInterval(() => {
+      const start = burstStartRef.current;
+      if (!start || crawlWarnedRef.current) return;
+      const burstMs = Date.now() - start;
+      if (burstMs < 60_000) return;
+      const tps = tokensPerSecond(estTokens(burstCharsRef.current), burstMs);
+      if (tps > 0 && tps < 2) {
+        crawlWarnedRef.current = true;
+        setMessages((prev) => [...prev, { id: `crawl-${Date.now()}`, role: "warning", text:
+          `⚠ Generating very slowly — ${formatSpeed(tps)} for ${Math.floor(burstMs / 1000)}s. The endpoint may be throttling or at capacity, or the prompt/output is very large. Press esc to interrupt, then try /model to switch or /compact to shrink the context.` }]);
+      }
+    }, 5_000);
+    return () => clearInterval(id);
+  }, [busy]);
 
   // Record session context once (no-op unless the activity log is enabled).
   useEffect(() => {

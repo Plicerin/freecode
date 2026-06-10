@@ -19,3 +19,20 @@ export function formatSpeed(tps: number): string {
   if (!Number.isFinite(tps) || tps <= 0) return "";
   return `${tps < 10 ? tps.toFixed(1) : String(Math.round(tps))} tok/s`;
 }
+
+export type StreamHealth = "healthy" | "slow" | "stalled";
+
+/**
+ * Classify the in-flight turn's health from silence AND throughput. A sustained
+ * CRAWL (a trickle of tokens) is as bad as silence — the idle stall-timeout misses
+ * it because bytes keep arriving, so a turn can run ~30 min at 0.2 tok/s looking
+ * "busy". `tps` is null before any tokens have streamed (still "connecting").
+ *   idleMs  — ms since the last stream event of any kind
+ *   burstMs — ms the current generation burst has been running
+ *   tps     — live tokens/sec for this burst (null if not generating yet)
+ */
+export function streamHealth(idleMs: number, burstMs: number, tps: number | null): StreamHealth {
+  if (idleMs >= 20_000 || (tps !== null && burstMs > 30_000 && tps < 2)) return "stalled";
+  if (idleMs >= 5_000 || (tps !== null && burstMs > 15_000 && tps < 5)) return "slow";
+  return "healthy";
+}
