@@ -12,6 +12,27 @@ beforeEach(() => {
   writeFileSync(f, "alpha\nbeta\ngamma\n");
 });
 
+describe("FileEdit correctionHint (nudges a fumbling model)", () => {
+  const hint = (a: unknown): string | undefined => FileEditTool.correctionHint!(a);
+  it("empty args → tells it to give path + edit, or use FileWrite", () => {
+    expect(hint({})).toMatch(/path/);
+    expect(hint({})).toMatch(/FileWrite/);
+  });
+  it("path but no edit → asks for oldText+newText or unifiedDiff", () => {
+    const h = hint({ path: "/x.py" });
+    expect(h).toMatch(/oldText/);
+    expect(h).toMatch(/FileWrite/);
+  });
+  it("only one of oldText/newText → says they must come together", () => {
+    expect(hint({ path: "/x.py", oldText: "a" })).toMatch(/TOGETHER/i);
+    expect(hint({ path: "/x.py", newText: "b" })).toMatch(/TOGETHER/i);
+  });
+  it("a well-formed call → no hint", () => {
+    expect(hint({ path: "/x.py", oldText: "a", newText: "b" })).toBeUndefined();
+    expect(hint({ path: "/x.py", unifiedDiff: "--- a" })).toBeUndefined();
+  });
+});
+
 describe("FileEdit", () => {
   it("applies a unified diff", async () => {
     const patch = createPatch("x.txt", "alpha\nbeta\ngamma\n", "alpha\nBETA\ngamma\n");

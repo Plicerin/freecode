@@ -378,7 +378,9 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
       }
       const parsed = tool.schema.safeParse(call.arguments);
       if (!parsed.success) {
-        const errMsg = `Invalid arguments: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`;
+        const issues = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
+        const hint = tool.correctionHint?.(call.arguments);
+        const errMsg = `Invalid arguments to ${tool.name}: ${issues}.${hint ? ` ${hint}` : ""}`;
         messages.push({ role: "tool", toolCallId: call.id, content: errMsg });
         opts.onEvent({ type: "tool_result", result: { id: call.id, output: errMsg, ok: false, durationMs: 0 } });
         debug.warn(`${tool.name} args rejected`, { err: errMsg, raw: call.arguments });

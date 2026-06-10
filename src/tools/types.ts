@@ -27,6 +27,11 @@ export interface Tool<TArgs = unknown> {
   /** Raw JSON Schema for params; set by MCP tools whose schema isn't Zod-derived. */
   parameters?: Record<string, unknown>;
   run(args: TArgs, ctx: ToolContext): Promise<ToolResult>;
+  /** Optional: when the model calls this tool with args that FAIL schema
+   *  validation, return a pointed, instructive hint (appended to the generic
+   *  "Invalid arguments" message) to nudge a fumbling model back on track —
+   *  e.g. FileEdit telling it to supply path + oldText/newText or use FileWrite. */
+  correctionHint?(rawArgs: unknown): string | undefined;
 }
 
 export function toProviderTool<T>(tool: Tool<T>): ToolDefinition<T> {

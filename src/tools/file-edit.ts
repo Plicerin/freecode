@@ -88,6 +88,22 @@ export const FileEditTool: Tool<z.infer<typeof ArgsSchema>> = {
   description: "Edit a file. Two modes: (1) oldText + newText string replace (oldText must be unique unless replaceAll is set), (2) unifiedDiff patch (from `diff -u`).",
   schema: ArgsSchema,
   permission: "confirm",
+  // Weak models often fumble this call — emitting it with no args, or a path but
+  // no edit — then fall back to rewriting the whole file. Give a pointed hint so
+  // they correct course instead of flailing.
+  correctionHint(rawArgs) {
+    const a = (rawArgs ?? {}) as Record<string, unknown>;
+    if (!a.path) {
+      return "FileEdit needs a `path` plus EITHER `oldText`+`newText` (an exact snippet to find and its replacement) OR a `unifiedDiff`. To write/replace the whole file instead, call FileWrite({path, content}).";
+    }
+    if (a.oldText === undefined && a.newText === undefined && !a.unifiedDiff) {
+      return "You gave a path but no edit. Provide `oldText` (exact text to find) + `newText` (its replacement), or a `unifiedDiff`. To replace the ENTIRE file, use FileWrite({path, content}) instead.";
+    }
+    if ((a.oldText === undefined) !== (a.newText === undefined)) {
+      return "`oldText` and `newText` must be given TOGETHER (find + replace). Add the missing one, or switch to a `unifiedDiff`, or use FileWrite for a whole-file rewrite.";
+    }
+    return undefined;
+  },
   async run(args, ctx) {
     const abs = isAbsolute(args.path) ? args.path : resolve(ctx.cwd, args.path);
     if (!existsSync(abs)) {
