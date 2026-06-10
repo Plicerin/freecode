@@ -26,6 +26,7 @@ import { readFileSync as readFileForLearn, appendFileSync } from "node:fs";
 import { APP_DIR } from "../utils/paths";
 import { ContextTracker } from "../agent/context";
 import { priceFor, contextWindowFor } from "../agent/pricing";
+import { estimateMessagesTokens } from "../agent/token-estimate";
 import { contextBar, contextTone, formatTokens } from "../tui/context-bar";
 import { extractAttachments } from "../agent/attachments";
 import { summarizeConversation } from "../agent/summarize";
@@ -709,6 +710,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     let buffer = "";
     let streamedAny = false;
     let aborted = false;
+    let sawUsage = false; // did the provider report token usage? if not, we estimate ctx
     let degenerated: string | null = null; // set if the stream collapses into repetition
     let degenCheckedAt = 0; // throttle the (cheap but not free) repetition scan
     const t0 = Date.now();
@@ -830,6 +832,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
             );
             appendEvent(sessionRef.current, { kind: "tool_result", id: rid, output: r.output, ok: r.ok, durationMs: r.durationMs, ts: new Date().toISOString() });
           } else if (e.type === "usage" && e.usage) {
+            if (e.usage.input || e.usage.output) sawUsage = true;
             trackerRef.current.record(e.usage);
             setCostUsd(trackerRef.current.costUsd());
             setCtxFill(trackerRef.current.contextFill());
@@ -859,6 +862,14 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         },
       });
       conversationRef.current = result.messages; // carry full context into the next turn
+      // Show ctx for EVERY provider — some (local servers, certain gateways) don't
+      // report token usage, leaving the gauge at 0. Estimate it from the
+      // conversation + system prompt so the bar always reflects reality.
+      if (!sawUsage) {
+        const est = estimateMessagesTokens(conversationRef.current, toolListToSystemPrompt(tools));
+        setCtxTokens(est);
+        setCtxFill(Math.min(1, est / Math.max(1, trackerRef.current.window())));
+      }
       // Text was streamed live into assistant bubbles; only push a fallback
       // message if the provider produced text without streaming events.
       if (!streamedAny && buffer) {
