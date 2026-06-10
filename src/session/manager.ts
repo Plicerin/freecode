@@ -96,6 +96,15 @@ export function titleOf(events: SessionEvent[]): string | undefined {
   return t;
 }
 
+/** Every tool_result's FULL output from a session log, oldest→newest. The
+ *  durable source for /expand: context compaction/trimming evicts tool output
+ *  from the live model context, but the session log keeps all of it. */
+export function toolOutputs(events: SessionEvent[]): string[] {
+  return events
+    .filter((e): e is Extract<SessionEvent, { kind: "tool_result" }> => e.kind === "tool_result" && e.output.length > 0)
+    .map((e) => e.output);
+}
+
 /** Sessions with display metadata, newest first — for the resume picker. */
 export function listSessionMetas(cwd: string): SessionMeta[] {
   const dir = projectDir(cwd);

@@ -45,7 +45,7 @@ import { parseMcpAdd, addMcpServer, removeMcpServer, listConfiguredMcp } from ".
 import { logActivity, setActivityLog, activityState } from "../utils/activity";
 import { closest } from "../utils/fuzzy";
 import { resolveVerify, resolveQuickVerify, runVerify } from "../agent/verify";
-import { newSession, appendEvent, resumeSession, readSession, setSessionTitle, titleOf, listSessionMetas, type Session, type SessionMeta } from "../session/manager";
+import { newSession, appendEvent, resumeSession, readSession, setSessionTitle, titleOf, toolOutputs, listSessionMetas, type Session, type SessionMeta } from "../session/manager";
 import { setTerminalTitle } from "../tui/terminal-title";
 import { writeLastSession } from "../config/last-session";
 import { goalPrompt, goalStatus, goalDecision, GOAL_MAX_DEFAULT } from "../agent/goal";
@@ -1348,15 +1348,17 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
         break;
       }
       case "/expand": {
-        // The transcript shows only an 8-line preview of a tool result, but the
-        // FULL output is kept in the conversation context. Reveal it (terminals
-        // can't click the "+N more lines"). /expand [n] → nth-most-recent result.
-        const toolMsgs = conversationRef.current.filter((m) => m.role === "tool" && m.content);
-        if (!toolMsgs.length) { setErrorLine("Nothing to expand — no tool output in the current context."); break; }
+        // The transcript shows only an 8-line preview of a tool result; reveal the
+        // FULL output (terminals can't click "+N more lines"). Read from the SESSION
+        // LOG, not the live model context — auto-compaction/trimming evicts tool
+        // output from context, so the old context-based lookup would say "nothing to
+        // expand" right when the preview still dangles "(/expand to view)".
+        const outs = toolOutputs(readSession(sessionRef.current));
+        if (!outs.length) { setErrorLine("Nothing to expand — no tool output recorded in this session yet."); break; }
         const n = Math.max(1, parseInt(arg.trim() || "1", 10) || 1);
-        const target = toolMsgs[toolMsgs.length - n];
-        if (!target) { setErrorLine(`Only ${toolMsgs.length} tool result(s) in context — /expand 1..${toolMsgs.length}.`); break; }
-        const full = target.content;
+        const target = outs[outs.length - n];
+        if (target === undefined) { setErrorLine(`Only ${outs.length} tool result(s) recorded — /expand 1..${outs.length}.`); break; }
+        const full = target;
         const allLines = full.split("\n");
         const CAP = 800;
         const shown = allLines.length > CAP
