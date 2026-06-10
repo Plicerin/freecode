@@ -74,7 +74,7 @@ interface UiMessage {
   ok?: boolean;
 }
 
-const SLASH_COMMANDS = ["/model", "/models", "/new", "/resume", "/rename", "/context", "/cost", "/config", "/doctor", "/diff", "/commit", "/commit-push-pr", "/branch", "/issue", "/pr-comments", "/review", "/security-review", "/autofix-pr", "/explore", "/agents", "/skills", "/learn", "/goal", "/expand", "/workflows", "/ultraplan", "/bg", "/plugins", "/provider", "/consult", "/plan", "/verify", "/bench", "/log", "/mcp", "/help", "/compact", "/about", "/exit"];
+const SLASH_COMMANDS = ["/model", "/models", "/new", "/resume", "/rename", "/context", "/cost", "/config", "/doctor", "/diff", "/commit", "/commit-push-pr", "/branch", "/issue", "/pr-comments", "/review", "/security-review", "/autofix-pr", "/explore", "/agents", "/skills", "/learn", "/goal", "/expand", "/workflows", "/ultraplan", "/bg", "/plugins", "/provider", "/consult", "/advisor", "/plan", "/verify", "/bench", "/log", "/mcp", "/help", "/compact", "/about", "/exit"];
 
 // Spinner frames — proof of life while a turn runs. Not the braille snake every
 // other CLI ships: this is Bubo's eye. He holds your gaze, glances right, glances
@@ -1577,17 +1577,12 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         }
         break;
       }
+      case "/advisor": // alias — same feature
       case "/consult": {
         if (busy) { setErrorLine("Finish or interrupt the current turn before consulting a supervisor."); break; }
-        if (!arg.trim()) {
-          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "Usage: /consult <task> — bring a second model in to supervise/validate/answer.\nIt sees the conversation so far, runs as a full agent (its own tools), and its review threads back into the chat.\nYou'll pick the supervisor provider + model next." }]);
-          break;
-        }
-        if (conversationRef.current.length === 0) {
-          setErrorLine("Nothing to supervise yet — send a message first, then /consult.");
-          break;
-        }
-        // Stage 1: pick the supervisor provider. Model picker opens on selection.
+        // Always open the provider picker (model picker opens on selection). The
+        // task is optional: empty → the supervisor does a general review of the
+        // work so far. You can also pass it inline: /consult <task>.
         setConsultPicker({ stage: "provider", task: arg.trim(), items: [...CONSULT_PROVIDERS], idx: 0 });
         break;
       }
