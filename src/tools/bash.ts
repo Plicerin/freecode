@@ -55,6 +55,13 @@ export function bashShellName(): string {
   return IS_WINDOWS ? "PowerShell" : "bash/sh";
 }
 
+/** Does a command look like a long-running server/watcher (one that never exits)?
+ *  Used to give the RIGHT advice when a foreground run times out — a bigger
+ *  timeout won't help; runInBackground:true is the fix. */
+export function looksLikeLongRunningServer(command: string): boolean {
+  return /\b(vite|next(\s+dev)?|nuxt|astro\s+dev|ng\s+serve|webpack(-dev)?-server|live-server|http\.server|uvicorn|gunicorn|flask\s+run|rails\s+s(erver)?|php\s+-S|(npm|pnpm|yarn|bun)\s+(run\s+)?(dev|start|serve|watch))\b/i.test(command);
+}
+
 /**
  * Build the spawn invocation for a command. On Windows we run PowerShell
  * explicitly (shell:true would use cmd.exe, which rejects PowerShell syntax);
@@ -242,7 +249,9 @@ export function createBashTool(opts: BashToolOptions = {}): Tool<z.infer<typeof 
           if (!forceTimer) forceTimer = setTimeout(() => settle({ ok: false, output: stdout, error: "Interrupted." + (stderr ? `\n${stderr}` : "") }), 3000);
         }, { once: true });
 
-        const timeoutMsg = `Command timed out after ${timeoutMs}ms — it may be interactive or long-running. Re-run with non-interactive flags (e.g. --yes / -y) or pass a larger timeoutMs.`;
+        const timeoutMsg = looksLikeLongRunningServer(args.command)
+          ? `Command timed out after ${timeoutMs}ms. This looks like a long-running server — it never exits, so a bigger timeoutMs won't help. Re-run the SAME command with runInBackground:true: it launches detached, returns immediately with a pid + log path, and keeps serving. Then read the log to confirm it came up. (Do NOT tell the user the server can't start — it can.)`
+          : `Command timed out after ${timeoutMs}ms — it may be interactive or long-running. Re-run with non-interactive flags (e.g. --yes / -y), pass a larger timeoutMs, or use runInBackground:true for a server/watcher.`;
         timeout = setTimeout(() => {
           killed = true;
           killTree();
