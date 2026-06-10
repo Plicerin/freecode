@@ -39,6 +39,8 @@ import { MarkdownBody } from "../tui/markdown-render";
 import { BRACKET_PASTE_ON, BRACKET_PASTE_OFF, hasPasteStart, pastePlaceholder, expandPastes, shouldCollapse } from "../tui/paste";
 import { tokensPerSecond, estTokens, formatSpeed } from "../tui/speed";
 import { isLanModelEndpoint } from "../tui/endpoint";
+import { CONSULT_PROVIDERS, supervisorPrompt, consultBanner } from "../tui/consult";
+import type { ResolvedConfig } from "../config/schema";
 import { logActivity, setActivityLog, activityState } from "../utils/activity";
 import { closest } from "../utils/fuzzy";
 import { resolveVerify, resolveQuickVerify, runVerify } from "../agent/verify";
@@ -72,7 +74,7 @@ interface UiMessage {
   ok?: boolean;
 }
 
-const SLASH_COMMANDS = ["/model", "/models", "/new", "/resume", "/rename", "/context", "/cost", "/config", "/doctor", "/diff", "/commit", "/commit-push-pr", "/branch", "/issue", "/pr-comments", "/review", "/security-review", "/autofix-pr", "/explore", "/agents", "/skills", "/learn", "/goal", "/expand", "/workflows", "/ultraplan", "/bg", "/plugins", "/provider", "/plan", "/verify", "/bench", "/log", "/mcp", "/help", "/compact", "/about", "/exit"];
+const SLASH_COMMANDS = ["/model", "/models", "/new", "/resume", "/rename", "/context", "/cost", "/config", "/doctor", "/diff", "/commit", "/commit-push-pr", "/branch", "/issue", "/pr-comments", "/review", "/security-review", "/autofix-pr", "/explore", "/agents", "/skills", "/learn", "/goal", "/expand", "/workflows", "/ultraplan", "/bg", "/plugins", "/provider", "/consult", "/plan", "/verify", "/bench", "/log", "/mcp", "/help", "/compact", "/about", "/exit"];
 
 // Spinner frames — proof of life while a turn runs. Not the braille snake every
 // other CLI ships: this is Bubo's eye. He holds your gaze, glances right, glances
@@ -466,6 +468,13 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   const [picker, setPicker] = useState<{ items: SessionMeta[]; idx: number } | null>(null);
   // Interactive model picker: when open, ↑/↓ choose and Enter switches.
   const [modelPicker, setModelPicker] = useState<{ all: string[]; query: string; idx: number } | null>(null);
+  // /consult two-stage picker: choose a supervisor provider, then its model. The
+  // carried `task` is what the supervisor gets once a model is picked.
+  const [consultPicker, setConsultPicker] = useState<
+    | { stage: "provider"; task: string; items: string[]; idx: number }
+    | { stage: "model"; task: string; providerId: string; cfg: ResolvedConfig; all: string[]; query: string; idx: number }
+    | null
+  >(null);
   // Self-improvement: proposals from the last /learn, awaiting /learn save <n|all>.
   const learnProposalsRef = useRef<Proposal[]>([]);
   // /goal: true while an autonomous goal loop is running (esc or /goal stop ends it).
@@ -715,8 +724,13 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     }
   }, []);
 
-  async function submit(prompt: string, opts?: { skipEcho?: boolean }): Promise<{ text: string; aborted: boolean }> {
+  async function submit(prompt: string, opts?: { skipEcho?: boolean; override?: { provider: ReturnType<typeof buildProvider>; model: string; providerId: string } }): Promise<{ text: string; aborted: boolean }> {
     if (!prompt.trim() || busy) return { text: "", aborted: false };
+    // A consult runs this same turn machinery but with a DIFFERENT provider/model
+    // (the supervisor) and always as a full agent — never gated by plan mode.
+    const ov = opts?.override;
+    const aProvider = ov?.provider ?? provider;
+    const aModel = ov?.model ?? model;
     logActivity(`USER ${prompt.replace(/\s+/g, " ").trim().slice(0, 200)}`);
     setBusy(true);
     setErrorLine(null);
@@ -751,17 +765,19 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     genMsRef.current = 0;
     try {
       // Plan mode: read-only tools (permission=safe) + a plan-only system prompt.
-      const baseTools = planMode ? tools.filter((t) => t.permission === "safe") : tools;
+      // A consult is always a full agent — plan mode doesn't restrict the supervisor.
+      const effPlan = planMode && !ov;
+      const baseTools = effPlan ? tools.filter((t) => t.permission === "safe") : tools;
       // Tools hidden by plan mode — so a call to one gets a clear "read-only" note.
-      const restrictedToolNames = planMode ? tools.filter((t) => t.permission !== "safe").map((t) => t.name) : [];
+      const restrictedToolNames = effPlan ? tools.filter((t) => t.permission !== "safe").map((t) => t.name) : [];
       // Sub-agents (Tier A): offer the Agent tool outside plan mode. The getter
       // reads the live provider/model so a mid-session switch is honoured; the
       // sub-agent's toolset is baseTools (no Agent) — recursion-safe by design.
-      const activeTools = planMode
+      const activeTools = effPlan
         ? baseTools
         : [...baseTools, createAgentTool(() => ({
-            provider, model, tools: baseTools, permission, promptUser,
-            hooks: config.hooks, contextWindow: windowFor(model),
+            provider: aProvider, model: aModel, tools: baseTools, permission, promptUser,
+            hooks: config.hooks, contextWindow: windowFor(aModel),
             // Live sub-agent progress: render each interior tool call as a dim,
             // indented line so a long sub-agent run visibly moves (no frozen
             // spinner until the final report).
@@ -770,22 +786,23 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
               setMessages((prev) => [...prev, { id: `sap-${Date.now()}-${prev.length}`, role: "system", text: `     ${line}` }]);
             },
           }))];
-      const systemPrompt = planMode ? toolListToSystemPrompt(activeTools) + PLAN_MODE_NOTE : undefined;
-      // Auto-verify gate: skip in plan mode (nothing changes). on = quick checks; strict = full.
-      const vmode = planMode ? "off" : config.verifyMode;
+      const systemPrompt = effPlan ? toolListToSystemPrompt(activeTools) + PLAN_MODE_NOTE : undefined;
+      // Auto-verify gate: skip in plan mode (nothing changes) and on a consult (the
+      // supervisor verifies on its own terms). on = quick checks; strict = full.
+      const vmode = effPlan || ov ? "off" : config.verifyMode;
       const verifyPlan = vmode === "strict" ? resolveVerify(process.cwd(), config.verify)
         : vmode === "on" ? resolveQuickVerify(process.cwd())
         : undefined;
       const result = await runAgentLoop({
-        provider,
+        provider: aProvider,
         tools: activeTools,
         systemPrompt,
-        model,
+        model: aModel,
         maxTurns: config.maxTurns,
         prompt: effectivePrompt,
         images,
         history: conversationRef.current,
-        contextWindow: windowFor(model),
+        contextWindow: windowFor(aModel),
         contextThreshold: config.contextThreshold,
         enablePromptCache: config.enablePromptCache,
         enableExtendedThinking: config.enableExtendedThinking,
@@ -946,6 +963,47 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     } finally {
       setBusy(false);
     }
+  }
+
+  // /consult stage 2: resolve the chosen provider's config (key/baseUrl/model
+  // from vault + settings, leaving the SESSION's provider untouched) and fetch a
+  // fresh model list, then open the model stage of the consult picker.
+  async function consultPickProvider(providerId: string, task: string): Promise<void> {
+    setBusy(true);
+    try {
+      const cfg = loadConfig({ flags: { ...(flags ?? {}), provider: providerId as CliFlags["provider"] } });
+      const all = await buildProvider(cfg).models();
+      const { show } = filterChatModels(all);
+      const list = sortFreeFirst(show.length ? show : all);
+      if (!list.length) { setErrorLine(`${providerId} returned no models (no key, or endpoint unreachable).`); setConsultPicker(null); return; }
+      const cur = list.indexOf(cfg.model);
+      setConsultPicker({ stage: "model", task, providerId, cfg, all: list, query: "", idx: cur >= 0 ? cur : 0 });
+    } catch (err) {
+      setErrorLine(err instanceof Error ? err.message : String(err));
+      setConsultPicker(null);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // /consult final: run the supervisor as a full-agent turn with the chosen
+  // provider/model, seeded with the conversation so far; its turn threads back
+  // into the conversation (submit sets conversationRef), so the primary agent
+  // sees the review on its next message.
+  async function startConsult(cfg: ResolvedConfig, supModel: string, task: string): Promise<void> {
+    const supProvider = buildProvider({ ...cfg, model: supModel });
+    setMessages((prev) => [...prev, { id: `cons-${Date.now()}`, role: "system", text: consultBanner(cfg.provider, supModel, task) }]);
+    const baseLen = conversationRef.current.length; // session BEFORE the consult
+    const { text } = await submit(supervisorPrompt(task), { skipEcho: true, override: { provider: supProvider, model: supModel, providerId: cfg.provider } });
+    // Re-thread the consult: replace the supervisor's framing + raw turns with one
+    // clearly-attributed note, so the PRIMARY model sees the review as EXTERNAL
+    // feedback rather than absorbing the "you are a supervisor" framing as its own
+    // instructions. (The UI already showed the supervisor's full work live.)
+    conversationRef.current = [
+      ...conversationRef.current.slice(0, baseLen),
+      { role: "user", content: `[A separate supervisor model — ${cfg.provider}:${supModel} — was consulted with the task: "${task}". Its review follows. Treat it as external feedback; any file changes it made are already on disk.]\n\n${text.trim() || "(the supervisor returned no text)"}` },
+    ];
+    setMessages((prev) => [...prev, { id: `cons-end-${Date.now()}`, role: "system", text: `🧐 Supervisor (${cfg.provider}:${supModel}) finished — its review is threaded into the conversation for the primary agent.` }]);
   }
 
   async function runSlash(cmd: string): Promise<void> {
@@ -1519,6 +1577,20 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         }
         break;
       }
+      case "/consult": {
+        if (busy) { setErrorLine("Finish or interrupt the current turn before consulting a supervisor."); break; }
+        if (!arg.trim()) {
+          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "Usage: /consult <task> — bring a second model in to supervise/validate/answer.\nIt sees the conversation so far, runs as a full agent (its own tools), and its review threads back into the chat.\nYou'll pick the supervisor provider + model next." }]);
+          break;
+        }
+        if (conversationRef.current.length === 0) {
+          setErrorLine("Nothing to supervise yet — send a message first, then /consult.");
+          break;
+        }
+        // Stage 1: pick the supervisor provider. Model picker opens on selection.
+        setConsultPicker({ stage: "provider", task: arg.trim(), items: [...CONSULT_PROVIDERS], idx: 0 });
+        break;
+      }
       case "/verify": {
         const plan = resolveVerify(process.cwd(), config.verify);
         if (plan.source === "none") {
@@ -1698,6 +1770,37 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       if (input2 && !key.ctrl && !key.meta) {
         const clean = input2.replace(/[\x00-\x1f\x7f]/g, "");
         if (clean) setModelPicker((p) => (p ? { ...p, query: p.query + clean, idx: 0 } : p));
+      }
+      return; // swallow everything else while picking
+    }
+    // /consult picker — stage 1 chooses the supervisor provider, stage 2 its model.
+    if (consultPicker) {
+      const cp = consultPicker;
+      if (cp.stage === "provider") {
+        if (key.upArrow) { setConsultPicker({ ...cp, idx: Math.max(0, cp.idx - 1) }); return; }
+        if (key.downArrow) { setConsultPicker({ ...cp, idx: Math.min(cp.items.length - 1, cp.idx + 1) }); return; }
+        if (key.return) { const sel = cp.items[cp.idx]; setConsultPicker(null); if (sel) void consultPickProvider(sel, cp.task); return; }
+        if (key.escape) { setConsultPicker(null); return; }
+        return; // swallow everything else
+      }
+      // stage "model" — mirrors the model picker (↑/↓, Enter, Esc, type to filter).
+      const filtered = searchModels(cp.all, cp.query);
+      if (key.upArrow) { setConsultPicker({ ...cp, idx: Math.max(0, cp.idx - 1) }); return; }
+      if (key.downArrow) { setConsultPicker({ ...cp, idx: Math.min(filtered.length - 1, cp.idx + 1) }); return; }
+      if (key.return) {
+        const sel = filtered[Math.min(cp.idx, filtered.length - 1)];
+        setConsultPicker(null);
+        if (sel) void startConsult(cp.cfg, sel, cp.task);
+        return;
+      }
+      if (key.escape) { setConsultPicker(null); return; }
+      if (key.backspace || key.delete || (input2 && /^[\x08\x7f]+$/.test(input2))) {
+        setConsultPicker({ ...cp, query: cp.query.slice(0, -1), idx: 0 });
+        return;
+      }
+      if (input2 && !key.ctrl && !key.meta) {
+        const clean = input2.replace(/[\x00-\x1f\x7f]/g, "");
+        if (clean) setConsultPicker({ ...cp, query: cp.query + clean, idx: 0 });
       }
       return; // swallow everything else while picking
     }
@@ -1938,6 +2041,47 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
           </Text>
           <Text dimColor>{pending.argsSummary}</Text>
         </Box>
+      ) : consultPicker && consultPicker.stage === "provider" ? (
+        <Box flexDirection="column" borderStyle="round" borderColor={theme.user} paddingX={1} marginTop={1}>
+          <Text bold color={theme.user}>🧐 Consult a supervisor — pick a provider</Text>
+          {consultPicker.items.map((p, i) => {
+            const sel = i === consultPicker.idx;
+            return (
+              <Text key={p} color={sel ? theme.user : undefined} dimColor={!sel}>
+                {sel ? "❯ " : "  "}{p}{p === config.provider ? "  (current)" : ""}
+              </Text>
+            );
+          })}
+          <Text dimColor>  ↑/↓ select · Enter choose · Esc cancel</Text>
+        </Box>
+      ) : consultPicker && consultPicker.stage === "model" ? (
+        <Box flexDirection="column" borderStyle="round" borderColor={theme.user} paddingX={1} marginTop={1}>
+          <Text bold color={theme.user}>🧐 Supervisor model — {consultPicker.providerId}</Text>
+          <Text>
+            <Text dimColor>search </Text>
+            <Text color={theme.user}>{consultPicker.query}</Text>
+            <Text inverse> </Text>
+          </Text>
+          {(() => {
+            const cp = consultPicker;
+            const filtered = searchModels(cp.all, cp.query);
+            if (!filtered.length) return <Text color={theme.hex.warning}>  no models match “{cp.query}”</Text>;
+            const idx = Math.min(cp.idx, filtered.length - 1);
+            const { slice, offset } = pickerWindow(filtered, idx, 12);
+            const tail = filtered.length - offset - slice.length;
+            return (
+              <>
+                {offset > 0 && <Text dimColor>{`  ↑ ${offset} more`}</Text>}
+                {slice.map((m, i) => {
+                  const sel = offset + i === idx;
+                  return <Text key={m} color={sel ? theme.user : undefined} dimColor={!sel}>{sel ? "❯ " : "  "}{m}</Text>;
+                })}
+                {tail > 0 && <Text dimColor>{`  ↓ ${tail} more`}</Text>}
+              </>
+            );
+          })()}
+          <Text dimColor>  type to filter · ↑/↓ select · Enter consult · Esc cancel</Text>
+        </Box>
       ) : modelPicker ? (
         <Box flexDirection="column" borderStyle="round" borderColor={theme.user} paddingX={1} marginTop={1}>
           <Text bold color={theme.user}>Select a model — {config.provider}</Text>
@@ -2004,7 +2148,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
 
       {/* Slash-command suggestions render BELOW the input so typing a command
           never shoves the input box up/down — the input stays put. */}
-      {!pending && !modelPicker && !picker && menuOpen && (
+      {!pending && !modelPicker && !picker && !consultPicker && menuOpen && (
         <Box flexDirection="column" paddingX={1}>
           {menuMatches.map((m, i) => {
             const sel = i === Math.min(menuIdx, menuMatches.length - 1);
