@@ -9,6 +9,7 @@ import { ContextTracker } from "./context";
 import { estimateMessagesTokens, trimToFit } from "./token-estimate";
 import { overclaimWarning } from "./overclaim";
 import { looksLikeTextToolCall } from "./text-tool-call";
+import { parseImageLimit, capImagesTo, countImages } from "./image-cap";
 import { getEnv } from "../utils/env";
 import { summarizeConversation } from "./summarize";
 import { runHooks } from "./hooks";
@@ -105,6 +106,9 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
   let aborted = false;
   let lastTurnToolCalls = 0; // tool-call count of the most recent turn (outer scope)
   let producedText = false; // did the model say anything useful at all this run?
+  // Per-request image cap for models that reject >N images (learned from the
+  // provider's own 400, then applied proactively for the rest of the session).
+  let imageLimit: number | null = null;
 
   // Auto-continue: when a reply is cut off at the output cap mid-thought (no tool
   // call), resume it automatically instead of dead-ending and making the user
@@ -193,13 +197,16 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
       });
       break;
     }
+    // Guarantee tool_call/tool_result pairing before sending. Compaction (just
+    // above) or a resumed-but-corrupted history can otherwise orphan a call and
+    // make the provider reject every request. Then, if we've learned this model's
+    // per-request image cap, apply it proactively so we don't re-trip the 400.
+    let sentMessages = sanitizeToolPairing(messages);
+    if (imageLimit !== null) sentMessages = capImagesTo(sentMessages, imageLimit);
     const req: ChatRequest = {
       model: opts.model,
       system: sys,
-      // Guarantee tool_call/tool_result pairing before sending. Compaction (just
-      // above) or a resumed-but-corrupted history can otherwise orphan a call and
-      // make the provider reject every request.
-      messages: sanitizeToolPairing(messages),
+      messages: sentMessages,
       tools: tools.map((t) => ({
         name: t.name,
         description: t.description,
@@ -223,7 +230,10 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
     // Stream events live (dispatch as they arrive) so the UI can render tokens
     // incrementally. Retry only applies before the first event (e.g. a 429 at
     // connection time); once streaming has started we don't re-run.
-    await withRetry(
+    let imageCapTried = false;
+    for (;;) {
+     try {
+      await withRetry(
       async () => {
         turnText = "";
         turnToolCalls = [];
@@ -265,7 +275,23 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
       // Retry only BEFORE the first event (a 429 or a connect/stall timeout at
       // connection time). Once tokens are flowing we don't re-run a partial stream.
       { shouldRetry: (err) => !emitted && (isRateLimitError(err) || isRetryable(err)) },
-    );
+      );
+      break; // stream consumed successfully
+     } catch (err) {
+      // Self-heal a "too many images" 400: learn the model's per-request image
+      // cap from its own error, trim the conversation to the most-recent N, and
+      // retry once. Only when nothing was emitted (a clean request-time reject).
+      const limit = !emitted && !imageCapTried ? parseImageLimit(err) : null;
+      if (limit === null) throw err;
+      imageCapTried = true;
+      imageLimit = limit; // sticks for the rest of the session
+      const had = countImages(messages);
+      messages.splice(0, messages.length, ...capImagesTo(messages, limit));
+      req.messages = capImagesTo(sanitizeToolPairing(messages), limit);
+      opts.onEvent({ type: "compacted", text: `${opts.model} accepts at most ${limit} image(s) per request — kept the most recent ${Math.min(limit, had)}, dropped ${Math.max(0, had - limit)}, and retried.` });
+      // loop retries the stream with the capped request
+     }
+    }
 
     messages.push({ role: "assistant", content: turnText, toolCalls: turnToolCalls });
     lastTurnToolCalls = turnToolCalls.length;
