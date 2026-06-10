@@ -22,8 +22,8 @@ import { reapJobs } from "../background/registry";
 import { formatJobLine } from "./background-cli";
 import { analyzeSession, applyProposal, dedupeProposals, transcriptFromMessages, type Proposal } from "../agent/self-improve";
 import { ensureStat, listStats, decayCandidates, verifyTrend, pruneArtifact } from "../agent/learn-stats";
-import { readFileSync as readFileForLearn, appendFileSync } from "node:fs";
-import { APP_DIR } from "../utils/paths";
+import { readFileSync as readFileForLearn, appendFileSync, existsSync } from "node:fs";
+import { APP_DIR, SETTINGS_PATH } from "../utils/paths";
 import { ContextTracker } from "../agent/context";
 import { priceFor, contextWindowFor } from "../agent/pricing";
 import { estimateMessagesTokens } from "../agent/token-estimate";
@@ -41,6 +41,7 @@ import { tokensPerSecond, estTokens, formatSpeed } from "../tui/speed";
 import { isLanModelEndpoint } from "../tui/endpoint";
 import { CONSULT_PROVIDERS, supervisorPrompt, consultBanner } from "../tui/consult";
 import type { ResolvedConfig } from "../config/schema";
+import { parseMcpAdd, addMcpServer, removeMcpServer, listConfiguredMcp } from "../config/mcp-edit";
 import { logActivity, setActivityLog, activityState } from "../utils/activity";
 import { closest } from "../utils/fuzzy";
 import { resolveVerify, resolveQuickVerify, runVerify } from "../agent/verify";
@@ -1616,15 +1617,45 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         break;
       }
       case "/mcp": {
-        if (!mcpStatus || mcpStatus.length === 0) {
-          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "No MCP servers configured. Add them under \"mcpServers\" in ~/.freecode/settings.json." }]);
-        } else {
-          const lines = mcpStatus.map((s) =>
-            s.ok ? `  ● ${s.name} — ${s.toolCount} tool(s)` : `  ✗ ${s.name} — ${s.error ?? "failed"}`,
-          );
-          const toolNames = (extraTools ?? []).map((t) => `    · ${t.name}`).join("\n");
-          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `MCP servers:\n${lines.join("\n")}${toolNames ? `\n  tools:\n${toolNames}` : ""}` }]);
+        const [sub, ...mrest] = arg.split(/\s+/);
+        const subArg = mrest.join(" ");
+        if (sub === "add") {
+          const parsed = parseMcpAdd(subArg);
+          if ("error" in parsed) { setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: parsed.error }]); break; }
+          try {
+            addMcpServer(parsed.name, parsed.server);
+            const cmd = [parsed.server.command, ...(parsed.server.args ?? [])].join(" ");
+            setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `✓ Added MCP server "${parsed.name}" (${cmd}) → ${SETTINGS_PATH}\nRestart freecode to load it — MCP servers spawn at startup.` }]);
+          } catch (err) {
+            setErrorLine(`Couldn't write settings: ${err instanceof Error ? err.message : String(err)}`);
+          }
+          break;
         }
+        if (sub === "remove" || sub === "rm") {
+          const name = subArg.trim();
+          if (!name) { setErrorLine("Usage: /mcp remove <name>"); break; }
+          const removed = removeMcpServer(name);
+          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: removed ? `✓ Removed MCP server "${name}". Restart freecode to apply.` : `No MCP server named "${name}" in ${SETTINGS_PATH}.` }]);
+          break;
+        }
+        // No subcommand: show LIVE status (this session) + CONFIGURED servers +
+        // how to add one without hand-editing files.
+        const live = (mcpStatus ?? []).map((s) => s.ok ? `  ● ${s.name} — ${s.toolCount} tool(s)` : `  ✗ ${s.name} — ${s.error ?? "failed"}`);
+        const configured = Object.entries(listConfiguredMcp());
+        const cfgLines = configured.map(([n, c]) => `  · ${n}: ${[c.command, ...(c.args ?? [])].join(" ")}${c.disabled ? "  (disabled)" : ""}`);
+        const usage = [
+          "Add one without editing files:",
+          "  /mcp add <name> [ENV=value ...] <command> [args...]",
+          "  e.g. /mcp add github npx -y @modelcontextprotocol/server-github",
+          "  /mcp remove <name>",
+          `Config file: ${SETTINGS_PATH}${existsSync(SETTINGS_PATH) ? "" : " (will be created)"}`,
+        ].join("\n");
+        const body = [
+          live.length ? `Running this session:\n${live.join("\n")}` : "No MCP servers running this session.",
+          configured.length ? `Configured (restart to load changes):\n${cfgLines.join("\n")}` : "",
+          usage,
+        ].filter(Boolean).join("\n\n");
+        setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: body }]);
         break;
       }
       case "/help": {
