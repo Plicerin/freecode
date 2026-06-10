@@ -189,6 +189,7 @@ function defaultEndpoint(provider: string, baseUrl?: string): string {
     case "llama-server": return "http://127.0.0.1:8080/v1";
     case "nim": return "https://integrate.api.nvidia.com/v1";
     case "openrouter": return "https://openrouter.ai/api/v1";
+    case "deepseek": return "https://api.deepseek.com/v1";
     default: return "(default)";
   }
 }
@@ -217,7 +218,7 @@ function providerReason(provider: string, source: string): string {
       if (process.env[flag]) return flag;
       const keyVar: Record<string, string> = {
         anthropic: "ANTHROPIC_API_KEY", openai: "OPENAI_API_KEY", gemini: "GEMINI_API_KEY",
-        "github-models": "GITHUB_TOKEN", nim: "NVIDIA_API_KEY", ollama: "OLLAMA_HOST", lmstudio: "LMSTUDIO_HOST", "llama-server": "LLAMA_SERVER_HOST",
+        "github-models": "GITHUB_TOKEN", nim: "NVIDIA_API_KEY", deepseek: "DEEPSEEK_API_KEY", ollama: "OLLAMA_HOST", lmstudio: "LMSTUDIO_HOST", "llama-server": "LLAMA_SERVER_HOST",
       };
       return keyVar[provider] && process.env[keyVar[provider]!] ? keyVar[provider]! : "env";
     }
@@ -531,7 +532,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   // Terminal tab title = the session name (its /rename title, else the project
   // folder). Reset to plain "freecode" on exit so the tab isn't left stale.
   const cwdBase = basename(process.cwd());
-  const applyTabTitle = (name?: string): void => setTerminalTitle(`freecode · ${name?.trim() || cwdBase}`);
+  const applyTabTitle = (name?: string): void => setTerminalTitle(name?.trim() || cwdBase);
 
   const exitNow = (): void => {
     setTerminalTitle("freecode");
@@ -1606,7 +1607,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         break;
       }
       case "/provider": {
-        const KNOWN = ["anthropic", "openai", "gemini", "github-models", "openrouter", "bedrock", "vertex", "ollama", "lmstudio", "llama-server", "nim", "mock"];
+        const KNOWN = ["anthropic", "openai", "gemini", "github-models", "openrouter", "bedrock", "vertex", "ollama", "lmstudio", "llama-server", "nim", "deepseek", "mock"];
         if (arg) {
           if (!KNOWN.includes(arg)) {
             const suggestion = closest(arg, KNOWN, 4);

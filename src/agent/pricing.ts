@@ -53,6 +53,9 @@ const TABLE: Array<{ match: RegExp; price: ModelPrice }> = [
   { match: /gemini-2\.0.*flash/i, price: { input: 0.1, output: 0.4 } },
   { match: /gemini.*flash/i, price: { input: 0.3, output: 2.5 } },   // unknown flash → ~2.5 Flash
   { match: /gemini.*pro/i, price: { input: 1.25, output: 10 } },     // unknown pro → ~2.5 Pro
+  // DeepSeek — approx, api-docs.deepseek.com (cache-miss input / cache-hit / output).
+  { match: /deepseek-reasoner/i, price: { input: 0.55, output: 2.19, cacheRead: 0.14 } },  // R1
+  { match: /deepseek/i, price: { input: 0.27, output: 1.1, cacheRead: 0.07 } },            // chat (V3) + fallback
 ];
 
 /**
@@ -91,6 +94,9 @@ const WINDOWS: Array<{ match: RegExp; window: number }> = [
   // Google — UNVERIFIED (token table is JS-rendered; WebFetch can't read it).
   // Gemini 2.5 Pro is widely documented at ~1,048,576 input tokens; treat as approx.
   { match: /gemini/i, window: 1_000_000 },
+  // DeepSeek — documented API context 64K for deepseek-chat/reasoner (approx;
+  // conservative so compaction sizes under, not over). Override w/ FREECODE_CONTEXT_WINDOW.
+  { match: /deepseek/i, window: 64_000 },
 ];
 
 /** Context window (tokens) for a model; used to size compaction + the fill gauge.

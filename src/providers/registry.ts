@@ -100,6 +100,17 @@ function buildBaseProvider(config: ResolvedConfig): Provider {
         defaultModel: model,
         authHeader: "bearer",
       });
+    case "deepseek":
+      // DeepSeek's OpenAI-compatible API. Models: deepseek-chat (V3) and
+      // deepseek-reasoner (R1) — the latter streams a reasoning_content channel,
+      // already captured by the openai-compat provider.
+      return new OpenAICompatProvider("deepseek", "DeepSeek", {
+        apiKey,
+        baseUrl: baseUrl ?? "https://api.deepseek.com/v1",
+        providerName: "deepseek",
+        defaultModel: model,
+        authHeader: "bearer",
+      });
     case "openrouter":
       // Unified OpenAI-compatible gateway to 300+ models (model slugs are
       // namespaced, e.g. "anthropic/claude-3.7-sonnet", "openai/gpt-4o").

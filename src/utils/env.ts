@@ -27,7 +27,8 @@ export type ProviderId =
   | "vertex"
   | "ollama"
   | "lmstudio"
-  | "nim";
+  | "nim"
+  | "deepseek";
 
 const ENV_FLAGS: Record<ProviderId, string> = {
   anthropic: "CLAUDE_CODE_USE_ANTHROPIC",
@@ -40,6 +41,7 @@ const ENV_FLAGS: Record<ProviderId, string> = {
   ollama: "CLAUDE_CODE_USE_OLLAMA",
   lmstudio: "CLAUDE_CODE_USE_LMSTUDIO",
   nim: "CLAUDE_CODE_USE_NIM",
+  deepseek: "CLAUDE_CODE_USE_DEEPSEEK",
 };
 
 /** A DELIBERATE provider choice from env: only the CLAUDE_CODE_USE_* flags, not
@@ -65,5 +67,6 @@ export function detectProviderFromEnv(): ProviderId | undefined {
   if (getEnv("OLLAMA_HOST")) return "ollama";
   if (getEnv("LMSTUDIO_HOST")) return "lmstudio";
   if (getEnv("NVIDIA_API_KEY") || getEnv("NVIDIA_NIM_API_KEY")) return "nim";
+  if (getEnv("DEEPSEEK_API_KEY")) return "deepseek";
   return undefined;
 }

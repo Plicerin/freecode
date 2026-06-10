@@ -12,6 +12,7 @@ export const ProviderIdSchema = z.enum([
   "lmstudio",
   "llama-server",
   "nim",
+  "deepseek",
   "mock",
 ]);
 export type ProviderId = z.infer<typeof ProviderIdSchema>;

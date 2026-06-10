@@ -93,6 +93,7 @@ function providerEnvKey(p: ProviderId): string | undefined {
     case "lmstudio": return "LMSTUDIO_HOST";
     case "llama-server": return "LLAMA_SERVER_HOST";
     case "nim": return getEnv("NVIDIA_API_KEY") ? "NVIDIA_API_KEY" : "NVIDIA_NIM_API_KEY";
+    case "deepseek": return "DEEPSEEK_API_KEY";
     default: return undefined;
   }
 }
@@ -110,7 +111,7 @@ function hasUsableKey(p: ProviderId): boolean {
 }
 
 function firstProviderWithKey(): ProviderId | undefined {
-  const order: ProviderId[] = ["anthropic", "openai", "gemini", "openrouter", "github-models", "nim"];
+  const order: ProviderId[] = ["anthropic", "openai", "gemini", "openrouter", "github-models", "nim", "deepseek"];
   let vaultProviders: string[] = [];
   try {
     if (Vault.exists()) vaultProviders = Vault.load().list();
@@ -137,6 +138,7 @@ function providerBaseUrlEnv(p: ProviderId): string | undefined {
     case "lmstudio": return getEnv("LMSTUDIO_HOST");
     case "llama-server": return getEnv("LLAMA_SERVER_HOST");
     case "nim": return getEnv("NVIDIA_NIM_BASE_URL") ?? getEnv("NIM_BASE_URL");
+    case "deepseek": return getEnv("DEEPSEEK_BASE_URL");
     default: return undefined;
   }
 }
@@ -150,6 +152,7 @@ function providerBaseUrlDefault(p: ProviderId): string | undefined {
     case "lmstudio": return "http://127.0.0.1:1234";
     case "llama-server": return "http://127.0.0.1:8080";
     case "nim": return "https://integrate.api.nvidia.com/v1";
+    case "deepseek": return "https://api.deepseek.com/v1";
     default: return undefined;
   }
 }
@@ -167,6 +170,7 @@ function defaultModelFor(p: ProviderId): string {
     case "lmstudio": return "local-model";
     case "llama-server": return "local-model";
     case "nim": return "meta/llama-3.1-70b-instruct";
+    case "deepseek": return "deepseek-chat";
     case "mock": return "mock-1";
     default: return "claude-sonnet-4-5";
   }

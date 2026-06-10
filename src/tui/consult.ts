@@ -7,7 +7,7 @@
  *  unimplemented bedrock/vertex and the mock). Order is picker order. */
 export const CONSULT_PROVIDERS = [
   "anthropic", "openai", "gemini", "github-models", "openrouter",
-  "nim", "ollama", "lmstudio", "llama-server",
+  "nim", "deepseek", "ollama", "lmstudio", "llama-server",
 ] as const;
 
 /** The user turn the supervisor receives. The session transcript is supplied as
