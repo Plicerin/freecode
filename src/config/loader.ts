@@ -157,6 +157,29 @@ function providerBaseUrlDefault(p: ProviderId): string | undefined {
   }
 }
 
+const LOCAL_SERVER_PROVIDERS = new Set<ProviderId>(["ollama", "lmstudio", "llama-server"]);
+
+/**
+ * Normalize a LOCAL model-server base URL. The *_HOST env vars (OLLAMA_HOST,
+ * LMSTUDIO_HOST, LLAMA_SERVER_HOST) conventionally omit the scheme — e.g.
+ * "0.0.0.0:11434" — and 0.0.0.0 / :: are BIND-all listen addresses a CLIENT
+ * cannot dial. Add http:// when missing and rewrite a bind-all host to loopback
+ * so freecode connects to a real address instead of the server's listen spec.
+ * A genuine LAN IP or hostname is left intact (so a remote server still works).
+ */
+export function normalizeLocalBaseUrl(raw: string): string {
+  const s0 = raw.trim();
+  if (!s0) return raw;
+  const s = /^[a-z][a-z0-9+.-]*:\/\//i.test(s0) ? s0 : `http://${s0}`;
+  try {
+    const u = new URL(s);
+    if (u.hostname === "0.0.0.0" || u.hostname === "::" || u.hostname === "[::]") u.hostname = "127.0.0.1";
+    return u.toString().replace(/\/+$/, "");
+  } catch {
+    return raw;
+  }
+}
+
 function defaultModelFor(p: ProviderId): string {
   switch (p) {
     case "anthropic": return "claude-sonnet-4-5";
@@ -243,7 +266,12 @@ export function loadConfig(opts: LoadOptions): ResolvedConfig {
     rememberedBaseUrl,
     providerBaseUrlDefault(finalProvider),
   );
-  const finalBaseUrl = baseUrlPick.value;
+  // Normalize a local-server endpoint: add a missing scheme and rewrite a
+  // bind-all host (0.0.0.0 / ::) to loopback — OLLAMA_HOST=0.0.0.0:11434 is a
+  // listen spec, not something a client can connect to.
+  const finalBaseUrl = baseUrlPick.value && LOCAL_SERVER_PROVIDERS.has(finalProvider)
+    ? normalizeLocalBaseUrl(baseUrlPick.value)
+    : baseUrlPick.value;
 
   const envApiKey = profileApiKey(profile, finalProvider);
   const apiKeyPick = pick<string | undefined>(
