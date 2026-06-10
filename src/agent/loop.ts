@@ -106,6 +106,14 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
   let lastTurnToolCalls = 0; // tool-call count of the most recent turn (outer scope)
   let producedText = false; // did the model say anything useful at all this run?
 
+  // Auto-continue: when a reply is cut off at the output cap mid-thought (no tool
+  // call), resume it automatically instead of dead-ending and making the user
+  // type "continue". Bounded so a model that just reasons in circles can't loop
+  // forever; the counter resets whenever the model actually acts (calls a tool).
+  const rawAutoContinue = Number.parseInt(process.env.FREECODE_MAX_AUTO_CONTINUE ?? "3", 10);
+  const MAX_AUTO_CONTINUE = Number.isFinite(rawAutoContinue) && rawAutoContinue >= 0 ? rawAutoContinue : 3;
+  let autoContinues = 0;
+
   // Auto-verify gate state.
   const verifyMode = opts.verifyMode ?? "off";
   const verifyEnabled = verifyMode !== "off" && (opts.verifyPlan?.commands.length ?? 0) > 0;
@@ -262,20 +270,30 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
     messages.push({ role: "assistant", content: turnText, toolCalls: turnToolCalls });
     lastTurnToolCalls = turnToolCalls.length;
 
-    // Make a silent stop legible: a reply cut off at the token cap (a truncated
-    // tool call parses to nothing, so the turn looks "done"), or an empty reply.
-    if (endReason === "max_tokens") {
-      opts.onEvent({ type: "error", error: "⚠ The model's reply hit the output token limit and was cut off (finish_reason=length) — it may have stopped mid-task. Raise the model's max output, simplify the step, or tell it to continue." });
-    } else if (turnToolCalls.length === 0 && looksLikeTextToolCall(turnText)) {
+    if (turnText.trim()) producedText = true;
+    if (sawError) break;
+
+    // A reply cut off at the output cap with NO tool call was truncated
+    // mid-thought. Auto-continue so the turn finishes on its own; only warn once
+    // we've exhausted the budget (the model isn't converging).
+    if (endReason === "max_tokens" && turnToolCalls.length === 0 && !opts.signal?.aborted) {
+      if (autoContinues < MAX_AUTO_CONTINUE) {
+        autoContinues += 1;
+        messages.push({ role: "user", content: "Your previous reply was cut off at the output token limit. Continue from exactly where you left off — do not repeat what you already wrote. If you were about to call a tool, call it now instead of explaining." });
+        opts.onEvent({ type: "compacted", text: `Reply hit the output token limit — auto-continuing (${autoContinues}/${MAX_AUTO_CONTINUE})…` });
+        continue;
+      }
+      opts.onEvent({ type: "error", error: `⚠ The model's reply keeps hitting the output token limit (finish_reason=length) even after ${MAX_AUTO_CONTINUE} auto-continues — it may be stuck reasoning without converging. Raise FREECODE_MAX_OUTPUT_TOKENS, simplify the step, or try a less verbose / larger model.` });
+    }
+    // Make a silent stop legible: an empty reply, or a tool call leaked as text.
+    else if (turnToolCalls.length === 0 && looksLikeTextToolCall(turnText)) {
       opts.onEvent({ type: "error", error: "⚠ The model wrote a tool call as TEXT (e.g. <function_calls>) instead of calling the tool — the provider isn't parsing this model's tool-call format into a structured call, so freecode can't run it. Use a model with provider-supported tool calling, or check the model's tool template/settings (common with some local models in LM Studio/Ollama)." });
     } else if (turnToolCalls.length === 0 && !turnText.trim() && !sawError && !producedText) {
       // Only flag a TRULY empty run — not a benign empty turn after the model
       // already gave a real answer (which is just it having nothing more to add).
       opts.onEvent({ type: "error", error: "⚠ The model returned an empty response — the turn ended without text or a tool call. This is usually the model, not freecode." });
     }
-    if (turnText.trim()) producedText = true;
 
-    if (sawError) break;
     if (turnToolCalls.length === 0) {
       // The agent is done talking. Earn the "done": if it changed files, run
       // the verify gate; on failure, feed it back and let it self-correct.
@@ -301,6 +319,10 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
       }
       break;
     }
+
+    // The model acted (called tools) → it's making progress, so refresh the
+    // auto-continue budget for any later truncation.
+    autoContinues = 0;
 
     // Execute tools sequentially; could parallelize later
     const pendingImages: ImagePart[] = [];

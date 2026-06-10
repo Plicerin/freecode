@@ -15,6 +15,7 @@ const base = {
   promptUser: (async () => "allow") as ApprovalCallback,
 };
 const errors = (events: AgentEvent[]) => events.filter((e) => e.type === "error").map((e) => e.error ?? "");
+const notes = (events: AgentEvent[]) => events.filter((e) => e.type === "compacted").map((e) => e.text ?? "");
 
 class ScriptedProvider implements Provider {
   id = "mock"; name = "Scripted";
@@ -30,13 +31,40 @@ async function run(provider: Provider, tools: Tool[] = [], maxTurns = 5): Promis
 }
 
 describe("turn-end surfacing", () => {
-  test("a reply truncated at the token cap (max_tokens) is flagged", async () => {
+  test("a reply truncated at the token cap auto-continues, then finishes (no warning)", async () => {
+    // Turn 1 is cut off mid-thought (max_tokens); turn 2 completes normally.
+    let n = 0;
+    const p = new ScriptedProvider(() => (n++ === 0
+      ? [{ type: "text_delta", delta: "let me start by editing" }, { type: "end", reason: "max_tokens" }]
+      : [{ type: "text_delta", delta: " — done." }, { type: "end", reason: "end_turn" }]));
+    const ev = await run(p);
+    expect(notes(ev).some((m) => /auto-continuing/i.test(m))).toBe(true); // it resumed on its own
+    expect(errors(ev).some((m) => /token limit|cut off|finish_reason/i.test(m))).toBe(false); // no warning
+  });
+
+  test("a reply that KEEPS truncating warns once the auto-continue budget is spent", async () => {
     const p = new ScriptedProvider(() => [
-      { type: "text_delta", delta: "let me start by editing" },
+      { type: "text_delta", delta: "still thinking" },
       { type: "end", reason: "max_tokens" },
     ]);
-    const e = errors(await run(p));
-    expect(e.some((m) => /token limit|cut off|finish_reason=length/i.test(m))).toBe(true);
+    const e = errors(await run(p, [], 8)); // enough turns to exhaust the 3 auto-continues
+    expect(e.some((m) => /keeps hitting the output token limit/i.test(m))).toBe(true);
+  });
+
+  test("FREECODE_MAX_AUTO_CONTINUE=0 disables auto-continue (warns immediately)", async () => {
+    const prev = process.env.FREECODE_MAX_AUTO_CONTINUE;
+    process.env.FREECODE_MAX_AUTO_CONTINUE = "0";
+    try {
+      const p = new ScriptedProvider(() => [
+        { type: "text_delta", delta: "cut off" },
+        { type: "end", reason: "max_tokens" },
+      ]);
+      const ev = await run(p);
+      expect(errors(ev).some((m) => /token limit|finish_reason=length/i.test(m))).toBe(true);
+      expect(notes(ev).some((m) => /auto-continuing/i.test(m))).toBe(false);
+    } finally {
+      if (prev === undefined) delete process.env.FREECODE_MAX_AUTO_CONTINUE; else process.env.FREECODE_MAX_AUTO_CONTINUE = prev;
+    }
   });
 
   test("an empty reply (no text, no tool call) is flagged as model-side", async () => {
