@@ -56,6 +56,7 @@ import { makeTheme } from "../tui/theme";
 import { Mascot, OWL_MICRO, OWL_FRAMES, MASCOT_BIO } from "../tui/mascot";
 import { debug } from "../utils/debug";
 import type { Tool } from "../tools/types";
+import { bashShellName } from "../tools/bash";
 import type { ChatMessage } from "../providers/types";
 import type { McpServerStatus } from "../mcp/manager";
 
@@ -392,6 +393,15 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   // for compaction + the overflow guard when detected. See the effect below.
   const detectedWindowRef = useRef<number | null>(null);
   const windowFor = (m: string): number => detectedWindowRef.current ?? contextWindowFor(m);
+  // Connection-health colour for the live "Working…" line: teal while the stream is
+  // flowing, amber once it's gone quiet, coral when it's been silent long enough to
+  // look stalled (the lead-up to the stream-stall timeout). Recomputed each tick.
+  const workingHealthColor = (): string => {
+    const idleMs = Date.now() - lastActivityRef.current;
+    if (idleMs < 5_000) return theme.hex.success;
+    if (idleMs < 20_000) return theme.hex.warning;
+    return theme.hex.error;
+  };
   // Dedups the local-model detection announcement so the effect re-running after
   // an auto model-switch doesn't repeat the message.
   const lastLocalDetectRef = useRef<string>("");
@@ -464,6 +474,9 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   const [confidence, setConfidence] = useState<Confidence>("unchecked");
   const [tick, setTick] = useState(0); // drives the spinner + Bubo's eyes while working
   const busyStartRef = useRef(0);
+  // Last moment the in-flight turn produced ANY stream activity (token, tool call,
+  // usage). Drives the "Working…" health colour — how long we've been silent.
+  const lastActivityRef = useRef(0);
   const [pending, setPending] = useState<ApprovalRequest | null>(null);
   // Interactive resume picker: when open, ↑/↓ choose and Enter resumes.
   const [picker, setPicker] = useState<{ items: SessionMeta[]; idx: number } | null>(null);
@@ -619,6 +632,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
     setQueuedCount(queuedInputRef.current.length);
     // Already echoed + persisted at enqueue (skipEcho) — just run it.
     if (next.startsWith("/")) void runSlash(next);
+    else if (next.startsWith("!")) void runBang(next, { skipEcho: true });
     else void submit(next, { skipEcho: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [busy, pending]);
@@ -649,6 +663,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
   useEffect(() => {
     if (!busy) { setTick(0); return; }
     busyStartRef.current = Date.now();
+    lastActivityRef.current = Date.now(); // a fresh turn starts "healthy"
     if (reducedMotion) return;
     const id = setInterval(() => setTick((t) => t + 1), 90);
     return () => clearInterval(id);
@@ -820,6 +835,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         promptUser,
         signal: controller.signal,
         onEvent: (e) => {
+          lastActivityRef.current = Date.now(); // any event = the stream is alive (health colour)
           // Speedometer: count every produced char (reasoning + answer) and start
           // the clock on the first token of this generation burst.
           if ((e.type === "thinking_delta" || e.type === "text_delta") && e.text) {
@@ -1010,6 +1026,42 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       { role: "user", content: `[A separate supervisor model — ${cfg.provider}:${supModel} — was consulted with the task: "${task}". Its review follows. Treat it as external feedback; any file changes it made are already on disk.]\n\n${text.trim() || "(the supervisor returned no text)"}` },
     ];
     setMessages((prev) => [...prev, { id: `cons-end-${Date.now()}`, role: "system", text: `🧐 Supervisor (${cfg.provider}:${supModel}) finished — its review is threaded into the conversation for the primary agent.` }]);
+  }
+
+  // `!<cmd>`: run a shell command yourself, right here — no agent, no round-trip.
+  // You typed it, so it skips the tool-approval prompt, but the Bash tool's
+  // deny-list safety net still applies. The output is shown AND fed into the
+  // model's context (like Claude Code's `!`), so the next turn can act on it.
+  async function runBang(line: string, opts?: { skipEcho?: boolean }): Promise<void> {
+    const command = line.replace(/^!/, "").trim();
+    if (!command) { setErrorLine(`Usage: !<command> — runs it in ${bashShellName()} and shows the output here.`); return; }
+    const bash = tools.find((t) => t.name === "Bash") as Tool<{ command: string }> | undefined;
+    if (!bash) { setErrorLine("The Bash tool isn't available in this session, so `!` can't run."); return; }
+    if (!opts?.skipEcho) {
+      setMessages((prev) => [...prev, { id: `bang-${Date.now()}`, role: "user", text: `! ${command}` }]);
+      appendEvent(sessionRef.current, { kind: "user", text: `! ${command}`, ts: new Date().toISOString() });
+    }
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setBusy(true);
+    try {
+      const r = await bash.run({ command }, { cwd: process.cwd(), signal: controller.signal });
+      const body = (r.output ?? "").trim();
+      const shown = body || (r.ok ? "(no output)" : (r.error ?? "(command failed)"));
+      setMessages((prev) => [...prev, { id: `bangout-${Date.now()}`, role: "tool", text: shown, toolName: "result", ok: r.ok }]);
+      // Make the result visible to the model next turn — bounded so a huge dump
+      // can't blow the context window.
+      const forCtx = body.length > 4_000 ? `${body.slice(0, 4_000)}\n…(truncated)` : body;
+      conversationRef.current = [...conversationRef.current, {
+        role: "user",
+        content: `[I ran a shell command myself]\n$ ${command}\n\n${r.ok ? "Output:" : `Failed (${r.error ?? "error"}):`}\n${forCtx || "(no output)"}`,
+      }];
+    } catch (err) {
+      setErrorLine(`! ${(err as Error).message}`);
+    } finally {
+      setBusy(false);
+      abortRef.current = null;
+    }
   }
 
   async function runSlash(cmd: string): Promise<void> {
@@ -1665,7 +1717,9 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       }
       case "/help": {
         const custom = [...customCommands.values()].map((c) => `${`/${c.name}`}${c.description ? ` — ${c.description}` : ""} (${c.source})`);
-        const text = SLASH_COMMANDS.join("\n") + (custom.length ? `\n\nCustom commands:\n${custom.join("\n")}` : "");
+        const text = SLASH_COMMANDS.join("\n")
+          + `\n\n!<command> — run a shell command yourself in ${bashShellName()} (output is shown and given to the model)`
+          + (custom.length ? `\n\nCustom commands:\n${custom.join("\n")}` : "");
         setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text }]);
         break;
       }
@@ -1966,6 +2020,8 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
       }
       if (value.startsWith("/")) {
         void runSlash(value);
+      } else if (value.startsWith("!")) {
+        void runBang(value);
       } else {
         void submit(value);
       }
@@ -2044,7 +2100,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
             <MessageLine key={`${m.id}:${settled + i}`} m={m} theme={theme} />
           ))}
           {busy && (
-            <Text color={theme.hex.warning}>
+            <Text color={workingHealthColor()}>
               {reducedMotion ? "•" : SPINNER_FRAMES[tick % SPINNER_FRAMES.length]} Working… <Text dimColor>({Math.max(0, Math.floor((Date.now() - busyStartRef.current) / 1000))}s · esc to interrupt{queuedCount > 0 ? ` · ${queuedCount} queued` : ""}{speedText ? ` · ⚡ ${speedText}` : ""})</Text>
             </Text>
           )}
