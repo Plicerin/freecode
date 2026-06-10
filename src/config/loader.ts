@@ -3,7 +3,7 @@ import { PROFILE_PATH } from "../utils/paths";
 import { ProfileSchema, type Profile } from "./schema";
 import { loadJsoncSettings } from "./settings-jsonc";
 import { loadProfile } from "./profile";
-import { readLastSession } from "./last-session";
+import { readLastSession, rememberedFor } from "./last-session";
 import { detectProviderFromEnv, explicitEnvProvider, getEnv } from "../utils/env";
 import { Vault } from "./vault";
 import {
@@ -212,9 +212,10 @@ export function loadConfig(opts: LoadOptions): ResolvedConfig {
   }
 
   const envModel = envValueFor("CLAUDE_CODE_MODEL") ?? envValueFor("OPENAI_MODEL") ?? envValueFor("ANTHROPIC_MODEL");
-  // Use the remembered model only when it goes with the remembered provider, so
-  // we never pair (say) a Claude model id with an auto-selected OpenAI provider.
-  const rememberedModel = last.provider === finalProvider ? last.model : undefined;
+  // Per-provider memory: restore THIS provider's own last model (so switching to
+  // a provider via flag reopens what you last used on it, not whatever the most
+  // recent provider used). Falls back to the legacy top-level field.
+  const rememberedModel = rememberedFor(last, finalProvider).model;
   const modelPick = pick<string | undefined>(
     opts.flags.model,
     profile.model,
@@ -227,7 +228,7 @@ export function loadConfig(opts: LoadOptions): ResolvedConfig {
   // Precedence: flag > profile > env override > remembered (only if its provider
   // matches) > the provider's built-in default. So a saved remote base URL sticks
   // across launches but an explicit flag/env still wins.
-  const rememberedBaseUrl = last.provider === finalProvider ? last.baseUrl : undefined;
+  const rememberedBaseUrl = rememberedFor(last, finalProvider).baseUrl;
   const baseUrlPick = pick<string | undefined>(
     opts.flags.baseUrl,
     profile.baseUrl,

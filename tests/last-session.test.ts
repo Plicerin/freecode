@@ -22,14 +22,45 @@ describe("store", () => {
   test("round-trips provider + model; missing/corrupt → empty", () => {
     const p = tmp();
     writeLastSession({ provider: "anthropic", model: "claude-opus-4-8" }, p);
-    expect(readLastSession(p)).toEqual({ provider: "anthropic", model: "claude-opus-4-8" });
+    const r = readLastSession(p);
+    expect(r.provider).toBe("anthropic");
+    expect(r.model).toBe("claude-opus-4-8");
+    expect(r.providers?.anthropic?.model).toBe("claude-opus-4-8"); // also in the per-provider map
     expect(readLastSession(join(tmpdir(), "does-not-exist.json"))).toEqual({});
   });
 
   test("round-trips a remembered base URL (remote endpoint)", () => {
     const p = tmp();
     writeLastSession({ provider: "lmstudio", model: "m", baseUrl: "https://host.ts.net/v1" }, p);
-    expect(readLastSession(p)).toEqual({ provider: "lmstudio", model: "m", baseUrl: "https://host.ts.net/v1" });
+    const r = readLastSession(p);
+    expect(r.baseUrl).toBe("https://host.ts.net/v1");
+    expect(r.providers?.lmstudio?.baseUrl).toBe("https://host.ts.net/v1");
+  });
+});
+
+describe("per-provider memory", () => {
+  test("each provider keeps its OWN model/url across switches", () => {
+    const p = tmp();
+    const prev = process.env.LMSTUDIO_HOST; delete process.env.LMSTUDIO_HOST;
+    try {
+      // Use llama-server (remote URL), then switch to nim → nim is now last-used,
+      // but the llama-server URL must NOT be wiped.
+      writeLastSession({ provider: "llama-server", model: "local-model", baseUrl: "https://remote.ts.net/v1" }, p);
+      writeLastSession({ provider: "nim", model: "qwen/qwen3" }, p);
+
+      // --provider llama-server restores ITS remote URL (not the localhost default)…
+      expect(loadConfig({ flags: { provider: "llama-server" }, ...noFiles(p) }).baseUrl).toBe("https://remote.ts.net/v1");
+      // …and --provider nim restores ITS model.
+      expect(loadConfig({ flags: { provider: "nim", apiKey: "k" }, ...noFiles(p) }).model).toBe("qwen/qwen3");
+
+      // Both entries survive in the file; top-level tracks the last-used (nim).
+      const r = readLastSession(p);
+      expect(r.provider).toBe("nim");
+      expect(r.providers?.["llama-server"]?.baseUrl).toBe("https://remote.ts.net/v1");
+      expect(r.providers?.nim?.model).toBe("qwen/qwen3");
+    } finally {
+      if (prev === undefined) delete process.env.LMSTUDIO_HOST; else process.env.LMSTUDIO_HOST = prev;
+    }
   });
 });
 
