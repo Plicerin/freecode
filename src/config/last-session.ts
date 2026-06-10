@@ -15,7 +15,7 @@ export interface ProviderMemory {
 }
 
 export interface LastSession {
-  provider?: ProviderId; // the globally LAST-used provider (plain `freecode` reopens this)
+  provider?: ProviderId; // last-used provider for this scope (folder, or global fallback)
   model?: string;
   /** Base URL last used (e.g. a remote llama-server over Tailscale) so it's
    *  restored next launch without re-passing --base-url. */
@@ -26,6 +26,13 @@ export interface LastSession {
   providers?: Record<string, ProviderMemory>;
 }
 
+// On disk: a global entry (fallback for a brand-new folder) plus a per-CWD map,
+// so each project folder reopens with the provider/model IT last used — not
+// whatever the most-recent OTHER folder happened to set.
+interface LastSessionFile extends LastSession {
+  byCwd?: Record<string, LastSession>;
+}
+
 function defaultPath(): string {
   return join(APP_DIR, "last-session.json");
 }
@@ -34,31 +41,47 @@ function defaultPath(): string {
 // so loadConfig tests stay deterministic (and a test never pollutes the real one).
 const underTest = process.env.NODE_ENV === "test";
 
-export function readLastSession(path?: string): LastSession {
-  if (path === undefined && underTest) return {};
-  const p = path ?? defaultPath();
+function readFile(p: string): LastSessionFile {
   try {
     if (!existsSync(p)) return {};
-    const parsed = JSON.parse(readFileSync(p, "utf8")) as LastSession;
-    return { provider: parsed.provider, model: parsed.model, baseUrl: parsed.baseUrl, providers: parsed.providers };
+    return JSON.parse(readFileSync(p, "utf8")) as LastSessionFile;
   } catch {
     return {};
   }
 }
 
-export function writeLastSession(s: LastSession, path?: string): void {
+const pick = (e: LastSession): LastSession => ({ provider: e.provider, model: e.model, baseUrl: e.baseUrl, providers: e.providers });
+
+/** The remembered session for a folder: its OWN per-CWD entry when present, else
+ *  the global last-used (so a never-seen folder still opens somewhere sensible). */
+export function readLastSession(path?: string, cwd?: string): LastSession {
+  if (path === undefined && underTest) return {};
+  const file = readFile(path ?? defaultPath());
+  if (cwd && file.byCwd?.[cwd]) return pick(file.byCwd[cwd]!);
+  return pick(file);
+}
+
+// Merge a new (provider, model, baseUrl) into an entry: update this provider's
+// per-provider slot, keep the others, and set the entry's last-used fields.
+function mergeEntry(existing: LastSession | undefined, s: LastSession): LastSession {
+  const providers: Record<string, ProviderMemory> = { ...(existing?.providers ?? {}) };
+  if (s.provider) providers[s.provider] = { model: s.model, baseUrl: s.baseUrl };
+  return { provider: s.provider, model: s.model, baseUrl: s.baseUrl, providers };
+}
+
+export function writeLastSession(s: LastSession, path?: string, cwd?: string): void {
   if (path === undefined && underTest) return;
   const p = path ?? defaultPath();
   try {
     mkdirSync(dirname(p), { recursive: true });
-    // Merge into the per-provider map: keep every OTHER provider's remembered
-    // model/baseUrl and only update this provider's entry, so a switch never
-    // wipes the rest. The top-level fields track the LAST-used provider.
-    let existing: LastSession = {};
-    try { if (existsSync(p)) existing = JSON.parse(readFileSync(p, "utf8")) as LastSession; } catch { existing = {}; }
-    const providers: Record<string, ProviderMemory> = { ...(existing.providers ?? {}) };
-    if (s.provider) providers[s.provider] = { model: s.model, baseUrl: s.baseUrl };
-    writeFileSync(p, JSON.stringify({ provider: s.provider, model: s.model, baseUrl: s.baseUrl, providers }, null, 2));
+    const file = readFile(p);
+    // Update the global last-used (fallback for new folders) AND this folder's
+    // own entry, so each folder keeps its own provider/model independently.
+    const next: LastSessionFile = mergeEntry(file, s);
+    const byCwd = { ...(file.byCwd ?? {}) };
+    if (cwd) byCwd[cwd] = mergeEntry(file.byCwd?.[cwd], s);
+    next.byCwd = byCwd;
+    writeFileSync(p, JSON.stringify(next, null, 2));
   } catch {
     /* remembering must never break a run */
   }

@@ -83,6 +83,33 @@ describe("base-URL memory", () => {
   });
 });
 
+describe("per-folder (cwd) memory", () => {
+  test("each folder reopens its OWN last provider/model, not the global last", () => {
+    const p = tmp();
+    const A = "/proj/A", B = "/proj/B";
+    writeLastSession({ provider: "llama-server", model: "local-model" }, p, A);
+    writeLastSession({ provider: "nim", model: "z-ai/glm-5.1" }, p, B);
+    // A then switches to openrouter (now the global most-recent) — B must be untouched.
+    writeLastSession({ provider: "openrouter", model: "google/gemma-4-31b-it:free" }, p, A);
+
+    expect(readLastSession(p, B).provider).toBe("nim"); // NOT the global openrouter
+    expect(readLastSession(p, B).model).toBe("z-ai/glm-5.1");
+    expect(readLastSession(p, A).provider).toBe("openrouter"); // A's own latest
+    // A brand-new folder falls back to the global most-recent.
+    expect(readLastSession(p, "/proj/NEVER-SEEN").provider).toBe("openrouter");
+  });
+
+  test("loadConfig resolves the folder's remembered provider, not the global one", () => {
+    const p = tmp();
+    const B = "/proj/B2";
+    writeLastSession({ provider: "ollama", model: "llama3.2" }, p, B);
+    writeLastSession({ provider: "openrouter", model: "x" }, p, "/proj/A2"); // newer global
+    // Resolving in folder B → its own ollama, not the global openrouter.
+    const cfg = loadConfig({ flags: {}, ...noFiles(p), cwd: B });
+    expect(cfg.provider).toBe("ollama");
+  });
+});
+
 describe("loader precedence", () => {
   test("reopens the remembered provider/model when it has a usable key and nothing more explicit is set", () => {
     const p = tmp();

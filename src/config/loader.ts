@@ -177,12 +177,15 @@ export interface LoadOptions {
   profilePath?: string;
   settingsPath?: string;
   lastSessionPath?: string;
+  /** Working directory whose per-folder remembered session to use (defaults to
+   *  process.cwd()). Each folder reopens with the provider/model IT last used. */
+  cwd?: string;
 }
 
 export function loadConfig(opts: LoadOptions): ResolvedConfig {
   const profile = loadProfile(opts.profilePath ?? PROFILE_PATH);
   const settings: Settings = loadJsoncSettings(opts.settingsPath);
-  const last = readLastSession(opts.lastSessionPath); // remembered provider/model (lowest priority)
+  const last = readLastSession(opts.lastSessionPath, opts.cwd ?? process.cwd()); // remembered per-folder (lowest priority)
 
   const explicitEnv = explicitEnvProvider(); // CLAUDE_CODE_USE_* — deliberate
   const envProvider = detectProviderFromEnv(); // incl. raw-key inference (auto-select)
