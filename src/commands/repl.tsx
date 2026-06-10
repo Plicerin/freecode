@@ -562,10 +562,10 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         detectedWindowRef.current = win;
         trackerRef.current.setWindow(win);
         setCtxFill(trackerRef.current.contextFill());
-        const key = `llama-server:${config.baseUrl}:${win}`;
-        if (lastLocalDetectRef.current === key) return;
-        lastLocalDetectRef.current = key;
-        setMessages((prev) => [...prev, { id: `ctx-${Date.now()}`, role: "system", text: `llama-server: ${win.toLocaleString()}-token context detected (/props) — compaction sized to that.` }]);
+        // Sizing compaction to the real /props window is a background detail — don't
+        // narrate it into the CLI on every connect (it was noisy and double-printed
+        // on the async re-fire). Diagnostics go to the debug log instead.
+        debug.log(`llama-server /props: ${win}-token context detected; compaction sized to that`);
         return;
       }
 
@@ -589,9 +589,14 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus }: 
         const toolTok = Math.ceil(JSON.stringify(tools.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters ?? zodToJsonSchema(t.schema) }))).length / 4);
         const overhead = sysTok + toolTok;
         const tight = overhead + 1024 > chosen.contextLength;
-        setMessages((prev) => [...prev, { id: `ctx-${Date.now()}`, role: tight ? "warning" : "system", text: tight
-          ? `${config.provider} loaded "${chosen.id}" with only a ${chosen.contextLength!.toLocaleString()}-token context, but freecode's prompt + tools need ~${overhead.toLocaleString()} — almost no room to respond. Raise its Context Length in ${config.provider}.`
-          : `${config.provider}: "${chosen.id}" loaded with a ${chosen.contextLength!.toLocaleString()}-token context (detected) — compaction sized to that.` }]);
+        if (tight) {
+          // A near-full window is a real problem the user must act on — keep this visible.
+          setMessages((prev) => [...prev, { id: `ctx-${Date.now()}`, role: "warning", text:
+            `${config.provider} loaded "${chosen.id}" with only a ${chosen.contextLength!.toLocaleString()}-token context, but freecode's prompt + tools need ~${overhead.toLocaleString()} — almost no room to respond. Raise its Context Length in ${config.provider}.` }]);
+        } else {
+          // Routine sizing is a background detail, not CLI chatter.
+          debug.log(`${config.provider}: "${chosen.id}" ${chosen.contextLength}-token context detected; compaction sized to that`);
+        }
       }
     })();
     return () => { cancelled = true; };
