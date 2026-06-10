@@ -174,6 +174,24 @@ export class OpenAICompatProvider implements Provider {
     const toolAcc = new Map<number, { id?: string; name?: string; args: string }>();
     const endReason = (): "end_turn" | "max_tokens" | "tool_use" =>
       finishReason === "length" ? "max_tokens" : finishReason === "tool_calls" ? "tool_use" : "end_turn";
+    // Flush accumulated tool calls — MUST run on BOTH stream-end paths: the
+    // `[DONE]` sentinel AND a clean EOF without it. Some OpenAI-compat servers
+    // (notably some Ollama builds) just close the stream after the final chunk
+    // and never send `[DONE]`; flushing only there silently DROPPED the tool call,
+    // so the model "said it would act" and the turn ended with nothing run. Clears
+    // toolAcc so the post-loop flush is a no-op once `[DONE]` has handled it.
+    const flushToolCalls = (): StreamEvent[] => {
+      const out: StreamEvent[] = [];
+      for (const tc of toolAcc.values()) {
+        if (tc.id && tc.name) {
+          let args: Record<string, unknown> = {};
+          try { args = JSON.parse(tc.args || "{}"); } catch { args = {}; }
+          out.push({ type: "tool_call", call: { id: tc.id, name: tc.name, arguments: args } });
+        }
+      }
+      toolAcc.clear();
+      return out;
+    };
 
     try {
     while (true) {
@@ -194,18 +212,7 @@ export class OpenAICompatProvider implements Provider {
         if (!trimmed.startsWith("data:")) continue;
         const data = trimmed.slice(5).trim();
         if (data === "[DONE]") {
-          for (const [idx, tc] of toolAcc) {
-            if (tc.id && tc.name) {
-              let args: Record<string, unknown> = {};
-              try {
-                args = JSON.parse(tc.args || "{}");
-              } catch {
-                args = {};
-              }
-              yield { type: "tool_call", call: { id: tc.id, name: tc.name, arguments: args } };
-              toolAcc.delete(idx);
-            }
-          }
+          yield* flushToolCalls();
           yield { type: "end", reason: endReason() };
           return;
         }
@@ -257,6 +264,9 @@ export class OpenAICompatProvider implements Provider {
     } finally {
       watchdog.clear();
     }
+    // Stream closed without a `[DONE]` sentinel — flush any tool call we'd
+    // otherwise drop (the bug that made the model "stop" mid-task on some Ollama).
+    yield* flushToolCalls();
     yield { type: "end", reason: endReason() };
   }
 }
