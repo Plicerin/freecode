@@ -94,9 +94,11 @@ const WINDOWS: Array<{ match: RegExp; window: number }> = [
   // Google — UNVERIFIED (token table is JS-rendered; WebFetch can't read it).
   // Gemini 2.5 Pro is widely documented at ~1,048,576 input tokens; treat as approx.
   { match: /gemini/i, window: 1_000_000 },
-  // DeepSeek — documented API context 64K for deepseek-chat/reasoner (approx;
-  // conservative so compaction sizes under, not over). Override w/ FREECODE_CONTEXT_WINDOW.
-  { match: /deepseek/i, window: 64_000 },
+  // DeepSeek — deepseek-chat / deepseek-reasoner advertise a 1M window (verified
+  // live, 2026-06; a prior conservative 64K throttled them to 1/16th). DeepSeek's
+  // OpenAI-format /models doesn't report context, so this can't be auto-detected
+  // like a local server's — override an exact value with FREECODE_CONTEXT_WINDOW.
+  { match: /deepseek/i, window: 1_000_000 },
 ];
 
 /** Context window (tokens) for a model; used to size compaction + the fill gauge.

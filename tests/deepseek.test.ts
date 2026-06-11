@@ -47,6 +47,6 @@ describe("DeepSeek provider", () => {
   test("pricing + context window resolve for both deepseek models", () => {
     expect(priceFor("deepseek-chat", "deepseek").output).toBe(1.1);
     expect(priceFor("deepseek-reasoner", "deepseek").output).toBe(2.19); // reasoner row wins
-    expect(contextWindowFor("deepseek-chat")).toBe(64_000);
+    expect(contextWindowFor("deepseek-chat")).toBe(1_000_000);
   });
 });
