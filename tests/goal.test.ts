@@ -2,7 +2,7 @@
 // status, framing each cycle's prompt, and deciding whether to iterate again.
 // (The REPL loop wiring + esc-abort is verified live; the harness can't drive keys.)
 import { test, expect, describe } from "bun:test";
-import { goalStatus, goalPrompt, goalDecision, GOAL_MAX_DEFAULT } from "../src/agent/goal";
+import { goalStatus, goalPrompt, goalDecision, goalVerifyFailedPrompt, GOAL_MAX_DEFAULT } from "../src/agent/goal";
 
 describe("goalStatus", () => {
   test("reads DONE / CONTINUE from the last line, case-insensitive", () => {
@@ -59,5 +59,21 @@ describe("goalDecision", () => {
   test("stops at the cap without a DONE", () => {
     expect(goalDecision({ ...base, status: "continue", completed: 12, max: 12 })).toBe("stop-max");
     expect(goalDecision({ ...base, status: "unknown", completed: 13, max: 12 })).toBe("stop-max");
+  });
+});
+
+describe("goalVerifyFailedPrompt (the real DONE gate)", () => {
+  test("frames the failing command as the next task and keeps the goal + marker contract", () => {
+    const p = goalVerifyFailedPrompt("ship the parser", "npm test", "FAIL src/parse.test.ts\n  expected 3, got 2");
+    expect(p).toContain("NOT done");           // rejects the model's premature DONE
+    expect(p).toContain("$ npm test");          // names the failing command
+    expect(p).toContain("expected 3, got 2");   // includes the real failure output
+    expect(p).toContain("GOAL: ship the parser"); // re-anchors the objective
+    expect(p).toContain("GOAL: DONE");          // keeps the status-marker contract
+    expect(p).toMatch(/never weaken or skip the check/i); // don't game the gate
+  });
+
+  test("tolerates empty output", () => {
+    expect(goalVerifyFailedPrompt("x", "tsc --noEmit", "")).toContain("(no output)");
   });
 });

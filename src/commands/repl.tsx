@@ -48,7 +48,7 @@ import { resolveVerify, resolveQuickVerify, runVerify } from "../agent/verify";
 import { newSession, appendEvent, resumeSession, readSession, setSessionTitle, titleOf, toolOutputs, listSessionMetas, type Session, type SessionMeta } from "../session/manager";
 import { setTerminalTitle } from "../tui/terminal-title";
 import { writeLastSession } from "../config/last-session";
-import { goalPrompt, goalStatus, goalDecision, GOAL_MAX_DEFAULT } from "../agent/goal";
+import { goalPrompt, goalStatus, goalVerifyFailedPrompt, GOAL_MAX_DEFAULT } from "../agent/goal";
 import { degenerationReason } from "../agent/degeneration";
 import { basename } from "node:path";
 import { historyFromEvents } from "../session/history";
@@ -780,8 +780,8 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
     }
   }, []);
 
-  async function submit(prompt: string, opts?: { skipEcho?: boolean; override?: { provider: ReturnType<typeof buildProvider>; model: string; providerId: string } }): Promise<{ text: string; aborted: boolean }> {
-    if (!prompt.trim() || busy) return { text: "", aborted: false };
+  async function submit(prompt: string, opts?: { skipEcho?: boolean; override?: { provider: ReturnType<typeof buildProvider>; model: string; providerId: string } }): Promise<{ text: string; aborted: boolean; toolCalls: number }> {
+    if (!prompt.trim() || busy) return { text: "", aborted: false, toolCalls: 0 };
     // A consult runs this same turn machinery but with a DIFFERENT provider/model
     // (the supervisor) and always as a full agent — never gated by plan mode.
     const ov = opts?.override;
@@ -808,6 +808,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
     let buffer = "";
     let streamedAny = false;
     let aborted = false;
+    let toolCallsThisRun = 0; // real progress signal for /goal (did this cycle act?)
     let sawUsage = false; // did the provider report token usage? if not, we estimate ctx
     let degenerated: string | null = null; // set if the stream collapses into repetition
     let degenCheckedAt = 0; // throttle the (cheap but not free) repetition scan
@@ -915,6 +916,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
               return [...prev, { id, role: "assistant", text: delta }];
             });
           } else if (e.type === "tool_call" && e.call) {
+            toolCallsThisRun += 1;
             streamIdRef.current = null; // text after a tool call starts a fresh bubble
             thinkIdRef.current = null; // and a fresh reasoning bubble next step
             if (burstStartRef.current !== null) genMsRef.current += Date.now() - burstStartRef.current; // bank this burst's gen time
@@ -1001,7 +1003,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
       abortRef.current = null;
       setBusy(false);
     }
-    return { text: buffer, aborted };
+    return { text: buffer, aborted, toolCalls: toolCallsThisRun };
   }
 
   // Open the interactive model picker for a given provider instance. Shared by
@@ -1317,30 +1319,74 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
         }
         const objective = sub;
         const max = GOAL_MAX_DEFAULT;
+        // A claimed DONE is GATED on the project's real checks — not the model's
+        // word. Resolved once; if there are none, DONE stays unverified (and says so).
+        const verifyPlan = resolveVerify(process.cwd(), config.verify);
         goalActiveRef.current = true;
         setMessages((prev) => [...prev, { id: `goal-${Date.now()}`, role: "system", text:
-          `◆ Goal: ${objective}\n  Working autonomously (up to ${max} cycles). Press esc or run /goal stop to halt.` }]);
+          `◆ Goal: ${objective}\n  Working autonomously (up to ${max} cycles). ` +
+          (verifyPlan.source === "none"
+            ? "No verify command configured — DONE will be the model's word, unverified."
+            : `DONE is verified with: ${verifyPlan.commands.join(" && ")}.`) +
+          "\n  Press esc or run /goal stop to halt." }]);
         try {
           let completed = 0;
+          let verifyFails = 0;  // times the model claimed DONE but the checks failed
+          let noProgress = 0;   // consecutive cycles that used no tool (just talked)
+          const MAX_VERIFY_FAILS = 3;
+          const MAX_NO_PROGRESS = 2;
+          let pendingFailure: { failedCommand: string; output: string } | null = null;
           while (goalActiveRef.current) {
             setMessages((prev) => [...prev, { id: `gc-${Date.now()}`, role: "system", text: `◆ cycle ${completed + 1}/${max}` }]);
-            const res = await submit(goalPrompt(objective, completed));
+            const prompt = pendingFailure
+              ? goalVerifyFailedPrompt(objective, pendingFailure.failedCommand, pendingFailure.output)
+              : goalPrompt(objective, completed);
+            pendingFailure = null;
+            const res = await submit(prompt);
             completed += 1;
-            const decision = goalDecision({ status: goalStatus(res.text), aborted: res.aborted, completed, max });
-            if (decision === "done") {
-              setMessages((prev) => [...prev, { id: `gd-${Date.now()}`, role: "system", text: `✓ Goal reported DONE after ${completed} cycle${completed === 1 ? "" : "s"}.` }]);
-              break;
-            }
-            if (decision === "stop-aborted") {
+            if (res.aborted) {
               setMessages((prev) => [...prev, { id: `gd-${Date.now()}`, role: "system", text: `◆ Goal halted after ${completed} cycle${completed === 1 ? "" : "s"}.` }]);
               break;
             }
-            if (decision === "stop-max") {
-              setMessages((prev) => [...prev, { id: `gd-${Date.now()}`, role: "system", text:
-                `◆ Reached the ${max}-cycle cap without a DONE. Run /goal "${objective}" to keep going.` }]);
+            const status = goalStatus(res.text);
+
+            if (status === "done") {
+              if (verifyPlan.source === "none") {
+                setMessages((prev) => [...prev, { id: `gd-${Date.now()}`, role: "warning", text:
+                  `✓ Model reports DONE after ${completed} cycle${completed === 1 ? "" : "s"} — but there's no verify command, so this is UNVERIFIED (its word, not checked). Add a \`verify\` command to gate future goals.` }]);
+                break;
+              }
+              setMessages((prev) => [...prev, { id: `gv-${Date.now()}`, role: "system", text: `◆ Model reports DONE — verifying: ${verifyPlan.commands.join(" && ")}…` }]);
+              const v = await runVerify(verifyPlan, process.cwd());
+              if (!goalActiveRef.current) break; // stopped during verification
+              if (v.ok) {
+                setMessages((prev) => [...prev, { id: `gd-${Date.now()}`, role: "system", text: `✓ Goal DONE and VERIFIED — ${v.ranCommands.join(" && ")} passed (${completed} cycle${completed === 1 ? "" : "s"}).` }]);
+                break;
+              }
+              verifyFails += 1;
+              if (verifyFails > MAX_VERIFY_FAILS || completed >= max) {
+                setMessages((prev) => [...prev, { id: `gd-${Date.now()}`, role: "warning", text:
+                  `◆ Model reported DONE, but \`${v.failedCommand}\` kept failing after ${verifyFails} fix attempt${verifyFails === 1 ? "" : "s"} — stopping for you to review. Last error:\n${(v.output || "").slice(-600)}` }]);
+                break;
+              }
+              setMessages((prev) => [...prev, { id: `gd-${Date.now()}`, role: "system", text: `✗ Not done — \`${v.failedCommand}\` failed. Sending it back to fix (attempt ${verifyFails}/${MAX_VERIFY_FAILS}).` }]);
+              pendingFailure = { failedCommand: v.failedCommand ?? verifyPlan.commands.join(" && "), output: v.output };
+              continue;
+            }
+
+            // Not done → real progress check (did the cycle USE a tool?) + cap.
+            if (res.toolCalls === 0) noProgress += 1; else noProgress = 0;
+            if (noProgress >= MAX_NO_PROGRESS) {
+              setMessages((prev) => [...prev, { id: `gd-${Date.now()}`, role: "warning", text:
+                `◆ Stopped: ${noProgress} cycles with no tool action — the model is describing steps, not doing them. Refine the goal, or try a stronger model.` }]);
               break;
             }
-            // "continue" → next cycle
+            if (completed >= max) {
+              setMessages((prev) => [...prev, { id: `gd-${Date.now()}`, role: "system", text:
+                `◆ Reached the ${max}-cycle cap without a verified DONE. Run /goal "${objective}" to keep going.` }]);
+              break;
+            }
+            // else → next cycle
           }
         } finally {
           goalActiveRef.current = false;

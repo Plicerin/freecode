@@ -1,7 +1,10 @@
 // /goal — autonomous iteration toward an objective. freecode runs cycles (each a
-// full agent turn), and after each cycle the model self-reports DONE or CONTINUE
-// on its last line. The loop repeats until DONE, a cycle cap, or the user
-// interrupts. The orchestration lives in the REPL; the parsing/prompting/decision
+// full agent turn). The model self-reports DONE/CONTINUE on its last line, but a
+// DONE is NOT taken on the model's word: the REPL orchestrator runs the project's
+// real verification commands and only accepts DONE if they pass — otherwise the
+// failure becomes the next cycle's task (goalVerifyFailedPrompt). The loop also
+// stops if cycles stop making progress (no tool calls), or at the cycle cap, or on
+// interrupt. The orchestration lives in the REPL; the parsing/prompting/decision
 // here are pure so they're unit-tested.
 
 export const GOAL_MAX_DEFAULT = 12;
@@ -32,6 +35,24 @@ const FRAME = [
 export function goalPrompt(objective: string, iteration: number): string {
   if (iteration === 0) return `GOAL: ${objective}\n\n${FRAME}`;
   return `Continue toward the GOAL: ${objective}\n\nReview what's done, take the next concrete step, then end with GOAL: DONE or GOAL: CONTINUE.\n\n${FRAME}`;
+}
+
+/** The next-cycle prompt when the model claimed DONE but the project's
+ *  verification command FAILED. The failing command is the concrete next step —
+ *  the model doesn't get to declare victory while the checks are red. */
+export function goalVerifyFailedPrompt(objective: string, failedCommand: string, output: string): string {
+  const tail = (output || "(no output)").trim().slice(-1500);
+  return [
+    "You reported GOAL: DONE — but it is NOT done. The project's verification command failed:",
+    `  $ ${failedCommand}`,
+    "",
+    tail,
+    "",
+    "Fix the underlying CAUSE so that command passes — do the work with your tools, don't just claim it, and never weaken or skip the check to make it green.",
+    "",
+    `GOAL: ${objective}`,
+    FRAME,
+  ].join("\n");
 }
 
 export type GoalDecision = "done" | "continue" | "stop-max" | "stop-aborted";
