@@ -53,4 +53,32 @@ describe("does NOT trip on legitimate output", () => {
       "It then clips against the frustum and rasterizes the visible triangles into the framebuffer.";
     expect(isDegenerate(prose)).toBe(false);
   });
+
+  // The block-loop case from a real /goal run: a multi-line paragraph re-emitted
+  // forever. It has enough distinct words to slip past the token-distinct check,
+  // so the LINE-level check must catch it.
+  const LOOP_BLOCK = [
+    "I have refactored the audio module to use the class name AudioEngine and a clean named export audio. This resolves the SyntaxError by removing the conflict with the native Audio object.",
+    "Next steps:",
+    "1. Verify Visuals: Ensure the planetScene and orbitScene are displaying the correct data.",
+    "2. Final Synthesis: Complete any remaining minor logic.",
+    "GOAL: CONTINUE",
+  ].join("\n");
+
+  test("a multi-line block looped many times (the GOAL: CONTINUE loop)", () => {
+    const reason = degenerationReason(LOOP_BLOCK.repeat(8));
+    expect(reason).not.toBeNull();
+    expect(reason).toMatch(/looping/);
+  });
+
+  test("the same block looped only twice is NOT yet flagged (not unambiguous)", () => {
+    // Two repeats is too few to be sure — keep it under the floor.
+    expect(isDegenerate(LOOP_BLOCK + "\n" + LOOP_BLOCK)).toBe(false);
+  });
+
+  test("a long, varied multi-line answer (distinct lines) is not flagged", () => {
+    const real = Array.from({ length: 30 }, (_, i) =>
+      `Step ${i}: ${["read", "edit", "run", "check", "verify"][i % 5]} the ${["loader", "parser", "renderer", "tracker", "vault"][i % 5]} at src/mod${i}.ts and confirm result ${i}.`).join("\n");
+    expect(isDegenerate(real)).toBe(false);
+  });
 });

@@ -44,6 +44,18 @@ export function degenerationReason(text: string): string | null {
     if (distinct / tokens.length < 0.1) return `${tokens.length} tokens but only ${distinct} distinct`;
   }
 
+  // 3) A whole BLOCK/paragraph looped: the same lines repeated over and over (e.g.
+  //    a model re-emitting "…GOAL: CONTINUE" forever). This EVADES #2 because a
+  //    multi-line block has enough distinct words to keep the token ratio above
+  //    10%. Judge at the LINE level instead: substantial lines that collapse to a
+  //    few distinct ones is a loop, not prose. (Normal text/code keeps line
+  //    diversity high; this only trips on heavy identical-line repetition.)
+  const lines = tail.split(/\n/).map((l) => l.trim()).filter((l) => l.length >= 8);
+  if (lines.length >= 10) {
+    const distinctLines = new Set(lines).size;
+    if (distinctLines / lines.length < 0.3) return `${lines.length} lines but only ${distinctLines} distinct (a block is looping)`;
+  }
+
   return null;
 }
 
