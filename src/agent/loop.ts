@@ -8,7 +8,7 @@ import { toolListToSystemPrompt } from "../tools/registry";
 import { ContextTracker } from "./context";
 import { estimateMessagesTokens, trimToFit } from "./token-estimate";
 import { overclaimWarning } from "./overclaim";
-import { looksLikeTextToolCall } from "./text-tool-call";
+import { looksLikeTextToolCall, announcedNextActionWithoutCalling } from "./text-tool-call";
 import { parseImageLimit, capImagesTo, countImages } from "./image-cap";
 import { getEnv } from "../utils/env";
 import { summarizeConversation } from "./summarize";
@@ -321,6 +321,23 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
     }
 
     if (turnToolCalls.length === 0) {
+      // The model announced a next step in prose ("I'll check X") but didn't emit
+      // the tool call, then ended its turn — the "stops mid-task, needs 'continue
+      // continue'" failure on weaker local models (the same gemma keeps going in
+      // other CLIs). Instead of surrendering the turn, nudge it to ACT. Bounded by
+      // the auto-continue budget (which resets the moment it actually acts), and
+      // harmless on a false positive — a finished model just confirms it's done.
+      // Skipped when a verify is pending (handled just below) or the turn was empty
+      // (that's the genuinely-stuck case warned about above).
+      if (!opts.signal?.aborted
+          && autoContinues < MAX_AUTO_CONTINUE
+          && !(verifyEnabled && changed)
+          && (announcedNextActionWithoutCalling(turnText) || looksLikeTextToolCall(turnText))) {
+        autoContinues += 1;
+        messages.push({ role: "user", content: "You described a next step but didn't run it — your turn ended without a tool call. If there's more to do, CALL THE TOOL now instead of describing it. If you're genuinely finished, say so in one short line." });
+        opts.onEvent({ type: "compacted", text: `The model announced a step but didn't run it — nudging it to continue (${autoContinues}/${MAX_AUTO_CONTINUE})…` });
+        continue;
+      }
       // The agent is done talking. Earn the "done": if it changed files, run
       // the verify gate; on failure, feed it back and let it self-correct.
       if (verifyEnabled && changed && verifyAttempts < MAX_VERIFY && !opts.signal?.aborted) {
