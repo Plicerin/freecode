@@ -4,6 +4,7 @@ import { Box, Static, Text, useApp, useInput } from "ink";
 import { loadConfig, type CliFlags } from "../config/loader";
 import { buildProvider } from "../providers/registry";
 import { detectLocalModels, detectServerKind, detectLlamaServerContext } from "../providers/local-context";
+import { discoverOllamaServers } from "../providers/ollama-discovery";
 import { zodToJsonSchema } from "../providers/schema-util";
 import { buildToolRegistry, toolListToSystemPrompt } from "../tools/registry";
 import { createPermissionEngine, approvalDecisionForKey, type ApprovalCallback, type ApprovalDecision, type ApprovalRequest } from "../permissions/modes";
@@ -96,7 +97,7 @@ export function restoredMessagesFromEvents(events: SessionEvent[], sessionId: st
   return out;
 }
 
-const SLASH_COMMANDS = ["/model", "/models", "/new", "/resume", "/rename", "/context", "/cost", "/config", "/doctor", "/diff", "/commit", "/commit-push-pr", "/branch", "/issue", "/pr-comments", "/review", "/security-review", "/autofix-pr", "/explore", "/agents", "/skills", "/learn", "/goal", "/expand", "/workflows", "/ultraplan", "/bg", "/plugins", "/provider", "/consult", "/advisor", "/plan", "/verify", "/bench", "/log", "/mcp", "/help", "/compact", "/about", "/exit"];
+const SLASH_COMMANDS = ["/model", "/models", "/new", "/resume", "/rename", "/context", "/cost", "/config", "/doctor", "/diff", "/commit", "/commit-push-pr", "/branch", "/issue", "/pr-comments", "/review", "/security-review", "/autofix-pr", "/explore", "/agents", "/skills", "/learn", "/goal", "/expand", "/workflows", "/ultraplan", "/bg", "/plugins", "/provider", "/scan", "/consult", "/advisor", "/plan", "/verify", "/bench", "/log", "/mcp", "/help", "/compact", "/about", "/exit"];
 
 // Spinner frames — proof of life while a turn runs. Not the braille snake every
 // other CLI ships: this is Bubo's eye. He holds your gaze, glances right, glances
@@ -132,6 +133,7 @@ const COMMAND_DESC: Record<string, string> = {
   "/rename": "name the current session",
   "/context": "token usage + cost",
   "/provider": "show or switch provider",
+  "/scan": "find Ollama servers on the network (localhost + Tailscale + LAN) and their models",
   "/mcp": "MCP servers and tools",
   "/plan": "toggle read-only plan mode",
   "/cost": "session token usage + cost",
@@ -1712,6 +1714,31 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
           await openModelPicker(buildProvider(newCfg), newCfg.model);
         } else {
           setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Provider: ${config.provider}\nModel: ${model}\nEndpoint: ${defaultEndpoint(config.provider, config.baseUrl)}\nKey: ${config.apiKey ? "set" : "none"}\n\nSwitch with /provider <name> (${KNOWN.join(", ")}).` }]);
+        }
+        break;
+      }
+      case "/scan": {
+        if (busy) { setErrorLine("Finish or interrupt the current turn before scanning."); break; }
+        setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "🔎 Scanning for Ollama servers — localhost + online Tailscale peers + the LAN /24…" }]);
+        setBusy(true);
+        try {
+          const servers = await discoverOllamaServers();
+          if (!servers.length) {
+            setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "No Ollama servers found. A remote one must bind all interfaces (set OLLAMA_HOST=0.0.0.0:11434 on that box and restart Ollama) and be reachable on :11434." }]);
+            break;
+          }
+          const lines = servers.map((s) => {
+            const shown = s.models.slice(0, 8).join(", ");
+            const more = s.models.length > 8 ? `, +${s.models.length - 8} more` : "";
+            const alias = s.aliases && s.aliases.length ? `\n      also at: ${s.aliases.join(", ")}` : "";
+            return `  ● ${s.host}:11434  (${s.source})\n      ${s.models.length} model(s): ${shown}${more}${alias}`;
+          });
+          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text:
+            `Ollama servers found:\n${lines.join("\n")}\n\nTo use one now:  $env:OLLAMA_HOST="http://<host>:11434"  then  /provider ollama  (a pick-from-list UI is the next step).` }]);
+        } catch (err) {
+          setErrorLine(`Scan failed: ${err instanceof Error ? err.message : String(err)}`);
+        } finally {
+          setBusy(false);
         }
         break;
       }
