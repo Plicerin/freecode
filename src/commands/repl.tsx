@@ -97,6 +97,23 @@ export function restoredMessagesFromEvents(events: SessionEvent[], sessionId: st
   return out;
 }
 
+// Programmatic "user" turns that the human did NOT type at the prompt — the /goal
+// cycle FRAME, the verify-failed re-prompt, the /explore framing. They're real
+// user TURNS for the model but must not pollute the up/down INPUT history.
+const NON_TYPED_PROMPT = /working AUTONOMOUSLY toward a goal|^You reported GOAL: DONE|^Use the Agent tool with subagent_type/m;
+
+/** The up/down-arrow input history for a resumed session: the prompts the user
+ *  actually typed, oldest first (the FRAME/agentic auto-prompts filtered out,
+ *  consecutive dupes collapsed). */
+export function inputHistoryFromEvents(events: SessionEvent[]): string[] {
+  const out: string[] = [];
+  for (const e of events) {
+    if (e.kind !== "user" || !e.text.trim() || NON_TYPED_PROMPT.test(e.text)) continue;
+    if (out[out.length - 1] !== e.text) out.push(e.text);
+  }
+  return out;
+}
+
 const SLASH_COMMANDS = ["/model", "/models", "/new", "/resume", "/rename", "/context", "/cost", "/config", "/doctor", "/diff", "/commit", "/commit-push-pr", "/branch", "/issue", "/pr-comments", "/review", "/security-review", "/autofix-pr", "/explore", "/agents", "/skills", "/learn", "/goal", "/expand", "/workflows", "/ultraplan", "/bg", "/plugins", "/provider", "/scan", "/consult", "/advisor", "/plan", "/verify", "/bench", "/log", "/mcp", "/help", "/compact", "/about", "/exit"];
 
 // Spinner frames — proof of life while a turn runs. Not the braille snake every
@@ -744,6 +761,10 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
     const events = readSession(s);
     conversationRef.current = historyFromEvents(events);
     applyTabTitle(titleOf(events));
+    // Restore the up/down input history so a resumed session can recall what you typed.
+    historyRef.current = inputHistoryFromEvents(events);
+    historyIdxRef.current = null; setHistoryIdx(null);
+    draftRef.current = "";
     setMessages([...restoredMessagesFromEvents(events, s.id), { id: `s-${Date.now()}`, role: "system", text: `Resumed (${conversationRef.current.length} messages of context)` }]);
   }
 

@@ -3,7 +3,7 @@
 // `output`) and dropped tool_call events entirely, so a resumed session rendered
 // rows of bare ⚙ gears. This guards the corrected mapper.
 import { test, expect, describe } from "bun:test";
-import { restoredMessagesFromEvents } from "../src/commands/repl";
+import { restoredMessagesFromEvents, inputHistoryFromEvents } from "../src/commands/repl";
 import type { SessionEvent } from "../src/session/manager";
 
 const events: SessionEvent[] = [
@@ -46,5 +46,25 @@ describe("restoredMessagesFromEvents (/resume transcript)", () => {
     const assistants = msgs.filter((m) => m.role === "assistant");
     expect(assistants).toHaveLength(1); // the empty one is dropped
     expect(assistants[0]!.text).toBe("The planet draws shape 5.");
+  });
+});
+
+describe("inputHistoryFromEvents (/resume restores up/down recall)", () => {
+  const ev: SessionEvent[] = [
+    { kind: "user", text: "list the files", ts: "t" },
+    { kind: "assistant", text: "ok", ts: "t" },                          // not user → skipped
+    { kind: "user", text: "/scan", ts: "t" },
+    { kind: "user", text: "/scan", ts: "t" },                            // consecutive dup → collapsed
+    { kind: "user", text: "Continue toward the GOAL: ship it\n\nYou are working AUTONOMOUSLY toward a goal — no one will reply.\nGOAL: DONE or GOAL: CONTINUE", ts: "t" }, // /goal FRAME → filtered
+    { kind: "user", text: "! git status", ts: "t" },
+    { kind: "user", text: 'Use the Agent tool with subagent_type "explore" to: find planet code', ts: "t" }, // /explore framing → filtered
+    { kind: "tool_call", id: "1", name: "Grep", args: {}, ts: "t" },     // not user → skipped
+  ];
+
+  test("keeps typed prompts/commands, drops agentic auto-prompts, collapses consecutive dupes", () => {
+    expect(inputHistoryFromEvents(ev)).toEqual(["list the files", "/scan", "! git status"]);
+  });
+  test("empty session → empty history", () => {
+    expect(inputHistoryFromEvents([])).toEqual([]);
   });
 });
