@@ -45,7 +45,7 @@ import { parseMcpAdd, addMcpServer, removeMcpServer, listConfiguredMcp } from ".
 import { logActivity, setActivityLog, activityState } from "../utils/activity";
 import { closest } from "../utils/fuzzy";
 import { resolveVerify, resolveQuickVerify, runVerify } from "../agent/verify";
-import { newSession, appendEvent, resumeSession, readSession, setSessionTitle, titleOf, toolOutputs, listSessionMetas, type Session, type SessionMeta } from "../session/manager";
+import { newSession, appendEvent, resumeSession, readSession, setSessionTitle, titleOf, toolOutputs, listSessionMetas, type Session, type SessionMeta, type SessionEvent } from "../session/manager";
 import { setTerminalTitle } from "../tui/terminal-title";
 import { writeLastSession } from "../config/last-session";
 import { goalPrompt, goalStatus, goalVerifyFailedPrompt, GOAL_MAX_DEFAULT } from "../agent/goal";
@@ -76,6 +76,24 @@ interface UiMessage {
   text: string;
   toolName?: string;
   ok?: boolean;
+}
+
+/** Rebuild the visible transcript from a session's stored events for /resume.
+ *  Mirrors how the LIVE stream renders: a tool_call becomes "→ name(args)" and a
+ *  tool_result becomes its output preview — NOT a bare ⚙. The old restore read
+ *  `e.text` (tool_result stores `output`) and dropped tool_call events entirely,
+ *  so a resumed session showed rows of empty gears. Empty assistant turns
+ *  (tool-only) are skipped, as live. */
+export function restoredMessagesFromEvents(events: SessionEvent[], sessionId: string): UiMessage[] {
+  const out: UiMessage[] = [];
+  events.forEach((e, i) => {
+    const id = `${sessionId}-${i}`;
+    if (e.kind === "user") out.push({ id, role: "user", text: e.text });
+    else if (e.kind === "assistant") { if (e.text.trim()) out.push({ id, role: "assistant", text: e.text }); }
+    else if (e.kind === "tool_call") out.push({ id, role: "tool", text: `→ ${e.name}(${JSON.stringify(e.args).slice(0, 120)})`, toolName: e.name });
+    else if (e.kind === "tool_result") out.push({ id, role: "tool", text: previewToolResult(e.output), toolName: "result", ok: e.ok });
+  });
+  return out;
 }
 
 const SLASH_COMMANDS = ["/model", "/models", "/new", "/resume", "/rename", "/context", "/cost", "/config", "/doctor", "/diff", "/commit", "/commit-push-pr", "/branch", "/issue", "/pr-comments", "/review", "/security-review", "/autofix-pr", "/explore", "/agents", "/skills", "/learn", "/goal", "/expand", "/workflows", "/ultraplan", "/bg", "/plugins", "/provider", "/consult", "/advisor", "/plan", "/verify", "/bench", "/log", "/mcp", "/help", "/compact", "/about", "/exit"];
@@ -721,19 +739,10 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
   // Restore a session into the live REPL — shared by /resume <id> and the picker.
   function doResume(s: Session): void {
     sessionRef.current = s;
-    const events = readSession(s) as Array<{ kind: string; text: string; name?: string; ok?: boolean }>;
-    const restored: UiMessage[] = events
-      .filter((e) => e.kind === "user" || e.kind === "assistant" || e.kind === "tool_result")
-      .map((e, i) => ({
-        id: `${s.id}-${i}`,
-        role: e.kind === "user" ? "user" : e.kind === "assistant" ? "assistant" : "tool",
-        text: e.text,
-        toolName: (e as { name?: string }).name,
-        ok: (e as { ok?: boolean }).ok,
-      }));
+    const events = readSession(s);
     conversationRef.current = historyFromEvents(events);
-    applyTabTitle(titleOf(events as never));
-    setMessages([...restored, { id: `s-${Date.now()}`, role: "system", text: `Resumed (${conversationRef.current.length} messages of context)` }]);
+    applyTabTitle(titleOf(events));
+    setMessages([...restoredMessagesFromEvents(events, s.id), { id: `s-${Date.now()}`, role: "system", text: `Resumed (${conversationRef.current.length} messages of context)` }]);
   }
 
   const promptUser: ApprovalCallback = (req) => approvalQueue.enqueue(req);
@@ -746,19 +755,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
         setErrorLine(`No such session: ${resumeId}`);
         sessionRef.current = newSession(cwd);
       } else {
-        sessionRef.current = s;
-        const events = readSession(s) as Array<{ kind: string; text: string; name?: string; ok?: boolean }>;
-        const restored: UiMessage[] = events
-          .filter((e) => e.kind === "user" || e.kind === "assistant" || e.kind === "tool_result")
-          .map((e, i) => ({
-            id: `${s.id}-${i}`,
-            role: e.kind === "user" ? "user" : e.kind === "assistant" ? "assistant" : "tool",
-            text: e.text,
-            toolName: (e as { name?: string }).name,
-            ok: (e as { ok?: boolean }).ok,
-          }));
-        setMessages(restored);
-        conversationRef.current = historyFromEvents(events);
+        doResume(s);
       }
     } else {
       sessionRef.current = newSession(cwd);
