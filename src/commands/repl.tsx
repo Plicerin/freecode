@@ -4,7 +4,7 @@ import { Box, Static, Text, useApp, useInput } from "ink";
 import { loadConfig, type CliFlags } from "../config/loader";
 import { buildProvider } from "../providers/registry";
 import { detectLocalModels, detectServerKind, detectLlamaServerContext } from "../providers/local-context";
-import { discoverOllamaServers } from "../providers/ollama-discovery";
+import { discoverServers } from "../providers/server-discovery";
 import { zodToJsonSchema } from "../providers/schema-util";
 import { buildToolRegistry, toolListToSystemPrompt } from "../tools/registry";
 import { createPermissionEngine, approvalDecisionForKey, type ApprovalCallback, type ApprovalDecision, type ApprovalRequest } from "../permissions/modes";
@@ -1719,22 +1719,23 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
       }
       case "/scan": {
         if (busy) { setErrorLine("Finish or interrupt the current turn before scanning."); break; }
-        setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "🔎 Scanning for Ollama servers — localhost + online Tailscale peers + the LAN /24…" }]);
+        setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "🔎 Scanning for Ollama + llama-server — localhost + online Tailscale peers + the LAN /24…" }]);
         setBusy(true);
         try {
-          const servers = await discoverOllamaServers();
+          const servers = await discoverServers();
           if (!servers.length) {
-            setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "No Ollama servers found. A remote one must bind all interfaces (set OLLAMA_HOST=0.0.0.0:11434 on that box and restart Ollama) and be reachable on :11434." }]);
+            setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "No model servers found. A remote Ollama must bind 0.0.0.0:11434; a llama-server must be on :8080 (or fronted by `tailscale serve` on 443) and reachable." }]);
             break;
           }
           const lines = servers.map((s) => {
-            const shown = s.models.slice(0, 8).join(", ");
+            const shown = s.models.slice(0, 8).join(", ") || "(model list unavailable)";
             const more = s.models.length > 8 ? `, +${s.models.length - 8} more` : "";
+            const ctx = s.contextLength ? ` · ${s.contextLength.toLocaleString()}-token ctx` : "";
             const alias = s.aliases && s.aliases.length ? `\n      also at: ${s.aliases.join(", ")}` : "";
-            return `  ● ${s.host}:11434  (${s.source})\n      ${s.models.length} model(s): ${shown}${more}${alias}`;
+            return `  ● ${s.endpoint}  [${s.kind}, ${s.source}]${ctx}\n      ${s.models.length} model(s): ${shown}${more}${alias}`;
           });
           setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text:
-            `Ollama servers found:\n${lines.join("\n")}\n\nTo use one now:  $env:OLLAMA_HOST="http://<host>:11434"  then  /provider ollama  (a pick-from-list UI is the next step).` }]);
+            `Model servers found:\n${lines.join("\n")}\n\nTo use one now:  /provider <ollama|llama-server> with  $env:OLLAMA_HOST / $env:LLAMA_SERVER_HOST="<endpoint>"  (a pick-from-list UI is the next step).` }]);
         } catch (err) {
           setErrorLine(`Scan failed: ${err instanceof Error ? err.message : String(err)}`);
         } finally {
