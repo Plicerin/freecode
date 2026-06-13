@@ -2,6 +2,7 @@ import { writeFileSync, mkdirSync, existsSync, statSync, renameSync } from "node
 import { dirname, resolve, isAbsolute } from "node:path";
 import { z } from "zod";
 import type { Tool } from "./types";
+import { structuredWriteError } from "./structured-validate";
 
 const ArgsSchema = z.object({
   path: z.string().min(1),
@@ -22,6 +23,10 @@ export const FileWriteTool: Tool<z.infer<typeof ArgsSchema>> = {
       if (!existsSync(dirname(abs))) {
         return { ok: false, output: "", error: `Parent directory does not exist: ${dirname(abs)}` };
       }
+    }
+    const jsonError = structuredWriteError(args.path, args.content);
+    if (jsonError) {
+      return { ok: false, output: "", error: jsonError };
     }
     const existed = existsSync(abs);
     const tmp = `${abs}.freecode-tmp`;

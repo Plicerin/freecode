@@ -3,6 +3,7 @@ import { resolve, isAbsolute } from "node:path";
 import { createTwoFilesPatch, applyPatch } from "diff";
 import { z } from "zod";
 import type { Tool } from "./types";
+import { structuredWriteError } from "./structured-validate";
 
 const ArgsSchema = z.object({
   path: z.string().min(1),
@@ -128,6 +129,10 @@ export const FileEditTool: Tool<z.infer<typeof ArgsSchema>> = {
       }
       const updatedLF = args.replaceAll ? fileLF.split(oldLF).join(newLF) : replaceOnce(fileLF, oldLF, newLF);
       const updated = eol === "\r\n" ? updatedLF.replace(/\n/g, "\r\n") : updatedLF;
+      const jsonError = structuredWriteError(args.path, updated);
+      if (jsonError) {
+        return { ok: false, output: "", error: jsonError };
+      }
       try {
         writeFileSync(abs, updated, "utf8");
       } catch (err) {
@@ -144,6 +149,10 @@ export const FileEditTool: Tool<z.infer<typeof ArgsSchema>> = {
       const result = applyPatch(original, args.unifiedDiff);
       if (result === false) {
         return { ok: false, output: "", error: "Patch did not apply cleanly against the current file contents" };
+      }
+      const jsonError = structuredWriteError(args.path, result);
+      if (jsonError) {
+        return { ok: false, output: "", error: jsonError };
       }
       try {
         writeFileSync(abs, result, "utf8");
