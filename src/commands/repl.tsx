@@ -4,7 +4,7 @@ import { Box, Static, Text, useApp, useInput } from "ink";
 import { loadConfig, type CliFlags } from "../config/loader";
 import { buildProvider } from "../providers/registry";
 import { detectLocalModels, detectServerKind, detectLlamaServerContext } from "../providers/local-context";
-import { discoverServers } from "../providers/server-discovery";
+import { discoverServers, type DiscoveredServer } from "../providers/server-discovery";
 import { zodToJsonSchema } from "../providers/schema-util";
 import { buildToolRegistry, toolListToSystemPrompt } from "../tools/registry";
 import { createPermissionEngine, approvalDecisionForKey, type ApprovalCallback, type ApprovalDecision, type ApprovalRequest } from "../permissions/modes";
@@ -150,7 +150,7 @@ const COMMAND_DESC: Record<string, string> = {
   "/rename": "name the current session",
   "/context": "token usage + cost",
   "/provider": "show or switch provider",
-  "/scan": "find Ollama servers on the network (localhost + Tailscale + LAN) and their models",
+  "/scan": "discover Ollama + llama-server on the network, then pick a server & model to switch to (/scan ollama|llama-server to filter)",
   "/mcp": "MCP servers and tools",
   "/plan": "toggle read-only plan mode",
   "/cost": "session token usage + cost",
@@ -537,6 +537,14 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
   const [consultPicker, setConsultPicker] = useState<
     | { stage: "provider"; task: string; items: string[]; idx: number }
     | { stage: "model"; task: string; providerId: string; cfg: ResolvedConfig; all: string[]; query: string; idx: number }
+    | null
+  >(null);
+  // /scan two-stage picker: choose a discovered server (Ollama or llama-server),
+  // then its model. Selecting one switches the live provider to that endpoint —
+  // no hand-typed address (the whole point: the address moves, discovery doesn't).
+  const [scanPicker, setScanPicker] = useState<
+    | { stage: "server"; servers: DiscoveredServer[]; idx: number }
+    | { stage: "model"; servers: DiscoveredServer[]; server: DiscoveredServer; all: string[]; query: string; idx: number }
     | null
   >(null);
   // Self-improvement: proposals from the last /learn, awaiting /learn save <n|all>.
@@ -1063,6 +1071,26 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
     } finally {
       setBusy(false);
     }
+  }
+
+  // /scan: switch the live session to a discovered server. The endpoint + model
+  // are passed as flags so loadConfig resolves them with highest precedence; the
+  // choice is persisted (writeLastSession) so it survives a relaunch. For a
+  // llama-server we trust the /props-detected context window over the name table.
+  function applyDiscoveredServer(server: DiscoveredServer, chosenModel: string): void {
+    const providerId = server.kind === "ollama" ? "ollama" : "llama-server";
+    const newCfg = loadConfig({
+      flags: { ...(flags ?? {}), provider: providerId as CliFlags["provider"], baseUrl: server.baseUrl, model: chosenModel || undefined },
+    });
+    setConfig(newCfg);
+    setModel(newCfg.model);
+    trackerRef.current.setPricing(priceFor(newCfg.model, newCfg.provider));
+    trackerRef.current.setWindow(server.contextLength ?? contextWindowFor(newCfg.model));
+    setCtxFill(trackerRef.current.contextFill());
+    writeLastSession({ provider: newCfg.provider, model: newCfg.model, baseUrl: newCfg.baseUrl }, undefined, process.cwd());
+    const ctx = server.contextLength ? ` · ${server.contextLength.toLocaleString()}-token ctx` : "";
+    setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text:
+      `Switched to ${providerId} @ ${server.endpoint} — model ${newCfg.model}${ctx}. Active from your next message.${chosenModel ? "" : "\n(no model list was available — set one with /model if this isn't right.)"}` }]);
   }
 
   // /consult final: run the supervisor as a full-agent turn with the chosen
@@ -1748,15 +1776,15 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
             setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "No model servers found. A remote Ollama must bind 0.0.0.0:11434; a llama-server must be on :8080 (or fronted by `tailscale serve` on 443) and reachable." }]);
             break;
           }
-          const lines = servers.map((s) => {
-            const shown = s.models.slice(0, 8).join(", ") || "(model list unavailable)";
-            const more = s.models.length > 8 ? `, +${s.models.length - 8} more` : "";
-            const ctx = s.contextLength ? ` · ${s.contextLength.toLocaleString()}-token ctx` : "";
-            const alias = s.aliases && s.aliases.length ? `\n      also at: ${s.aliases.join(", ")}` : "";
-            return `  ● ${s.endpoint}  [${s.kind}, ${s.source}]${ctx}\n      ${s.models.length} model(s): ${shown}${more}${alias}`;
-          });
-          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text:
-            `Model servers found:\n${lines.join("\n")}\n\nTo use one now:  /provider <ollama|llama-server> with  $env:OLLAMA_HOST / $env:LLAMA_SERVER_HOST="<endpoint>"  (a pick-from-list UI is the next step).` }]);
+          const kind = arg === "ollama" || arg === "llama-server" ? arg : undefined;
+          const filtered = kind ? servers.filter((s) => s.kind === kind) : servers;
+          if (!filtered.length) {
+            setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `No ${kind} servers found (${servers.length} server(s) of other kinds were).` }]);
+            break;
+          }
+          // Hand the results to an interactive picker: pick a server, then its
+          // model, and switch the live session to it — no hand-typed endpoint.
+          setScanPicker({ stage: "server", servers: filtered, idx: 0 });
         } catch (err) {
           setErrorLine(`Scan failed: ${err instanceof Error ? err.message : String(err)}`);
         } finally {
@@ -2032,6 +2060,43 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
       if (input2 && !key.ctrl && !key.meta) {
         const clean = input2.replace(/[\x00-\x1f\x7f]/g, "");
         if (clean) setConsultPicker({ ...cp, query: cp.query + clean, idx: 0 });
+      }
+      return; // swallow everything else while picking
+    }
+    // /scan picker — stage 1 picks a discovered server, stage 2 its model.
+    if (scanPicker) {
+      const sp = scanPicker;
+      if (sp.stage === "server") {
+        if (key.upArrow) { setScanPicker({ ...sp, idx: Math.max(0, sp.idx - 1) }); return; }
+        if (key.downArrow) { setScanPicker({ ...sp, idx: Math.min(sp.servers.length - 1, sp.idx + 1) }); return; }
+        if (key.return) {
+          const server = sp.servers[sp.idx];
+          if (!server) { setScanPicker(null); return; }
+          if (server.models.length) setScanPicker({ stage: "model", servers: sp.servers, server, all: server.models, query: "", idx: 0 });
+          else { setScanPicker(null); applyDiscoveredServer(server, ""); } // no model list → switch, /model later
+          return;
+        }
+        if (key.escape) { setScanPicker(null); return; }
+        return; // swallow everything else
+      }
+      // stage "model" — type to filter; Enter switches; Esc goes back to the list.
+      const filtered = searchModels(sp.all, sp.query);
+      if (key.upArrow) { setScanPicker({ ...sp, idx: Math.max(0, sp.idx - 1) }); return; }
+      if (key.downArrow) { setScanPicker({ ...sp, idx: Math.min(filtered.length - 1, sp.idx + 1) }); return; }
+      if (key.return) {
+        const sel = filtered[Math.min(sp.idx, filtered.length - 1)];
+        setScanPicker(null);
+        if (sel) applyDiscoveredServer(sp.server, sel);
+        return;
+      }
+      if (key.escape) { setScanPicker({ stage: "server", servers: sp.servers, idx: Math.max(0, sp.servers.indexOf(sp.server)) }); return; }
+      if (key.backspace || key.delete || (input2 && /^[\x08\x7f]+$/.test(input2))) {
+        setScanPicker({ ...sp, query: sp.query.slice(0, -1), idx: 0 });
+        return;
+      }
+      if (input2 && !key.ctrl && !key.meta) {
+        const clean = input2.replace(/[\x00-\x1f\x7f]/g, "");
+        if (clean) setScanPicker({ ...sp, query: sp.query + clean, idx: 0 });
       }
       return; // swallow everything else while picking
     }
@@ -2314,6 +2379,50 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
             );
           })()}
           <Text dimColor>  type to filter · ↑/↓ select · Enter consult · Esc cancel</Text>
+        </Box>
+      ) : scanPicker && scanPicker.stage === "server" ? (
+        <Box flexDirection="column" borderStyle="round" borderColor={theme.user} paddingX={1} marginTop={1}>
+          <Text bold color={theme.user}>🔎 Discovered servers — pick one</Text>
+          {scanPicker.servers.map((s, i) => {
+            const sel = i === scanPicker.idx;
+            const models = s.models.slice(0, 4).join(", ") + (s.models.length > 4 ? `, +${s.models.length - 4}` : "");
+            const ctx = s.contextLength ? ` · ${s.contextLength.toLocaleString()} ctx` : "";
+            const current = s.baseUrl === config.baseUrl;
+            return (
+              <Text key={s.endpoint} color={sel ? theme.user : undefined} dimColor={!sel}>
+                {sel ? "❯ " : "  "}{s.kind} · {s.endpoint}{ctx}{current ? " (current)" : ""}  <Text dimColor>({s.models.length}: {models || "n/a"})</Text>
+              </Text>
+            );
+          })}
+          <Text dimColor>  ↑/↓ select · Enter choose · Esc cancel</Text>
+        </Box>
+      ) : scanPicker && scanPicker.stage === "model" ? (
+        <Box flexDirection="column" borderStyle="round" borderColor={theme.user} paddingX={1} marginTop={1}>
+          <Text bold color={theme.user}>🔎 Model on {scanPicker.server.endpoint}</Text>
+          <Text>
+            <Text dimColor>search </Text>
+            <Text color={theme.user}>{scanPicker.query}</Text>
+            <Text inverse> </Text>
+          </Text>
+          {(() => {
+            const sp = scanPicker;
+            const filtered = searchModels(sp.all, sp.query);
+            if (!filtered.length) return <Text color={theme.hex.warning}>  no models match “{sp.query}”</Text>;
+            const idx = Math.min(sp.idx, filtered.length - 1);
+            const { slice, offset } = pickerWindow(filtered, idx, 12);
+            const tail = filtered.length - offset - slice.length;
+            return (
+              <>
+                {offset > 0 && <Text dimColor>{`  ↑ ${offset} more`}</Text>}
+                {slice.map((m, i) => {
+                  const sel = offset + i === idx;
+                  return <Text key={m} color={sel ? theme.user : undefined} dimColor={!sel}>{sel ? "❯ " : "  "}{m}</Text>;
+                })}
+                {tail > 0 && <Text dimColor>{`  ↓ ${tail} more`}</Text>}
+              </>
+            );
+          })()}
+          <Text dimColor>  type to filter · ↑/↓ select · Enter switch · Esc back</Text>
         </Box>
       ) : modelPicker ? (
         <Box flexDirection="column" borderStyle="round" borderColor={theme.user} paddingX={1} marginTop={1}>
