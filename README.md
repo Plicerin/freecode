@@ -2,6 +2,8 @@
 
 **Total freedom. No guesswork.**
 
+> **Project status (2026-06-13): paused / handover.** The harness works end-to-end with a capable model — verified live: Opus 4.1 drove a full Tauri build to shippable installers. The open problem is whether a *local* model can drive it on complex agentic tasks; that's unproven, and the most promising local setups (a coder model via `llama-server --jinja`, or devstral) were never fairly tested. See **[HANDOVER.md](HANDOVER.md)** for the honest state, known issues, and the experiment that would settle it.
+
 freecode is a universal AI execution layer built for correctness. It runs any model from any provider and validates its own outputs by default — a consistent, trustworthy interface for AI development, without vendor lock-in or manual verification overhead.
 
 REPL + headless. Multi-LLM, multi-tool. Drop-in Claude Code with the Anthropic lock-in removed. Bun runtime.

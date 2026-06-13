@@ -2,7 +2,9 @@
 
 **Benchmark:** Anthropic Claude Code v2.1.x (feature surface from its public CHANGELOG).
 **Method:** diff of Claude Code's authoritative feature surface against freecode's *verified* current state. The official repo is docs/changelog only, so this tracks features, not source.
-**Date:** 2026-06-04 · **last updated:** 2026-06-10
+**Date:** 2026-06-04 · **last updated:** 2026-06-13
+
+> **2026-06-13 — project paused / handover.** Parity work below is accurate as of HEAD `c92ae08`. The blocker that stopped the project is not a parity gap — it's that local-model agentic coding hits a capability ceiling the harness can't paper over. Roadmap is on hold pending the local-model experiment in **[HANDOVER.md](HANDOVER.md)**.
 
 Pursued in stages. "Done" is per-item and checkable — never a single blanket "are we at parity" gate.
 
