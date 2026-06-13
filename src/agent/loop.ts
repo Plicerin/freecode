@@ -8,7 +8,7 @@ import { toolListToSystemPrompt } from "../tools/registry";
 import { ContextTracker } from "./context";
 import { estimateMessagesTokens, trimToFit } from "./token-estimate";
 import { overclaimWarning } from "./overclaim";
-import { looksLikeTextToolCall, announcedNextActionWithoutCalling } from "./text-tool-call";
+import { looksLikeTextToolCall, announcedNextActionWithoutCalling, recoverTextToolCall } from "./text-tool-call";
 import { parseImageLimit, capImagesTo, countImages } from "./image-cap";
 import { getEnv } from "../utils/env";
 import { summarizeConversation } from "./summarize";
@@ -291,6 +291,19 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
       opts.onEvent({ type: "compacted", text: `${opts.model} accepts at most ${limit} image(s) per request — kept the most recent ${Math.min(limit, had)}, dropped ${Math.max(0, had - limit)}, and retried.` });
       // loop retries the stream with the capped request
      }
+    }
+
+    // Recover a tool call the model emitted as JSON TEXT when the provider
+    // returned NO structured tool_calls (common with local servers whose chat
+    // template doesn't wrap calls — the model said the right thing, the server
+    // just didn't parse it). Route it through the normal permission + schema path
+    // below, and announce it — never run a recovered call silently.
+    if (!sawError && turnToolCalls.length === 0 && turnText.trim()) {
+      const recovered = recoverTextToolCall(turnText, tools.map((t) => t.name));
+      if (recovered) {
+        turnToolCalls = [{ id: `recovered-${Date.now()}`, name: recovered.name, arguments: recovered.arguments }];
+        opts.onEvent({ type: "compacted", text: `Recovered a ${recovered.name} call the model emitted as text (the server didn't return it as a structured tool call) — running it.` });
+      }
     }
 
     messages.push({ role: "assistant", content: turnText, toolCalls: turnToolCalls });
