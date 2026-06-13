@@ -12,6 +12,7 @@ import { WebFetchTool } from "./web-fetch";
 import { ViewImageTool } from "./view-image";
 import { SkillTool } from "./skill";
 import { resolveSkills, skillsIndex } from "../agent/skills";
+import { detectEnvironment, environmentLines } from "../agent/environment";
 
 export interface RegistryOptions {
   bash?: BashToolOptions;
@@ -107,10 +108,7 @@ export function toolListToSystemPrompt(tools: Tool[]): string {
     "- When scope is genuinely ambiguous, ask one sharp question instead of guessing. When you're blocked or a step fails, say so plainly with the real error — never paper over a failure or claim progress you didn't make.",
     "- Be concise and concrete. Lead with the answer, reference code as `path:line`, and show real tool output instead of describing it. Skip preamble, filler, and flattery.",
     "",
-    `Environment:`,
-    `- Operating system: ${platform}`,
-    `- Shell (the Bash tool executes commands here): ${shell}`,
-    `- Current working directory: ${cwd}`,
+    ...environmentLines(detectEnvironment(cwd), platform, shell),
     "",
     "Available tools:",
   ];
