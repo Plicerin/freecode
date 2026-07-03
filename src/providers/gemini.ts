@@ -15,6 +15,14 @@ function stripUnsupported(schema: Record<string, unknown>): Record<string, unkno
       const rec = o as Record<string, unknown>;
       delete rec.additionalProperties;
       delete rec.$schema;
+      // Gemini's schema dialect (an OpenAPI subset) has no exclusive* keywords —
+      // approximate them with the inclusive bound it DOES support so a constraint
+      // from .positive()/.gt()/.lt() still guides the model instead of 400-ing the
+      // request on an unknown keyword.
+      if ("exclusiveMinimum" in rec && !("minimum" in rec)) rec.minimum = rec.exclusiveMinimum;
+      if ("exclusiveMaximum" in rec && !("maximum" in rec)) rec.maximum = rec.exclusiveMaximum;
+      delete rec.exclusiveMinimum;
+      delete rec.exclusiveMaximum;
       for (const k of Object.keys(rec)) walk(rec[k]);
     }
   };

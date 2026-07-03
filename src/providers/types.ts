@@ -48,6 +48,12 @@ export interface ChatRequest {
   system?: string;
   messages: ChatMessage[];
   tools?: ToolDefinition[];
+  /** Force the model to emit a tool call this turn instead of free text.
+   *  "required" = must call some tool; "auto" (default when unset) = model
+   *  decides. Used by the loop to compel action when a model narrated a next
+   *  step but didn't call the tool. Honored by servers with tool-call support
+   *  (OpenAI, llama.cpp with --jinja); ignored as a no-op by those without. */
+  toolChoice?: "auto" | "required";
   maxTokens?: number;
   temperature?: number;
   stream?: boolean;

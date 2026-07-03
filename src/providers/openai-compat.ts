@@ -34,6 +34,19 @@ const DEFAULT_OPTIONS: Omit<OpenAICompatOptions, "baseUrl" | "providerName" | "d
   supportsThinking: false,
 };
 
+const LOCAL_PROVIDER_IDS = new Set(["ollama", "llama-server", "lmstudio"]);
+
+/** The "stream timed out" message, tailored to the provider kind. A local model
+ *  server fails differently than a cloud API: no rate limits — it accepted the
+ *  request but is usually overloaded or out of VRAM (a large context on a full
+ *  GPU makes the first token take 30s+), so we name THAT cause instead of
+ *  offering cloud-only ones the user can't act on. */
+export function streamTimeoutMessage(id: string, providerName: string, model: string, baseUrl: string): string {
+  return LOCAL_PROVIDER_IDS.has(id)
+    ? `${providerName} accepted the request but didn't stream a response in time from "${model}". A local model server usually stalls like this when it's overloaded or out of VRAM: a large context window on a full GPU makes the first token take 30s+. Try a smaller context (e.g. num_ctx 16384), a leaner/lower-quant model, or free GPU memory — then confirm the model is actually served at ${baseUrl}.`
+    : `${providerName} stream timed out — no response from "${model}". Common causes: a hit rate/daily usage limit, the backend is stalled or at capacity, or the model isn't served on ${baseUrl}. (Over-quota requests often hang silently rather than returning an error.)`;
+}
+
 interface ChatCompletionChunk {
   choices?: Array<{
     delta?: {
@@ -43,7 +56,7 @@ interface ChatCompletionChunk {
       reasoning_content?: string | null;
       reasoning?: string | null;
       tool_calls?: Array<{
-        index: number;
+        index?: number; // OpenAI always sends it; some local servers omit it
         id?: string;
         function?: { name?: string; arguments?: string };
       }>;
@@ -55,6 +68,9 @@ interface ChatCompletionChunk {
     completion_tokens?: number;
     cached_tokens?: number;
   };
+  // Some servers stream an error object AFTER a 200 header (rate limit hit,
+  // backend OOM). Shape varies; we only read a message out of it.
+  error?: { message?: string } | string;
 }
 
 export class OpenAICompatProvider implements Provider {
@@ -142,6 +158,13 @@ export class OpenAICompatProvider implements Provider {
         type: "function",
         function: { name: t.name, description: t.description, parameters: t.parameters ?? zodToJsonSchema(t.schema) },
       }));
+      // Tool-call enforcement (Layer 1): when the caller demands a call — the loop
+      // re-issuing after the model narrated a step instead of running it — pass
+      // tool_choice. Standard OpenAI; llama.cpp honors it when launched with
+      // --jinja, and servers without tool-call support ignore it (a no-op). The
+      // stronger, --jinja-independent constraint (a grammar / json_schema that
+      // forces valid tool-call JSON at the decoder, then parsed) layers on top.
+      if (req.toolChoice) body.tool_choice = req.toolChoice;
     }
     debug.log("openai-compat request", { url, model: req.model, provider: this.id });
     // Idle watchdog: abort if the stream goes silent. A SHORT first-byte ceiling
@@ -151,7 +174,7 @@ export class OpenAICompatProvider implements Provider {
     const firstByteMs = streamFirstByteMs();
     const watchdog = createStallTimeout(req.signal, idleMs, firstByteMs);
     const timeoutError = (): Error =>
-      makeError(this.id, `${this.opts.providerName} stream timed out — no response from "${req.model}". Common causes: a hit rate/daily usage limit, the backend is stalled or at capacity, or the model isn't served on ${this.baseUrl}. (Over-quota requests often hang silently rather than returning an error.)`, "timeout", true);
+      makeError(this.id, streamTimeoutMessage(this.id, this.opts.providerName, req.model, this.baseUrl), "timeout", true);
     let resp: Response;
     try {
       resp = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal: watchdog.signal });
@@ -171,7 +194,10 @@ export class OpenAICompatProvider implements Provider {
     const decoder = new TextDecoder();
     let buffer = "";
     let finishReason: string | undefined;
-    const toolAcc = new Map<number, { id?: string; name?: string; args: string }>();
+    let currentKey: string | undefined; // last-touched tool-call slot (for deltas that omit index/id)
+    const toolAcc = new Map<string, { id?: string; name?: string; args: string }>();
+    const providerId = this.id;
+    const providerName = this.opts.providerName;
     const endReason = (): "end_turn" | "max_tokens" | "tool_use" =>
       finishReason === "length" ? "max_tokens" : finishReason === "tool_calls" ? "tool_use" : "end_turn";
     // Flush accumulated tool calls — MUST run on BOTH stream-end paths: the
@@ -182,15 +208,73 @@ export class OpenAICompatProvider implements Provider {
     // toolAcc so the post-loop flush is a no-op once `[DONE]` has handled it.
     const flushToolCalls = (): StreamEvent[] => {
       const out: StreamEvent[] = [];
+      let n = 0;
       for (const tc of toolAcc.values()) {
-        if (tc.id && tc.name) {
+        // A call needs a NAME to dispatch; an absent id does NOT justify dropping
+        // it — minimal servers stream name+arguments with no id — so synthesize
+        // one. (Previously `tc.id && tc.name` silently discarded id-less calls.)
+        if (tc.name) {
           let args: Record<string, unknown> = {};
           try { args = JSON.parse(tc.args || "{}"); } catch { args = {}; }
-          out.push({ type: "tool_call", call: { id: tc.id, name: tc.name, arguments: args } });
+          out.push({ type: "tool_call", call: { id: tc.id || `call_${tc.name}_${n}`, name: tc.name, arguments: args } });
         }
+        n++;
       }
       toolAcc.clear();
       return out;
+    };
+
+    // Process one SSE `data:` payload (caller strips the prefix and handles
+    // `[DONE]`/empty). A generator so it can yield events while accumulating tool
+    // calls in the closed-over state — reused for both the streaming loop and the
+    // final leftover-buffer pass at EOF.
+    const processData = function* (data: string): Generator<StreamEvent> {
+      let chunk: ChatCompletionChunk;
+      try { chunk = JSON.parse(data); } catch { return; }
+      // A server can stream an error object AFTER a 200 header (rate limit hit,
+      // backend OOM/at-capacity). It has no `choices`, so without this it's
+      // silently ignored and the turn ends as if the model just went quiet.
+      if (chunk.error) {
+        const m = typeof chunk.error === "string" ? chunk.error : chunk.error.message;
+        yield { type: "error", error: makeError(providerId, `${providerName} returned an error mid-stream: ${m || "(no message)"}`, "server_error") };
+        return;
+      }
+      const choice = chunk.choices?.[0];
+      // Reasoning channel (gpt-oss et al.) — surfaced as thinking, kept out of
+      // the answer text. Previously dropped entirely, so a reasoning model's
+      // work was invisible.
+      const reasoning = choice?.delta?.reasoning_content ?? choice?.delta?.reasoning;
+      if (reasoning) yield { type: "thinking_delta", delta: reasoning };
+      if (choice?.delta?.content) yield { type: "text_delta", delta: choice.delta.content };
+      if (choice?.delta?.tool_calls) {
+        for (const tc of choice.delta.tool_calls) {
+          // Key a delta to its call: by `index` (the standard), else by `id`
+          // (parallel calls a server streams WITHOUT an index — keying them all
+          // to `undefined` merged them into one with concatenated, invalid args),
+          // else append to the current call (an args-only continuation delta that
+          // carries neither).
+          const key = tc.index != null ? `i${tc.index}` : tc.id ? `d${tc.id}` : (currentKey ?? "i0");
+          currentKey = key;
+          const acc = toolAcc.get(key) ?? { args: "" };
+          if (tc.id) acc.id = tc.id;
+          if (tc.function?.name) acc.name = tc.function.name;
+          if (tc.function?.arguments) acc.args += tc.function.arguments;
+          toolAcc.set(key, acc);
+        }
+      }
+      // Remember WHY generation stopped — "length" means the reply was cut off at
+      // the token cap (a truncated tool call then parses to nothing, and the turn
+      // looks "done" when it wasn't).
+      if (choice?.finish_reason) finishReason = choice.finish_reason;
+      if (chunk.usage) {
+        yield { type: "usage", usage: {
+          input: chunk.usage.prompt_tokens ?? 0,
+          output: chunk.usage.completion_tokens ?? 0,
+          cacheRead: chunk.usage.cached_tokens ?? 0,
+          cacheWrite: 0,
+          thinking: 0,
+        } };
+      }
     };
 
     try {
@@ -217,55 +301,24 @@ export class OpenAICompatProvider implements Provider {
           return;
         }
         if (!data) continue;
-        let chunk: ChatCompletionChunk;
-        try {
-          chunk = JSON.parse(data);
-        } catch {
-          continue;
-        }
-        const choice = chunk.choices?.[0];
-        // Reasoning channel (gpt-oss et al.) — surfaced as thinking, kept out of
-        // the answer text. Previously dropped entirely, so a reasoning model's
-        // work was invisible.
-        const reasoning = choice?.delta?.reasoning_content ?? choice?.delta?.reasoning;
-        if (reasoning) {
-          yield { type: "thinking_delta", delta: reasoning };
-        }
-        if (choice?.delta?.content) {
-          yield { type: "text_delta", delta: choice.delta.content };
-        }
-        if (choice?.delta?.tool_calls) {
-          for (const tc of choice.delta.tool_calls) {
-            const acc = toolAcc.get(tc.index) ?? { args: "" };
-            if (tc.id) acc.id = tc.id;
-            if (tc.function?.name) acc.name = tc.function.name;
-            if (tc.function?.arguments) acc.args += tc.function.arguments;
-            toolAcc.set(tc.index, acc);
-          }
-        }
-        if (choice?.finish_reason) {
-          // Remember WHY generation stopped — "length" means the reply was cut
-          // off at the token cap (a truncated tool call then parses to nothing,
-          // and the turn looks "done" when it wasn't).
-          finishReason = choice.finish_reason;
-        }
-        if (chunk.usage) {
-          const usage: TokenUsage = {
-            input: chunk.usage.prompt_tokens ?? 0,
-            output: chunk.usage.completion_tokens ?? 0,
-            cacheRead: chunk.usage.cached_tokens ?? 0,
-            cacheWrite: 0,
-            thinking: 0,
-          };
-          yield { type: "usage", usage };
-        }
+        yield* processData(data);
       }
     }
     } finally {
       watchdog.clear();
     }
-    // Stream closed without a `[DONE]` sentinel — flush any tool call we'd
-    // otherwise drop (the bug that made the model "stop" mid-task on some Ollama).
+    // Flush the decoder and process any final line still in `buffer`: a server
+    // that closes the stream right after its last `data:` line — WITHOUT a
+    // trailing newline or `[DONE]` — strands it here, and it may carry the final
+    // tool call or finish_reason. Without this pass those are silently lost.
+    buffer += decoder.decode();
+    for (const line of buffer.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("data:")) continue;
+      const data = trimmed.slice(5).trim();
+      if (!data || data === "[DONE]") continue;
+      yield* processData(data);
+    }
     yield* flushToolCalls();
     yield { type: "end", reason: endReason() };
   }

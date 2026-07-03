@@ -16,7 +16,7 @@ export function grepTimeoutMs(): number {
 }
 
 const ArgsSchema = z.object({
-  pattern: z.string().min(1),
+  pattern: z.string().min(1).describe("Regex to search for INSIDE files (required, non-empty). This is a content search — to list/find files by name or extension, use Glob instead, not an empty pattern here."),
   path: z.string().optional(),
   glob: z.string().optional(),
   ignoreCase: z.boolean().optional(),
