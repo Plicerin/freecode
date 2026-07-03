@@ -72,6 +72,21 @@ describe("first-byte ceiling (dead-model fast-fail)", () => {
     }
   });
 
+  test("a LOCAL provider gets a roomier first-byte ceiling than cloud (cold model load)", () => {
+    const prev = process.env.FREECODE_STREAM_FIRST_BYTE_MS;
+    try {
+      delete process.env.FREECODE_STREAM_FIRST_BYTE_MS;
+      expect(streamFirstByteMs(true)).toBe(120_000);  // local: room to reload a multi-GB model
+      expect(streamFirstByteMs(false)).toBe(60_000);  // cloud first-bytes in <1s
+      process.env.FREECODE_STREAM_FIRST_BYTE_MS = "5000";
+      expect(streamFirstByteMs(true)).toBe(5000);     // explicit override wins for both
+      expect(streamFirstByteMs(false)).toBe(5000);
+    } finally {
+      if (prev === undefined) delete process.env.FREECODE_STREAM_FIRST_BYTE_MS;
+      else process.env.FREECODE_STREAM_FIRST_BYTE_MS = prev;
+    }
+  });
+
   test("aborts at the SHORT first-byte ceiling when nothing ever streams", async () => {
     const w = createStallTimeout(undefined, 10_000 /* idle */, 50 /* firstByte */);
     await sleep(110);

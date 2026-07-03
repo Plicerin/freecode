@@ -5,9 +5,9 @@ import type { Tool } from "./types";
 import { structuredWriteError } from "./structured-validate";
 
 const ArgsSchema = z.object({
-  path: z.string().min(1),
-  content: z.string(),
-  createDirs: z.boolean().optional(),
+  path: z.string().min(1).describe("Path of the file to write (created if missing, OVERWRITTEN in full if it exists). Prefer FileEdit for changing part of an existing file."),
+  content: z.string().describe("The COMPLETE new file contents. This replaces the whole file — include everything, not just the changed lines."),
+  createDirs: z.boolean().describe("Create any missing parent directories for `path`.").optional(),
 });
 
 export const FileWriteTool: Tool<z.infer<typeof ArgsSchema>> = {

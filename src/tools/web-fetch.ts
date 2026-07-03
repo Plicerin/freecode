@@ -3,8 +3,8 @@ import { z } from "zod";
 import type { Tool } from "./types";
 
 const ArgsSchema = z.object({
-  url: z.string().url(),
-  maxBytes: z.number().int().positive().max(5_000_000).optional(),
+  url: z.string().url().describe("Absolute URL including the scheme, e.g. https://example.com/page. A bare host or search phrase is rejected."),
+  maxBytes: z.number().int().positive().max(5_000_000).describe("Cap on bytes fetched before truncating (avoids blowing the context window on huge pages).").optional(),
 });
 
 const td = new TurndownService({ headingStyle: "atx", codeBlockStyle: "fenced" });

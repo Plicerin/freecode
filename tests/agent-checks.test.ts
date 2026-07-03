@@ -20,6 +20,15 @@ describe("recognizeCheckCommand", () => {
       expect(recognizeCheckCommand(c)).not.toBeNull();
     }
   });
+  test("recognizes colon-scoped and hyphen-scoped workflow scripts (tauri use case)", () => {
+    // The case the handover flagged: `npm run tauri:build` is a real check for
+    // a Tauri app, broader than the strict verb dictionary.
+    for (const c of ["npm run tauri:build", "npm run build:prod", "pnpm test:unit",
+      "yarn run type-check:strict", "bun run lint:fix", "npm run coverage:unit",
+      "pnpm validate:configs"]) {
+      expect(recognizeCheckCommand(c)).not.toBeNull();
+    }
+  });
   test("rejects non-checks (dev servers, one-off scripts, reads)", () => {
     for (const c of ["npm run dev", "npm run start", "npm install", "git status",
       "ls -la", "node scripts/seed.js", "echo hi", "cat package.json", ""]) {
@@ -30,6 +39,7 @@ describe("recognizeCheckCommand", () => {
     expect(recognizeCheckCommand("cargo test --all-features")).toBe("cargo test");
     expect(recognizeCheckCommand("  GO TEST ./pkg/...  ")).toBe("go test");
     expect(recognizeCheckCommand("npm run build --workspace=web")).toBe("npm run build");
+    expect(recognizeCheckCommand("npm run tauri:build")).toBe("npm run tauri:build");
   });
 });
 

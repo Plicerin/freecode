@@ -171,7 +171,10 @@ export class OpenAICompatProvider implements Provider {
     // catches a request the endpoint accepts but never streams (a 2-minute hang
     // otherwise); a generous idle ceiling covers long mid-stream gaps.
     const idleMs = streamIdleMs();
-    const firstByteMs = streamFirstByteMs();
+    // Local model servers can cold-load a multi-GB model before the first token
+    // (Ollama unloads after its keep-alive), so they get a roomier first-byte
+    // ceiling than a hosted model that answers in <1s.
+    const firstByteMs = streamFirstByteMs(LOCAL_PROVIDER_IDS.has(this.id));
     const watchdog = createStallTimeout(req.signal, idleMs, firstByteMs);
     const timeoutError = (): Error =>
       makeError(this.id, streamTimeoutMessage(this.id, this.opts.providerName, req.model, this.baseUrl), "timeout", true);

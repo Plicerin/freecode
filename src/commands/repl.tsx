@@ -3,7 +3,7 @@ import type { JSX } from "react";
 import { Box, Static, Text, useApp, useInput } from "ink";
 import { loadConfig, type CliFlags } from "../config/loader";
 import { buildProvider } from "../providers/registry";
-import { detectLocalModels, detectServerKind, detectLlamaServerContext } from "../providers/local-context";
+import { detectLocalModels, detectServerKind, detectLlamaServerContext, detectOllamaContext } from "../providers/local-context";
 import { discoverServers, type DiscoveredServer } from "../providers/server-discovery";
 import { zodToJsonSchema } from "../providers/schema-util";
 import { buildToolRegistry, toolListToSystemPrompt } from "../tools/registry";
@@ -35,7 +35,7 @@ import { Vault } from "../config/vault";
 import { loadCustomCommands, expandCommand } from "./custom-commands";
 import { executeBench, formatBenchPlain } from "./bench";
 import { previewToolResult } from "../tui/preview";
-import { type Confidence, nextConfidence } from "../tui/confidence";
+import { type Confidence, nextConfidence, attachWarning } from "../tui/confidence";
 import { MarkdownBody } from "../tui/markdown-render";
 import { BRACKET_PASTE_ON, BRACKET_PASTE_OFF, hasPasteStart, pastePlaceholder, expandPastes, shouldCollapse } from "../tui/paste";
 import { tokensPerSecond, estTokens, formatSpeed, streamHealth } from "../tui/speed";
@@ -77,6 +77,12 @@ interface UiMessage {
   text: string;
   toolName?: string;
   ok?: boolean;
+  // Sidecar warning attached to an ASSISTANT bubble by attachWarning in
+  // src/tui/confidence.ts. Rendered as a round-bordered block IMMEDIATELY
+  // below the assistant prose so the contradiction-guard / overclaim
+  // caution reads as PART OF the turn (not a post-script line dropped at
+  // bottom). The renderer in MessageLine is the only consumer.
+  warning?: string;
 }
 
 /** Rebuild the visible transcript from a session's stored events for /resume.
@@ -336,7 +342,24 @@ function MessageLine({ m, theme }: { m: UiMessage; theme: ReturnType<typeof make
   // Assistant output gets markdown-aware rendering: fenced code blocks are
   // syntax-highlighted and inline `code` is coloured (instead of flat white).
   if (m.role === "assistant") {
-    return <MarkdownBody text={m.text} theme={theme} marker={<Text color={theme.hex.assistant}>● </Text>} />;
+    // attachWarning (confidence.ts) plants a `m.warning` sidecar here when
+    // the contradiction-guard / overclaim-guard fired for this turn. Paint
+    // it as a round amber-bordered block IMMEDIATELY below the prose — same
+    // logical turn, NOT a post-script line dropped at the transcript end.
+    // marginTop={1} gives breathing room between the markdown and the block;
+    // round corners + warning-color border echo the approval-prompt surface
+    // (same visual language for "stop and look at this").
+    if (!m.warning) {
+      return <MarkdownBody text={m.text} theme={theme} marker={<Text color={theme.hex.assistant}>● </Text>} />;
+    }
+    return (
+      <Box flexDirection="column">
+        <MarkdownBody text={m.text} theme={theme} marker={<Text color={theme.hex.assistant}>● </Text>} />
+        <Box borderStyle="round" borderColor={theme.hex.warning} paddingX={1} marginTop={1}>
+          <Text color={theme.hex.warning} bold>{"⚠ "}{m.warning}</Text>
+        </Box>
+      </Box>
+    );
   }
   if (m.role === "warning") {
     return <Text color={theme.hex.warning} bold>{"⚠ "}{m.text}</Text>;
@@ -674,6 +697,27 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config.provider, config.baseUrl, model]);
 
+  // Ollama has no per-model API like LM Studio, but /api/ps reports the num_ctx a
+  // model is actually LOADED with — often far below the name-based guess (a qwen
+  // name → 128k while it's loaded at 65k). Size the context meter + compaction to
+  // that. Keyed on `busy` too because Ollama loads the model lazily on the first
+  // request, so the real size isn't known until a turn has hit it once; re-reading
+  // when the turn ends (busy→idle) catches it. Cheap and idempotent.
+  useEffect(() => {
+    if (config.provider !== "ollama" || busy) return;
+    let cancelled = false;
+    (async () => {
+      const win = await detectOllamaContext(config.baseUrl, model);
+      if (cancelled || !win || detectedWindowRef.current === win) return;
+      detectedWindowRef.current = win;
+      trackerRef.current.setWindow(win);
+      setCtxFill(trackerRef.current.contextFill());
+      debug.log(`ollama /api/ps: ${win}-token context for "${model}"`);
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config.provider, config.baseUrl, model, busy]);
+
   // When the app is idle (no turn running, no approval pending), every message
   // is final — flush them all to <Static>. During a turn `settled` is frozen,
   // so the streaming lines render in the dynamic region and the input holds.
@@ -985,9 +1029,20 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
             if (L.verified.length) lines.push(`✓ verified  ${L.verified.join("; ")}`);
             if (L.observed.length) lines.push(`· observed  ${L.observed.join("; ")}`);
             if (L.believed.length) lines.push(`~ believed  ${L.believed.join("; ")}`);
-            if (lines.length) setMessages((prev) => [...prev, { id: `led-${Date.now()}-${prev.length}`, role: "ledger", text: lines.join("\n") }]);
-            // Loud, non-dim caution when a success claim isn't backed by evidence.
-            if (L.warning) setMessages((prev) => [...prev, { id: `warn-${Date.now()}-${prev.length}`, role: "warning", text: L.warning! }]);
+            // Sidecar the contradiction-guard / overclaim warning onto the FINAL
+            // assistant bubble (via attachWarning) instead of letting it float
+            // post-loop at the bottom of the transcript. The renderer paints
+            // it as a round amber-bordered block below the assistant prose in
+            // the same React subtree — visually part of the turn, not a post-
+            // script line. (See MessageLine's assistant branch.)
+            setMessages((prev) => {
+              let next = prev;
+              if (lines.length) next = [...next, { id: `led-${Date.now()}-${next.length}`, role: "ledger", text: lines.join("\n") }];
+              if (L.warning) {
+                next = attachWarning(next, L.warning);
+              }
+              return next;
+            });
           } else if (e.type === "error" && e.error) {
             setErrorLine(e.error);
           }
@@ -2286,7 +2341,9 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
       >
         {(item) =>
           item.kind === "intro" ? (
-            <Intro key={item.key} provider={config.provider} model={model} endpoint={endpoint} isLocal={isLocal} providerNote={providerReason(config.provider, config.source.provider)} hasKey={!!config.apiKey} theme={theme} />
+            <Box key={item.key} paddingX={1}>
+              <Intro provider={config.provider} model={model} endpoint={endpoint} isLocal={isLocal} providerNote={providerReason(config.provider, config.source.provider)} hasKey={!!config.apiKey} theme={theme} />
+            </Box>
           ) : (
             <Box key={item.key} paddingX={1}>
               <MessageLine m={item.m} theme={theme} />

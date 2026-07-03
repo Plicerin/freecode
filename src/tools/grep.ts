@@ -17,12 +17,12 @@ export function grepTimeoutMs(): number {
 
 const ArgsSchema = z.object({
   pattern: z.string().min(1).describe("Regex to search for INSIDE files (required, non-empty). This is a content search — to list/find files by name or extension, use Glob instead, not an empty pattern here."),
-  path: z.string().optional(),
-  glob: z.string().optional(),
-  ignoreCase: z.boolean().optional(),
-  showLineNumbers: z.boolean().optional(),
-  maxResults: z.number().int().positive().max(5000).optional(),
-  contextLines: z.number().int().min(0).max(50).optional(),
+  path: z.string().describe("WHERE to search — a directory or single file (defaults to the working directory). Not a filename filter; use `glob` for that.").optional(),
+  glob: z.string().describe("Filter WHICH files to search by name, e.g. `**/*.ts` or `src/**`. The content match is `pattern`; this only narrows the file set.").optional(),
+  ignoreCase: z.boolean().describe("Case-insensitive match.").optional(),
+  showLineNumbers: z.boolean().describe("Prefix each match with its line number.").optional(),
+  maxResults: z.number().int().positive().max(5000).describe("Cap on matching lines returned.").optional(),
+  contextLines: z.number().int().min(0).max(50).describe("Lines of surrounding context to include around each match.").optional(),
 });
 
 type Args = z.infer<typeof ArgsSchema>;

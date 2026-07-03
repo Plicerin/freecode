@@ -2,10 +2,10 @@ import { z } from "zod";
 import type { Tool } from "./types";
 
 const ArgsSchema = z.object({
-  query: z.string().min(1),
-  maxResults: z.number().int().positive().max(20).optional(),
-  recencyDays: z.number().int().positive().optional(),
-  backend: z.enum(["duckduckgo", "tavily", "exa", "firecrawl"]).optional(),
+  query: z.string().min(1).describe("The search query (required, non-empty)."),
+  maxResults: z.number().int().positive().max(20).describe("Maximum results to return.").optional(),
+  recencyDays: z.number().int().positive().describe("Restrict results to the last N days.").optional(),
+  backend: z.enum(["duckduckgo", "tavily", "exa", "firecrawl"]).describe("Search provider. `duckduckgo` needs no key; `tavily`/`exa`/`firecrawl` require their API key to be configured or the call fails. Defaults to duckduckgo.").optional(),
 });
 
 export interface WebSearchOptions {

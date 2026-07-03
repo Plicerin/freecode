@@ -7,14 +7,14 @@ import { structuredWriteError } from "./structured-validate";
 
 const ArgsSchema = z.object({
   // Optional: a unified diff carries its own +++/--- path, so we can derive it.
-  path: z.string().min(1).optional(),
-  oldText: z.string().optional(),
-  newText: z.string().optional(),
-  replaceAll: z.boolean().optional(),
-  unifiedDiff: z.string().min(1).optional(),
+  path: z.string().min(1).describe("File to edit. Required UNLESS you pass a unified diff whose +++/--- header names the file.").optional(),
+  oldText: z.string().describe("Exact existing text to replace (include enough surrounding lines to be unique). Pair with `newText`. Alternative to a diff.").optional(),
+  newText: z.string().describe("Replacement text for `oldText`. Use \"\" to delete the matched text.").optional(),
+  replaceAll: z.boolean().describe("Replace every occurrence of `oldText` instead of requiring it to be unique.").optional(),
+  unifiedDiff: z.string().min(1).describe("A unified diff (--- / +++ / @@ hunks) to apply. Use INSTEAD of oldText/newText for multi-hunk edits.").optional(),
   // Models very commonly name the diff field `diff` — accept it as an alias
   // rather than rejecting a perfectly good patch on a naming nit.
-  diff: z.string().min(1).optional(),
+  diff: z.string().min(1).describe("Alias for `unifiedDiff` — a unified diff to apply.").optional(),
 }).refine((a) => (a.oldText !== undefined && a.newText !== undefined) || a.unifiedDiff || a.diff, {
   message: "Provide either (oldText + newText) or a unified diff",
 }).refine((a) => a.path !== undefined || a.unifiedDiff !== undefined || a.diff !== undefined, {

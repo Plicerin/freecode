@@ -19,15 +19,19 @@ export function streamIdleMs(): number {
   return Number.isFinite(n) && n > 0 ? n : 120_000;
 }
 
-/** Shorter ceiling for the FIRST byte specifically (connect + time-to-first-
- *  token). A healthy hosted model first-bytes in well under a second; a request
- *  that the endpoint accepts but never streams (e.g. a model not provisioned on
- *  the account, or a backend that stalls) would otherwise hang for the full idle
- *  window. 60s leaves room for a cold model load. */
-export function streamFirstByteMs(): number {
+/** Ceiling for the FIRST byte specifically (connect + time-to-first-token). A
+ *  request the endpoint accepts but never streams (a model not provisioned, a
+ *  stalled backend) would otherwise hang for the full idle window. A hosted model
+ *  first-bytes in well under a second, so 60s is plenty. But a LOCAL server
+ *  (Ollama/llama-server/LM Studio) may COLD-LOAD a multi-GB model from disk —
+ *  Ollama unloads after its keep-alive — before the first token, which is
+ *  legitimately 10-30s+ on modest hardware; give it a roomier 120s so a slow
+ *  reload isn't killed as a false "stall". An explicit env override wins for both. */
+export function streamFirstByteMs(local = false): number {
   const raw = getEnv("FREECODE_STREAM_FIRST_BYTE_MS");
   const n = raw ? Number(raw) : NaN;
-  return Number.isFinite(n) && n > 0 ? n : 60_000;
+  if (Number.isFinite(n) && n > 0) return n;
+  return local ? 120_000 : 60_000;
 }
 
 export interface StallTimeout {

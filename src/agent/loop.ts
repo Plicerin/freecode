@@ -7,8 +7,8 @@ import { debug } from "../utils/debug";
 import { toolListToSystemPrompt } from "../tools/registry";
 import { ContextTracker } from "./context";
 import { estimateMessagesTokens, trimToFit } from "./token-estimate";
-import { overclaimWarning } from "./overclaim";
-import { looksLikeTextToolCall, announcedNextActionWithoutCalling, recoverTextToolCall } from "./text-tool-call";
+import { overclaimWarning, editClaimWithoutChange } from "./overclaim";
+import { looksLikeTextToolCall, announcedNextActionWithoutCalling } from "./text-tool-call";
 import { parseImageLimit, capImagesTo, countImages } from "./image-cap";
 import { getEnv } from "../utils/env";
 import { summarizeConversation } from "./summarize";
@@ -106,6 +106,11 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
   let aborted = false;
   let lastTurnToolCalls = 0; // tool-call count of the most recent turn (outer scope)
   let producedText = false; // did the model say anything useful at all this run?
+  // Cold-load retry: a freshly-loaded local model (e.g. Ollama after a long
+  // idle) often returns an empty first turn (end_turn, no content); the
+  // immediate retry succeeds. Burn this once per run — a model that keeps
+  // coming back empty is stuck, and we want that surfaced, not papered over.
+  let coldStartRetryUsed = false;
   // Per-request image cap for models that reject >N images (learned from the
   // provider's own 400, then applied proactively for the rest of the session).
   let imageLimit: number | null = null;
@@ -293,19 +298,6 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
      }
     }
 
-    // Recover a tool call the model emitted as JSON TEXT when the provider
-    // returned NO structured tool_calls (common with local servers whose chat
-    // template doesn't wrap calls — the model said the right thing, the server
-    // just didn't parse it). Route it through the normal permission + schema path
-    // below, and announce it — never run a recovered call silently.
-    if (!sawError && turnToolCalls.length === 0 && turnText.trim()) {
-      const recovered = recoverTextToolCall(turnText, tools.map((t) => t.name));
-      if (recovered) {
-        turnToolCalls = [{ id: `recovered-${Date.now()}`, name: recovered.name, arguments: recovered.arguments }];
-        opts.onEvent({ type: "compacted", text: `Recovered a ${recovered.name} call the model emitted as text (the server didn't return it as a structured tool call) — running it.` });
-      }
-    }
-
     messages.push({ role: "assistant", content: turnText, toolCalls: turnToolCalls });
     lastTurnToolCalls = turnToolCalls.length;
 
@@ -328,6 +320,31 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
     else if (turnToolCalls.length === 0 && looksLikeTextToolCall(turnText)) {
       opts.onEvent({ type: "error", error: "⚠ The model wrote a tool call as TEXT (e.g. <function_calls>) instead of calling the tool — the provider isn't parsing this model's tool-call format into a structured call, so freecode can't run it. Use a model with provider-supported tool calling, or check the model's tool template/settings (common with some local models in LM Studio/Ollama)." });
     } else if (turnToolCalls.length === 0 && !turnText.trim() && !sawError && !producedText) {
+      // Cold-load retry (silent one-shot). A freshly-loaded local model
+      // (Ollama after a long idle, llama-server first hit) often returns an
+      // empty first turn; the immediate retry returns real output. Burned
+      // once per run — a model that keeps returning empty is stuck, not
+      // cold, and should surface. Doesn't bump the turn budget (transport
+      // blip, not model truncation). Only fires on a TRULY empty first
+      // attempt (no text, no tool call, no error, no previous text this run,
+      // signal still live) — anything else is a model response, not a load
+      // race.
+      if (!coldStartRetryUsed && !opts.signal?.aborted && !aborted) {
+        coldStartRetryUsed = true;
+        // INVARIANT: exactly ONE `messages.push({ role: "assistant", ... })`
+        // happens above this branch, immediately after the stream block closes,
+        // and no other code path between stream-end and here pushes an assistant
+        // message. Pop it so the retry reasons over the last REAL assistant turn,
+        // not this transport-blip ghost. If a future refactor adds another push
+        // between the stream block and this branch (e.g. an intermediate
+        // tool-result backfill), this pop will tear the wrong message and the
+        // retry will seesaw — audit stream-end → empty-turn branch as one unit
+        // before touching either.
+        messages.pop();
+        logActivity(`COLD-LOAD retry: ${opts.model} returned empty on first turn — re-issuing silently.`);
+        turns -= 1; // not a real turn
+        continue;
+      }
       // Only flag a TRULY empty run — not a benign empty turn after the model
       // already gave a real answer (which is just it having nothing more to add).
       opts.onEvent({ type: "error", error: "⚠ The model returned an empty response — the turn ended without text or a tool call. This is usually the model, not freecode." });
@@ -543,11 +560,16 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
       believed.push(`changed ${changedCount} file(s) without running checks — unverified`);
     }
 
-    // Overclaim guard: if the final reply asserts sweeping success but freecode
-    // confirmed no passing check (or one failed), say so loudly — a false green
-    // must not hide behind confident prose.
+    // Two complementary honesty guards. Overclaim catches a sweeping "all done"
+    // claim that the evidence doesn't back (no verification, or a failing check).
+    // The contradiction-guard catches a more specific lie: the final reply
+    // describes an edit ("I edited the file", "the config is updated") but the
+    // ledger shows zero files changed. Layered priority: overclaim wins (it's
+    // broader); contradiction only surfaces when no sweeping claim was made.
     const finalText = [...messages].reverse().find((m) => m.role === "assistant")?.content ?? "";
-    const warning = overclaimWarning(finalText, { changedCount, verifiedCount: verified.length, anyFailed }) ?? undefined;
+    const claimWarn = overclaimWarning(finalText, { changedCount, verifiedCount: verified.length, anyFailed });
+    const contradictWarn = editClaimWithoutChange(finalText, changedCount);
+    const warning = (claimWarn ?? contradictWarn) ?? undefined;
 
     if (observed.length || verified.length || believed.length || warning) {
       logActivity(`LEDGER verified=[${verified.join("; ")}] observed=[${observed.join("; ")}] believed=[${believed.join("; ")}]${warning ? ` warning=[${warning}]` : ""}`);
@@ -568,9 +590,17 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
 export function recognizeCheckCommand(raw: string): string | null {
   const cmd = raw.trim().toLowerCase();
   if (!cmd) return null;
-  // Package-manager script runs: npm/pnpm/yarn/bun [run] <build|test|typecheck|lint|check|verify|tsc>
-  const pm = /\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:build|test|typecheck|type-check|lint|check|verify|tsc)\b/.exec(cmd);
-  if (pm) return pm[0];
+  // Package-manager script runs: npm/pnpm/yarn/bun [run] <known-check>. Also
+  // covers scoped workflows like `npm run build:prod` and `tauri:build` —
+  // a Tauri app's npm-script that the strict dictionary missed.
+  const KNOWN_CHECK = "build|test|typecheck|type-check|lint|check|verify|tsc|compile|bundle|package|audit|validate|coverage";
+  // Known check verb, with optional :suffix or -suffix (e.g. build:prod, type-check:strict).
+  const pm = new RegExp(`\\b(?:npm|pnpm|yarn|bun)\\s+(?:run\\s+)?(?:${KNOWN_CHECK})(?:[:-][a-z0-9_-]+)?\\b`).exec(cmd);
+  if (pm) return pm[0].trim();
+  // <workflow>:<check> (e.g. tauri:build, workspace:test). Subject prefix is
+  // any word — guarded by the known check-verb suffix on the right side.
+  const wfColon = new RegExp(`\\b(?:npm|pnpm|yarn|bun)\\s+(?:run\\s+)?\\w+[:-](?:${KNOWN_CHECK})\\b`).exec(cmd);
+  if (wfColon) return wfColon[0].trim();
   // Bare tools / runners.
   if (/(^|\s)tsc(\s|$)/.test(cmd)) return "tsc";
   if (/\b(vitest|jest|playwright|mocha|ava)\b/.test(cmd)) return "tests";

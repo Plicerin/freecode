@@ -12,18 +12,18 @@ export function globTimeoutMs(): number {
 }
 
 const ArgsSchema = z.object({
-  pattern: z.string().min(1),
-  cwd: z.string().optional(),
-  ignore: z.array(z.string()).optional(),
-  dot: z.boolean().optional(),
-  onlyFiles: z.boolean().optional(),
-  onlyDirs: z.boolean().optional(),
-  limit: z.number().int().positive().max(10_000).optional(),
+  pattern: z.string().min(1).describe("A GLOB over file PATHS, e.g. `**/*.ts`, `src/**`, `*.json` — NOT a regex. Matches filenames/paths; to search file CONTENTS use Grep instead."),
+  cwd: z.string().describe("Directory to glob from (defaults to the working directory).").optional(),
+  ignore: z.array(z.string()).describe("Extra glob patterns to exclude, on top of .gitignore.").optional(),
+  dot: z.boolean().describe("Include dotfiles / dot-directories (hidden entries).").optional(),
+  onlyFiles: z.boolean().describe("Return only files (exclude directories).").optional(),
+  onlyDirs: z.boolean().describe("Return only directories (exclude files).").optional(),
+  limit: z.number().int().positive().max(10_000).describe("Cap on the number of paths returned.").optional(),
 });
 
 export const GlobTool: Tool<z.infer<typeof ArgsSchema>> = {
   name: "Glob",
-  description: "Find paths matching a glob. Respects .gitignore. Use to discover files before reading or editing.",
+  description: "Find files by NAME/PATH using a glob (e.g. **/*.ts). Respects .gitignore. Use to discover files before reading or editing. To search file CONTENTS, use Grep, not this.",
   schema: ArgsSchema,
   permission: "safe",
   async run(args, ctx) {

@@ -6,7 +6,7 @@
 
 const MARKERS: RegExp[] = [
   /<function[_-]?calls?\b/i, // <function_calls> / <function-calls>
-  /<tool_call\b/i, // <tool_call>
+  /<tool_call\b/i, // a common tool-call wrapper (textual, late X7 call)
   /<invoke\b/i, // <invoke name="...">
   /<function\s*=/i, // <function=Bash>
   /<parameter\s+name\s*=/i, // <parameter name="..." value="...">
@@ -39,60 +39,6 @@ const INTENT_RE = new RegExp(
 export function announcedNextActionWithoutCalling(text: string): boolean {
   const t = text.trim();
   if (!t) return false;
-  if (/[:]\s*$/.test(t)) return true; // ended on a bare colon → was about to continue/list/act
-  return INTENT_RE.test(t.slice(-240)); // "…next I'll check X" near the end
-}
-
-// Yield every TOP-LEVEL balanced { … } object in the text (string/escape aware),
-// so we can scan content for an embedded tool-call JSON without a brittle regex.
-function* jsonObjectCandidates(text: string): Generator<string> {
-  let depth = 0, start = -1, inStr = false, esc = false;
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i]!;
-    if (inStr) {
-      if (esc) esc = false;
-      else if (c === "\\") esc = true;
-      else if (c === '"') inStr = false;
-      continue;
-    }
-    if (c === '"') inStr = true;
-    else if (c === "{") { if (depth === 0) start = i; depth++; }
-    else if (c === "}") {
-      if (depth > 0) { depth--; if (depth === 0 && start >= 0) { yield text.slice(start, i + 1); start = -1; } }
-    }
-  }
-}
-
-const NAME_KEYS = ["name", "tool", "function", "tool_name"];
-const ARG_KEYS = ["arguments", "parameters", "args", "input", "tool_input"];
-
-/** Recover a tool call a model emitted as JSON TEXT in its content (e.g.
- *  `{"name":"Bash","arguments":{…}}`, with or without a <tool_call> wrapper or
- *  ```json fence) when the provider returned NO structured tool_calls — a common
- *  failure with local servers whose chat template doesn't wrap tool calls.
- *  Conservative on purpose: only fires when the JSON names a REGISTERED tool, so
- *  example/config JSON in prose can't be mistaken for a call. Returns the first
- *  match, or null. The caller routes it through the normal permission + schema
- *  path, and surfaces that a text call was recovered (never silent). */
-export function recoverTextToolCall(
-  text: string,
-  toolNames: readonly string[],
-): { name: string; arguments: Record<string, unknown> } | null {
-  if (!text) return null;
-  const known = new Set(toolNames);
-  for (const candidate of jsonObjectCandidates(text)) {
-    let obj: Record<string, unknown>;
-    try {
-      const parsed = JSON.parse(candidate) as unknown;
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
-      obj = parsed as Record<string, unknown>;
-    } catch {
-      continue;
-    }
-    const nameKey = NAME_KEYS.find((k) => typeof obj[k] === "string" && known.has(obj[k] as string));
-    if (!nameKey) continue;
-    const argKey = ARG_KEYS.find((k) => obj[k] !== null && typeof obj[k] === "object" && !Array.isArray(obj[k]));
-    return { name: obj[nameKey] as string, arguments: argKey ? (obj[argKey] as Record<string, unknown>) : {} };
-  }
-  return null;
+  if (/[:]\s*$/.test(t)) return true; // ended on a bare colon — was about to continue/list/act
+  return INTENT_RE.test(t.slice(-240)); // a trailing "next I'll check X"
 }

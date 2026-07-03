@@ -119,6 +119,43 @@ export async function detectLlamaServerContext(baseUrl: string | undefined): Pro
   }
 }
 
+interface OllamaPsModel {
+  name?: string;
+  model?: string;
+  context_length?: number; // the num_ctx the model is LOADED with
+}
+
+/** Parse Ollama's /api/ps payload → the context length the given model is
+ *  actually LOADED with (num_ctx), matched by name/model tag. Ollama loads a
+ *  model with a fixed num_ctx that's often far below the name-based guess (a
+ *  qwen name → 128k while it's loaded at 65k), so reading this keeps freecode's
+ *  context meter + compaction honest. null if the model isn't loaded / no
+ *  positive number. */
+export function parseOllamaLoadedContext(jsonText: string, modelId: string): number | null {
+  try {
+    const json = JSON.parse(jsonText) as { models?: OllamaPsModel[] };
+    const m = (json.models ?? []).find((x) => x.name === modelId || x.model === modelId);
+    const n = m?.context_length;
+    return typeof n === "number" && n > 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Best-effort: the context an Ollama model is currently LOADED with, via
+ *  /api/ps. null when unreachable or the model isn't loaded yet (Ollama loads
+ *  lazily on the first request, so this returns null until it's been hit once). */
+export async function detectOllamaContext(baseUrl: string | undefined, modelId: string): Promise<number | null> {
+  const root = (baseUrl ?? "http://127.0.0.1:11434/v1").replace(/\/v1\/?$/, "");
+  try {
+    const resp = await fetch(`${root}/api/ps`, { cache: "no-store", signal: AbortSignal.timeout(2000) });
+    if (!resp.ok) return null;
+    return parseOllamaLoadedContext(await resp.text(), modelId);
+  } catch {
+    return null;
+  }
+}
+
 /** Best-effort: the context the given model is loaded with. Falls back to the
  *  name-based guess (null) when unknown / not local / unreachable. */
 export async function detectLocalContextWindow(provider: string, baseUrl: string | undefined, modelId: string): Promise<number | null> {
