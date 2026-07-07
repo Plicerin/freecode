@@ -20,8 +20,17 @@ export function titleSequence(title: string): string {
 }
 
 export function setTerminalTitle(title: string, out: NodeJS.WriteStream = process.stdout): void {
-  if (out.isTTY === false) return; // skip only when definitely piped; undefined → still try
   const c = clean(title);
+  // Windows: set the title via SetConsoleTitle (what Node/Bun's `process.title`
+  // setter calls). Under Ink's render pipeline on ConPTY the OSC bytes below get
+  // swallowed — the tab stays "Windows PowerShell" — but SetConsoleTitle bypasses
+  // stdout entirely and reliably moves the Windows Terminal / conhost tab. On
+  // POSIX `process.title` renames the process in `ps` (not the terminal), so we
+  // leave it to the OSC there. Guarded: a failure here must never break a render.
+  if (process.platform === "win32") {
+    try { process.title = c; } catch { /* non-fatal */ }
+  }
+  if (out.isTTY === false) return; // skip only when definitely piped; undefined → still try
   // Emit OSC 2 (window title) AND OSC 0 — some terminals/tabs honour one not the other.
   out.write(`${ESC}]2;${c}${BEL}${ESC}]0;${c}${BEL}`);
 }

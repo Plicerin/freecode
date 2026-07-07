@@ -36,4 +36,17 @@ describe("setTerminalTitle", () => {
     setTerminalTitle("hello", out);
     expect(written).toBe("");
   });
+
+  // On Windows the OSC bytes get swallowed under Ink/ConPTY, so the title MUST
+  // also go through SetConsoleTitle (process.title) — even when stdout is piped.
+  test.if(process.platform === "win32")("sets process.title on Windows (bypasses the swallowed OSC)", () => {
+    const prev = process.title;
+    try {
+      const out = { isTTY: false, write: () => true } as unknown as NodeJS.WriteStream; // OSC skipped…
+      setTerminalTitle("session-name", out);
+      expect(process.title).toBe("session-name"); // …but the Windows tab still updates
+    } finally {
+      try { process.title = prev; } catch { /* ignore */ }
+    }
+  });
 });
