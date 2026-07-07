@@ -34,9 +34,20 @@ export function countLines(content: string): number {
   return content.split(/\r\n|\r|\n/).length;
 }
 
-/** Worth collapsing to a chip? Multi-line, or a long single line. */
+/** Canonicalise line endings to "\n". A paste from the Windows clipboard carries
+ *  "\r\n", and some terminals send a LONE "\r" as the in-paste line separator.
+ *  A stray "\r" left in the text returns the cursor to column 0 when rendered, so
+ *  each line overwrites the previous one and only the LAST line shows. Normalising
+ *  once at capture fixes the display, the multi-line detection below, and the text
+ *  the model receives. */
+export function normalizeNewlines(s: string): string {
+  return s.replace(/\r\n?/g, "\n");
+}
+
+/** Worth collapsing to a chip? Multi-line, or a long single line. Treat any CR as
+ *  a line break too, so a "\r"-only paste is still recognised as multi-line. */
 export function shouldCollapse(content: string, maxInline = 200): boolean {
-  return content.includes("\n") || content.length > maxInline;
+  return /[\r\n]/.test(content) || content.length > maxInline;
 }
 
 /** The chip shown inline in the input for a collapsed paste. */
@@ -82,7 +93,7 @@ export function assembleChunks(chunks: string[]): string {
     if (body) parts.push(body);
     if (endAt >= 0) break;
   }
-  return parts.join("\n");
+  return normalizeNewlines(parts.join("\n"));
 }
 
 const PLACEHOLDER_RE = /\[#(\d+) \+\d+ (?:lines|chars)\]/g;

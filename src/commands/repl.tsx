@@ -37,7 +37,7 @@ import { executeBench, formatBenchPlain } from "./bench";
 import { previewToolResult } from "../tui/preview";
 import { type Confidence, nextConfidence, attachWarning } from "../tui/confidence";
 import { MarkdownBody } from "../tui/markdown-render";
-import { BRACKET_PASTE_ON, BRACKET_PASTE_OFF, hasPasteStart, pastePlaceholder, expandPastes, shouldCollapse } from "../tui/paste";
+import { BRACKET_PASTE_ON, BRACKET_PASTE_OFF, hasPasteStart, pastePlaceholder, expandPastes, shouldCollapse, normalizeNewlines } from "../tui/paste";
 import { tokensPerSecond, estTokens, formatSpeed, streamHealth } from "../tui/speed";
 import { isLanModelEndpoint, endpointHostLabel } from "../tui/endpoint";
 import { CONSULT_PROVIDERS, supervisorPrompt, consultBanner } from "../tui/consult";
@@ -370,7 +370,10 @@ function MessageLine({ m, theme }: { m: UiMessage; theme: ReturnType<typeof make
   // YOUR messages stand out: emoji + bold + brand color, so they're easy to find
   // when scanning back through the transcript.
   if (m.role === "user") {
-    return <Text color={theme.user} bold>{"🧑 "}{m.text}</Text>;
+    // Normalise any stray CR (e.g. a paste persisted before the capture-time fix,
+    // or a resumed older session) so a lone "\r" can't overwrite earlier lines and
+    // leave only the last one visible.
+    return <Text color={theme.user} bold>{"🧑 "}{normalizeNewlines(m.text)}</Text>;
   }
   return (
     <Text>
@@ -2192,7 +2195,10 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
       if (endAt >= 0) body = body.slice(0, endAt);
       if (body) pasteCollectRef.current!.push(body);
       if (endAt >= 0) {
-        const content = pasteCollectRef.current!.join("\n");
+        // Canonicalise CRLF / lone-CR line endings to "\n" so multi-line detection,
+        // the chip, the echo, and the submitted text all agree — a stray "\r" would
+        // otherwise collapse the rendered message to just its last line.
+        const content = normalizeNewlines(pasteCollectRef.current!.join("\n"));
         pasteCollectRef.current = null;
         if (shouldCollapse(content)) {
           const id = pasteRef.current.next++;

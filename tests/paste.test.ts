@@ -2,7 +2,7 @@
 // chip back to the real content at submit. (The keystroke wiring is verified live
 // — the harness can't drive a terminal paste.)
 import { test, expect, describe } from "bun:test";
-import { stripPasteMarkers, isMultilinePaste, pastePlaceholder, expandPastes, countLines, assembleChunks, hasPasteStart, hasPasteEnd, shouldCollapse } from "../src/tui/paste";
+import { stripPasteMarkers, isMultilinePaste, pastePlaceholder, expandPastes, countLines, assembleChunks, hasPasteStart, hasPasteEnd, shouldCollapse, normalizeNewlines } from "../src/tui/paste";
 
 const ESC = String.fromCharCode(27);
 const wrap = (s: string) => `${ESC}[200~${s}${ESC}[201~`;
@@ -47,6 +47,9 @@ describe("assembleChunks (cross-chunk reassembly, the real Ink case)", () => {
   test("three lines across chunks", () => {
     expect(assembleChunks(["[200~one", "two", "three[201~"])).toBe("one\ntwo\nthree");
   });
+  test("a single chunk with CR/CRLF line endings is normalised to \\n (no last-line collapse)", () => {
+    expect(assembleChunks(["[200~one\r\ntwo\rthree[201~"])).toBe("one\ntwo\nthree");
+  });
   test("markers stripped, never leak into the content", () => {
     const r = assembleChunks(["[200~hello[201~"]);
     expect(r).toBe("hello");
@@ -61,9 +64,24 @@ describe("assembleChunks (cross-chunk reassembly, the real Ink case)", () => {
   });
 });
 
+describe("normalizeNewlines (the 'only last line shows' fix)", () => {
+  test("CRLF and lone CR both become \\n", () => {
+    expect(normalizeNewlines("a\r\nb\r\nc")).toBe("a\nb\nc"); // Windows clipboard
+    expect(normalizeNewlines("a\rb\rc")).toBe("a\nb\nc");     // lone CR separators
+    expect(normalizeNewlines("a\nb")).toBe("a\nb");           // already clean → unchanged
+  });
+  test("leaves no CR behind (a stray \\r is what collapses the render to one line)", () => {
+    expect(normalizeNewlines("first\r\nsecond\rthird").includes("\r")).toBe(false);
+  });
+});
+
 describe("shouldCollapse", () => {
   test("multi-line always collapses", () => {
     expect(shouldCollapse("a\nb")).toBe(true);
+  });
+  test("a CR-only multi-line paste is ALSO recognised (Windows / some terminals)", () => {
+    expect(shouldCollapse("a\rb")).toBe(true);       // was missed before: no "\n" present
+    expect(shouldCollapse("a\r\nb")).toBe(true);
   });
   test("a long single line collapses; a short one does not", () => {
     expect(shouldCollapse("x".repeat(250))).toBe(true);
