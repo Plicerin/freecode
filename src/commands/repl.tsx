@@ -39,7 +39,7 @@ import { type Confidence, nextConfidence, attachWarning } from "../tui/confidenc
 import { MarkdownBody } from "../tui/markdown-render";
 import { BRACKET_PASTE_ON, BRACKET_PASTE_OFF, hasPasteStart, pastePlaceholder, expandPastes, shouldCollapse } from "../tui/paste";
 import { tokensPerSecond, estTokens, formatSpeed, streamHealth } from "../tui/speed";
-import { isLanModelEndpoint } from "../tui/endpoint";
+import { isLanModelEndpoint, endpointHostLabel } from "../tui/endpoint";
 import { CONSULT_PROVIDERS, supervisorPrompt, consultBanner } from "../tui/consult";
 import type { ResolvedConfig } from "../config/schema";
 import { parseMcpAdd, addMcpServer, removeMcpServer, listConfiguredMcp } from "../config/mcp-edit";
@@ -718,11 +718,19 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config.provider, config.baseUrl, model, busy]);
 
-  // When the app is idle (no turn running, no approval pending), every message
-  // is final — flush them all to <Static>. During a turn `settled` is frozen,
-  // so the streaming lines render in the dynamic region and the input holds.
+  // Flush finished messages into <Static> so the cursor-managed (repainting)
+  // region stays SMALL. When idle, every message is final → settle all. DURING a
+  // turn, settle everything except the LAST message (the only one that can still
+  // mutate — streaming appends to it; tool calls/results arrive as new, immutable
+  // messages). Previously `settled` froze at turn start, so the whole in-flight
+  // turn piled up in the dynamic region; once it grew taller than the window,
+  // each 90ms repaint's cursor-up overshot into the scrollback and yanked the
+  // terminal to the top (the logo) — which also made text selection/copy
+  // impossible. Keeping the region ~1 message tall stops the overshoot. Never
+  // move settled backwards (Static is append-only).
   useEffect(() => {
     if (!busy && !pending) setSettled(messages.length);
+    else setSettled((s) => Math.max(s, Math.max(0, messages.length - 1)));
   }, [busy, pending, messages.length]);
 
   // Drain queued input once the turn finishes (and no approval is open). One at a
@@ -1828,7 +1836,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
         try {
           const servers = await discoverServers();
           if (!servers.length) {
-            setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "No model servers found. A remote Ollama must bind 0.0.0.0:11434; a llama-server must be on :8080 (or fronted by `tailscale serve` on 443) and reachable." }]);
+            setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "No model servers found. A remote Ollama must bind 0.0.0.0:11434; a llama-server must be on :8080 (localhost also scans :8888; set FREECODE_LLAMA_PORTS=port,port for others), fronted by `tailscale serve` on 443, and reachable. Or point at it directly: --base-url http://host:PORT/v1." }]);
             break;
           }
           const kind = arg === "ollama" || arg === "llama-server" ? arg : undefined;
@@ -2575,7 +2583,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
           <Text dimColor>  · ctx </Text>
           <Text color={{ ok: theme.hex.success, warn: theme.hex.warning, crit: theme.hex.error }[contextTone(ctxFill)]}>{contextBar(ctxFill)}</Text>
           <Text dimColor> {Math.round(ctxFill * 100)}%{ctxTokens > 0 ? ` (${formatTokens(ctxTokens)}/${formatTokens(trackerRef.current.window())})` : ""} · </Text>
-          <Text color={theme.dim}>{isLanModelEndpoint(config.provider, config.baseUrl) ? "🌐 " : ""}{serverLabel ?? config.provider}:</Text>
+          <Text color={theme.dim}>{isLanModelEndpoint(config.provider, config.baseUrl) ? `🌐 ${endpointHostLabel(config.baseUrl, config.provider)} · ` : ""}{serverLabel ?? config.provider}:</Text>
           <Text color={theme.hex.assistant}>{model}</Text>
           <Text dimColor>  cost </Text>
           <Text color={theme.hex.success}>${costUsd.toFixed(4)}</Text>
