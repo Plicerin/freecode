@@ -89,9 +89,13 @@ function providerEnvKey(p: ProviderId): string | undefined {
     case "openrouter": return "OPENROUTER_API_KEY";
     case "bedrock": return "AWS_ACCESS_KEY_ID";
     case "vertex": return "GOOGLE_APPLICATION_CREDENTIALS";
-    case "ollama": return "OLLAMA_HOST";
-    case "lmstudio": return "LMSTUDIO_HOST";
-    case "llama-server": return "LLAMA_SERVER_HOST";
+    // Local servers are keyless. Their *_HOST env vars are BASE URLs, not keys —
+    // returning them here leaks the host address into the Authorization header
+    // (a key-checking proxy would reject it). An explicit key still works via
+    // profile/vault, which take precedence in profileApiKey.
+    case "ollama": return undefined;
+    case "lmstudio": return undefined;
+    case "llama-server": return undefined;
     case "nim": return getEnv("NVIDIA_API_KEY") ? "NVIDIA_API_KEY" : "NVIDIA_NIM_API_KEY";
     case "deepseek": return "DEEPSEEK_API_KEY";
     default: return undefined;

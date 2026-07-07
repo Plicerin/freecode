@@ -31,4 +31,18 @@ describe("loadConfig priority", () => {
       for (const k of Object.keys(prev)) (process.env as Record<string, string | undefined>)[k] = prev[k];
     }
   });
+
+  it("local server *_HOST env is a base URL, never the api key", () => {
+    const env = process.env as Record<string, string | undefined>;
+    const prev = { LLAMA_SERVER_HOST: env.LLAMA_SERVER_HOST };
+    env.LLAMA_SERVER_HOST = "http://localhost:8888/v1";
+    try {
+      const cfg = loadConfig({ flags: { provider: "llama-server" } });
+      expect(cfg.baseUrl).toBe("http://localhost:8888/v1"); // host feeds the base URL…
+      expect(cfg.apiKey).toBeUndefined();                   // …NOT the Authorization header
+    } finally {
+      if (prev.LLAMA_SERVER_HOST === undefined) delete env.LLAMA_SERVER_HOST;
+      else env.LLAMA_SERVER_HOST = prev.LLAMA_SERVER_HOST;
+    }
+  });
 });
