@@ -1297,7 +1297,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
           `permission   ${config.permissionMode}`,
           `verifyMode   ${config.verifyMode}`,
           `theme        ${config.theme}`,
-          `maxTurns     ${config.maxTurns}`,
+          `maxTurns     ${config.maxTurns > 0 ? config.maxTurns : "off (uncapped)"}`,
           `maxRPM       ${config.maxRequestsPerMinute > 0 ? config.maxRequestsPerMinute : "off"}`,
           `webSearch    ${config.webSearchProvider}`,
           `promptCache  ${config.enablePromptCache}`,

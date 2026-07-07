@@ -102,4 +102,18 @@ describe("turn-end surfacing", () => {
     const e = errors(await run(p, [noop], 3));
     expect(e.some((m) => /max-turns cap/i.test(m))).toBe(true);
   });
+
+  test("maxTurns 0 = uncapped: runs well past a small budget, then finishes with NO cap warning", async () => {
+    // 12 tool-call turns (far more than a cap of 3 would allow) then a clean finish.
+    // With maxTurns 0 the loop must keep going and stop only on the model's own
+    // no-tool-calls 'done' — never the cap.
+    const noop: Tool = { name: "Noop", description: "no-op", schema: z.object({}), permission: "safe", async run() { return { ok: true, output: "ok" }; } };
+    let n = 0;
+    const p = new ScriptedProvider(() => (n++ < 12
+      ? [{ type: "tool_call", call: { id: `c${n}`, name: "Noop", arguments: {} } }, { type: "end", reason: "tool_use" }]
+      : [{ type: "text_delta", delta: "done." }, { type: "end", reason: "end_turn" }]));
+    const ev = await run(p, [noop], 0); // 0 = uncapped
+    expect(errors(ev).some((m) => /max-turns cap/i.test(m))).toBe(false);          // never warns
+    expect(ev.some((e) => e.type === "done" && (e as { reason?: string }).reason === "end_turn")).toBe(true); // finished cleanly
+  });
 });

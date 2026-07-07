@@ -38,7 +38,7 @@ const DEFAULTS = {
   permissionMode: "manual" as const,
   webSearchProvider: "duckduckgo" as const,
   theme: "dark" as const,
-  maxTurns: 50,
+  maxTurns: 0, // 0 = uncapped by default; set --max-turns / settings.maxTurns to bound it
   contextThreshold: 0.8,
   enablePromptCache: true,
   enableExtendedThinking: false,

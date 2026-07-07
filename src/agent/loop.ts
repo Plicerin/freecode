@@ -151,7 +151,11 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
   // Provenance ledger — machine-derived facts about what the agent really did.
   const led = { wrote: [] as string[], edited: [] as string[], read: 0, ran: [] as string[], searched: 0, viewed: 0, other: [] as string[] };
 
-  while (turns < opts.maxTurns) {
+  // A non-positive maxTurns means UNCAPPED: run until the model finishes a turn
+  // without tool calls (a clean "done") or the failure circuit-breaker trips. The
+  // 8-consecutive-failures breaker + degeneration detection remain the backstops.
+  const turnsCapped = opts.maxTurns > 0;
+  while (!turnsCapped || turns < opts.maxTurns) {
     turns += 1;
     if (opts.signal?.aborted) { aborted = true; break; }
 
@@ -532,7 +536,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
 
   // Exhausted the turn budget (the loop didn't break early via a no-tool-calls
   // "done") — the task is likely unfinished. Surface it instead of ending quietly.
-  if (!aborted && lastTurnToolCalls > 0 && turns >= opts.maxTurns) {
+  if (!aborted && turnsCapped && lastTurnToolCalls > 0 && turns >= opts.maxTurns) {
     opts.onEvent({ type: "error", error: `⚠ Stopped after ${turns} turns (the max-turns cap, ${opts.maxTurns}). The task may be unfinished — raise maxTurns (or --max-turns) or tell it to continue.` });
   }
 
@@ -593,7 +597,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
   }
 
   await runHooks("Stop", opts.hooks, { event: "Stop", turns, aborted, cwd: process.cwd() }, undefined, opts.signal);
-  opts.onEvent({ type: "done", reason: aborted ? "aborted" : turns >= opts.maxTurns ? "max_turns" : "end_turn" });
+  opts.onEvent({ type: "done", reason: aborted ? "aborted" : turnsCapped && turns >= opts.maxTurns ? "max_turns" : "end_turn" });
   return { turns, usage: total, aborted, messages };
 }
 

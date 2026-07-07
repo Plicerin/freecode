@@ -56,7 +56,10 @@ export async function runSubAgent(
     provider: opts.provider,
     tools,
     model: opts.model,
-    maxTurns: opts.maxTurns ?? 20,
+    // Sub-agents stay bounded even when the MAIN loop is uncapped (maxTurns 0):
+    // they run unsupervised and can't ask for help, so a runaway is worse here. A
+    // non-positive inherited value falls back to the sub-agent's own 20-turn floor.
+    maxTurns: opts.maxTurns && opts.maxTurns > 0 ? opts.maxTurns : 20,
     systemPrompt: subAgentSystemPrompt(tools, opts.agentType?.systemPrompt),
     prompt: opts.prompt,
     history: [], // fresh context — sub-agents start clean

@@ -63,7 +63,7 @@ export const SettingsSchema = z.object({
   permissionMode: PermissionModeSchema.optional(),
   webSearchProvider: WebSearchProviderSchema.optional(),
   theme: ThemeNameSchema.optional(),
-  maxTurns: z.number().int().positive().optional(),
+  maxTurns: z.number().int().nonnegative().optional(), // 0 = uncapped
   contextThreshold: z.number().min(0.1).max(1).optional(),
   /** MRM: throttle to at most N provider requests per minute (0/unset = off). */
   maxRequestsPerMinute: z.number().int().nonnegative().optional(),
@@ -85,7 +85,7 @@ export const ResolvedConfigSchema = z.object({
   permissionMode: PermissionModeSchema.default("manual"),
   webSearchProvider: WebSearchProviderSchema.default("duckduckgo"),
   theme: ThemeNameSchema.default("dark"),
-  maxTurns: z.number().int().positive().default(50),
+  maxTurns: z.number().int().nonnegative().default(0), // 0 = uncapped (loop runs until the model finishes or the failure circuit-breaker trips)
   contextThreshold: z.number().min(0.1).max(1).default(0.8),
   maxRequestsPerMinute: z.number().int().nonnegative().default(0), // 0 = unthrottled
   enablePromptCache: z.boolean().default(true),
