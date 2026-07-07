@@ -1,8 +1,19 @@
 import { describe, it, expect } from "bun:test";
 import { loadConfig } from "../src/config/loader";
+import { writeLastSession } from "../src/config/last-session";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+// Run a body with some env vars forced, restoring the prior values after.
+function withEnv(vars: Record<string, string | undefined>, body: () => void): void {
+  const env = process.env as Record<string, string | undefined>;
+  const prev: Record<string, string | undefined> = {};
+  for (const k of Object.keys(vars)) { prev[k] = env[k]; if (vars[k] === undefined) delete env[k]; else env[k] = vars[k]!; }
+  try { body(); } finally {
+    for (const k of Object.keys(prev)) { if (prev[k] === undefined) delete env[k]; else env[k] = prev[k]!; }
+  }
+}
 
 describe("loadConfig priority", () => {
   it("CLI > profile > env > settings (V5)", () => {
@@ -33,16 +44,52 @@ describe("loadConfig priority", () => {
   });
 
   it("local server *_HOST env is a base URL, never the api key", () => {
-    const env = process.env as Record<string, string | undefined>;
-    const prev = { LLAMA_SERVER_HOST: env.LLAMA_SERVER_HOST };
-    env.LLAMA_SERVER_HOST = "http://localhost:8888/v1";
-    try {
+    withEnv({ LLAMA_SERVER_HOST: "http://localhost:8888/v1" }, () => {
       const cfg = loadConfig({ flags: { provider: "llama-server" } });
       expect(cfg.baseUrl).toBe("http://localhost:8888/v1"); // host feeds the base URL…
       expect(cfg.apiKey).toBeUndefined();                   // …NOT the Authorization header
-    } finally {
-      if (prev.LLAMA_SERVER_HOST === undefined) delete env.LLAMA_SERVER_HOST;
-      else env.LLAMA_SERVER_HOST = prev.LLAMA_SERVER_HOST;
-    }
+    });
+  });
+
+  it("restores the last-used LOCAL endpoint even when *_HOST env points elsewhere", () => {
+    // The reported bug: a persistent LLAMA_SERVER_HOST in the shell snapped every
+    // launch back to itself, wiping the endpoint you actually last picked.
+    const dir = mkdtempSync(join(tmpdir(), "oc-ls-"));
+    const lsPath = join(dir, "last-session.json");
+    const cwd = "C:\\proj\\alpha";
+    writeLastSession({ provider: "llama-server", model: "atomic-35b", baseUrl: "http://127.0.0.1:8888/v1" }, lsPath, cwd);
+    withEnv({ LLAMA_SERVER_HOST: "https://elsewhere.ts.net/v1" }, () => {
+      const cfg = loadConfig({ flags: { provider: "llama-server" }, lastSessionPath: lsPath, cwd });
+      expect(cfg.baseUrl).toBe("http://127.0.0.1:8888/v1"); // remembered wins over the env default
+    });
+  });
+
+  it("uses the *_HOST env as the default when a LOCAL provider has no remembered endpoint", () => {
+    const dir = mkdtempSync(join(tmpdir(), "oc-ls-"));
+    const lsPath = join(dir, "last-session.json"); // empty — never written
+    withEnv({ LLAMA_SERVER_HOST: "https://default-box.ts.net/v1" }, () => {
+      const cfg = loadConfig({ flags: { provider: "llama-server" }, lastSessionPath: lsPath, cwd: "C:\\proj\\fresh" });
+      expect(cfg.baseUrl).toBe("https://default-box.ts.net/v1"); // no memory → env is the default
+    });
+  });
+
+  it("an explicit --base-url still beats a remembered LOCAL endpoint", () => {
+    const dir = mkdtempSync(join(tmpdir(), "oc-ls-"));
+    const lsPath = join(dir, "last-session.json");
+    const cwd = "C:\\proj\\beta";
+    writeLastSession({ provider: "llama-server", model: "m", baseUrl: "http://127.0.0.1:8888/v1" }, lsPath, cwd);
+    const cfg = loadConfig({ flags: { provider: "llama-server", baseUrl: "http://127.0.0.1:9999/v1" }, lastSessionPath: lsPath, cwd });
+    expect(cfg.baseUrl).toBe("http://127.0.0.1:9999/v1");
+  });
+
+  it("CLOUD base-URL env stays a deliberate override (env beats remembered)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "oc-ls-"));
+    const lsPath = join(dir, "last-session.json");
+    const cwd = "C:\\proj\\gamma";
+    writeLastSession({ provider: "openrouter", model: "m", baseUrl: "https://remembered.example/v1" }, lsPath, cwd);
+    withEnv({ OPENROUTER_BASE_URL: "https://override.example/v1", OPENROUTER_API_KEY: "k" }, () => {
+      const cfg = loadConfig({ flags: { provider: "openrouter" }, lastSessionPath: lsPath, cwd });
+      expect(cfg.baseUrl).toBe("https://override.example/v1"); // cloud env override wins
+    });
   });
 });

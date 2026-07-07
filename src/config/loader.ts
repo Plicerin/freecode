@@ -259,15 +259,24 @@ export function loadConfig(opts: LoadOptions): ResolvedConfig {
   );
   const finalModel = modelPick.value ?? defaultModelFor(finalProvider);
 
-  // Precedence: flag > profile > env override > remembered (only if its provider
-  // matches) > the provider's built-in default. So a saved remote base URL sticks
-  // across launches but an explicit flag/env still wins.
+  // Precedence: flag > profile > (env / remembered) > the provider's built-in
+  // default. Env vs remembered order DEPENDS on the provider kind:
+  //   • Cloud (OPENAI_BASE_URL, …): the env is a deliberate OVERRIDE → env wins.
+  //   • Local server (OLLAMA_HOST / LLAMA_SERVER_HOST / LMSTUDIO_HOST): the *_HOST
+  //     is just "where my server usually lives" — a DEFAULT, not an override. The
+  //     endpoint you actually last used (via /scan, /provider, or --base-url) is
+  //     restored ahead of it, else a persistent *_HOST in the shell profile snaps
+  //     every launch back to itself and defeats "reopen where you left off". It
+  //     still supplies the default when this provider has no remembered endpoint.
+  // An explicit --base-url flag or a project profile always wins either way.
   const rememberedBaseUrl = rememberedFor(last, finalProvider).baseUrl;
+  const envBaseUrl = providerBaseUrlEnv(finalProvider);
+  const localProvider = LOCAL_SERVER_PROVIDERS.has(finalProvider);
   const baseUrlPick = pick<string | undefined>(
     opts.flags.baseUrl,
     profile.baseUrl,
-    providerBaseUrlEnv(finalProvider),
-    rememberedBaseUrl,
+    localProvider ? rememberedBaseUrl : envBaseUrl,
+    localProvider ? envBaseUrl : rememberedBaseUrl,
     providerBaseUrlDefault(finalProvider),
   );
   // Normalize a local-server endpoint: add a missing scheme and rewrite a
