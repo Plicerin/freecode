@@ -13,7 +13,7 @@ import { parseImageLimit, capImagesTo, countImages } from "./image-cap";
 import { getEnv } from "../utils/env";
 import { summarizeConversation } from "./summarize";
 import { runHooks } from "./hooks";
-import { runVerify, type VerifyPlan } from "./verify";
+import { runVerify, verifyCoversChanges, type VerifyPlan } from "./verify";
 import { sanitizeToolPairing } from "./sanitize";
 import { redactSecrets } from "../utils/redact";
 import { logActivity } from "../utils/activity";
@@ -130,6 +130,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
   let changed = false; // a file-mutating tool succeeded this task
   let verifyAttempts = 0;
   let verifyFailed = false;
+  let verifyUncovered = false; // changed files fall outside the check's scope (e.g. a standalone HTML)
   let verifiedCommands: string[] = []; // checks that actually passed (auto-gate)
   // Checks the AGENT ran itself (build/test/typecheck/lint) that passed. These
   // are real verification too — not just freecode's auto-gate — so nested or
@@ -371,8 +372,20 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
       // The agent is done talking. Earn the "done": if it changed files, run
       // the verify gate; on failure, feed it back and let it self-correct.
       if (verifyEnabled && changed && verifyAttempts < MAX_VERIFY && !opts.signal?.aborted) {
-        verifyAttempts += 1;
         const plan = opts.verifyPlan!;
+        // Relevance gate: a build/typecheck/test only VERIFIES a change if it
+        // actually compiles/loads a changed file. If every changed file is a
+        // standalone asset the check never touches (a self-contained .html game,
+        // a loose .css), running it would "pass" while proving nothing about the
+        // edit — the tic-tac-toe trap. Refuse to credit it; end honestly unverified.
+        const changedPaths = [...led.wrote, ...led.edited];
+        if (!verifyCoversChanges(changedPaths, process.cwd())) {
+          verifyUncovered = true;
+          logActivity(`VERIFY skipped — no changed file is in scope of ${plan.commands.join(" && ")} (changed: ${changedPaths.join(", ")})`);
+          opts.onEvent({ type: "verify", text: `⚠ Not verified — \`${plan.commands.join(" && ")}\` doesn't cover the changed file(s). Open/run them to confirm.` });
+          break;
+        }
+        verifyAttempts += 1;
         opts.onEvent({ type: "verify", text: `⏳ Verifying: ${plan.commands.join(" && ")}…` });
         const res = await runVerify(plan, process.cwd(), opts.signal);
         if (opts.signal?.aborted) { aborted = true; break; }
@@ -557,7 +570,9 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
     if (anyFailed) {
       believed.push("checks failing — changes unconfirmed");
     } else if (changedCount > 0 && !someCheckPassed) {
-      believed.push(`changed ${changedCount} file(s) without running checks — unverified`);
+      believed.push(verifyUncovered
+        ? `changed ${changedCount} file(s) the configured check doesn't cover (e.g. a standalone HTML) — unverified; open/run them to confirm`
+        : `changed ${changedCount} file(s) without running checks — unverified`);
     }
 
     // Two complementary honesty guards. Overclaim catches a sweeping "all done"
