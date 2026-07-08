@@ -11,7 +11,8 @@ import { contextWindowFor } from "./pricing";
 import { resolveVerify, resolveQuickVerify } from "./verify";
 import { createAgentTool } from "../tools/agent";
 import { extractAttachments } from "./attachments";
-import { newSession, resumeSession, appendEvent, type Session } from "../session/manager";
+import { newSession, resumeSession, appendEvent, readSession, readConversationState, writeConversationState, type Session } from "../session/manager";
+import { historyFromEvents } from "../session/history";
 import { McpManager } from "../mcp/manager";
 import { nowIso } from "../utils/ids";
 
@@ -58,6 +59,12 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
   const session: Session = opts.flags.resume
     ? resumeSession(cwd, opts.flags.resume) ?? newSession(cwd)
     : newSession(cwd);
+  // Load prior context on resume (full provider-format state if persisted, else
+  // the text-only rebuild) BEFORE appending this turn's prompt, so `--resume`
+  // continues the conversation instead of starting the model off blank.
+  const priorHistory = opts.flags.resume
+    ? readConversationState(session) ?? historyFromEvents(readSession(session))
+    : [];
   appendEvent(session, { kind: "user", text: opts.prompt, ts: nowIso() });
 
   const allow = (async () => "allow") as ApprovalCallback;
@@ -70,13 +77,14 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
   let finalText = "";
   let ok = true;
   try {
-    await runAgentLoop({
+    const result = await runAgentLoop({
       provider,
       tools,
       model: config.model,
       maxTurns: config.maxTurns,
       prompt: effectivePrompt,
       images,
+      history: priorHistory,
       contextWindow: contextWindowFor(config.model),
       contextThreshold: config.contextThreshold,
       enablePromptCache: config.enablePromptCache,
@@ -112,6 +120,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
       },
     });
     if (finalText.trim()) appendEvent(session, { kind: "assistant", text: finalText, ts: nowIso() });
+    writeConversationState(session, result.messages); // so a later --resume restores full context
   } catch (err) {
     ok = false;
     opts.sink(`\n[error] ${err instanceof Error ? err.message : String(err)}\n`, "err");
