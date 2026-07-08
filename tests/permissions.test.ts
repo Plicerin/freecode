@@ -39,4 +39,15 @@ describe("permission engine — allow-always persists, allow-once does not", () 
     await eng.decide(req("pwd"), (async () => { asked = true; return "deny"; }) as ApprovalCallback);
     expect(asked).toBe(true); // correctly asked again
   });
+
+  test("setMode keeps prior allow-always grants (a provider/model switch must not forget them)", async () => {
+    const eng = createPermissionEngine("manual");
+    expect(await eng.decide({ tool: "WebFetch", argsSummary: "{}" }, (async () => "allow-always") as ApprovalCallback)).toBe("allow");
+    eng.setMode("manual"); // e.g. /provider re-resolves config and re-syncs the (same) mode
+    let asked = false;
+    const d = await eng.decide({ tool: "WebFetch", argsSummary: "{different}" }, (async () => { asked = true; return "deny"; }) as ApprovalCallback);
+    expect(asked).toBe(false); // still remembered
+    expect(d).toBe("allow");
+    expect(eng.mode).toBe("manual");
+  });
 });

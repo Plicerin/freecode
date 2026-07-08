@@ -7,7 +7,7 @@ import { detectLocalModels, detectServerKind, detectLlamaServerContext, detectOl
 import { discoverServers, type DiscoveredServer } from "../providers/server-discovery";
 import { zodToJsonSchema } from "../providers/schema-util";
 import { buildToolRegistry, toolListToSystemPrompt } from "../tools/registry";
-import { createPermissionEngine, approvalDecisionForKey, type ApprovalCallback, type ApprovalDecision, type ApprovalRequest } from "../permissions/modes";
+import { createPermissionEngine, approvalDecisionForKey, type ApprovalCallback, type ApprovalDecision, type ApprovalRequest, type PermissionEngine } from "../permissions/modes";
 import { runAgentLoop } from "../agent/loop";
 import { branch as gitBranch, commitPushPr, issue as ghIssue, prComments } from "./git-workflow";
 import { createAgentTool } from "../tools/agent";
@@ -448,10 +448,16 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
     ],
     [config.webSearchProvider, mcpTools],
   );
-  const permission = useMemo(
-    () => createPermissionEngine(config.permissionMode, (async () => "allow") as ApprovalCallback),
-    [config.permissionMode],
-  );
+  // The permission engine holds mutable session state — the "allow always"
+  // allowlist. It MUST be one stable instance for the whole session: useMemo is
+  // only a perf hint (React may discard it), and discarding the engine silently
+  // drops your approvals so a tool you allowed-always keeps re-prompting. Pin it
+  // in a ref (created once); a live permission-mode change syncs onto it below
+  // instead of rebuilding, so switching provider/model never forgets approvals.
+  const permissionRef = useRef<PermissionEngine | null>(null);
+  if (!permissionRef.current) permissionRef.current = createPermissionEngine(config.permissionMode);
+  const permission = permissionRef.current;
+  useEffect(() => { permission.setMode(config.permissionMode); }, [config.permissionMode]);
   const trackerRef = useRef(
     new ContextTracker({
       threshold: config.contextThreshold,

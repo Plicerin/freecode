@@ -11,7 +11,10 @@ export interface ApprovalRequest {
 export type ApprovalCallback = (req: ApprovalRequest) => Promise<ApprovalDecision> | ApprovalDecision;
 
 export interface PermissionEngine {
-  mode: PermissionMode;
+  readonly mode: PermissionMode;
+  /** Change the mode WITHOUT losing remembered grants/denials — so switching
+   *  provider/model (which re-resolves config) never forgets your approvals. */
+  setMode(mode: PermissionMode): void;
   decide(req: ApprovalRequest, prompt: ApprovalCallback): Promise<ApprovalDecision>;
   rememberDenied(req: ApprovalRequest): void;
   isDenied(req: ApprovalRequest): boolean;
@@ -30,19 +33,25 @@ export function approvalDecisionForKey(input: string | undefined, escape: boolea
   return null;
 }
 
-export function createPermissionEngine(mode: PermissionMode, prompt: ApprovalCallback): PermissionEngine {
+export function createPermissionEngine(mode: PermissionMode, _prompt?: ApprovalCallback): PermissionEngine {
   const denied = new Set<string>();
-  const allowedTools = new Set<string>();
+  const allowedTools = new Set<string>(); // "allow always" grants — must live for the whole session
 
   const key = (r: ApprovalRequest) => `${r.tool}::${r.argsSummary}`;
+  let currentMode = mode;
 
   return {
-    mode,
+    get mode() {
+      return currentMode;
+    },
+    setMode(m) {
+      currentMode = m;
+    },
     async decide(req, cb) {
-      if (mode === "bypass") return "allow";
+      if (currentMode === "bypass") return "allow";
       if (denied.has(key(req))) return "deny";
       if (allowedTools.has(req.tool)) return "allow";
-      if (mode === "auto" && SAFE_TOOLS.has(req.tool)) return "allow";
+      if (currentMode === "auto" && SAFE_TOOLS.has(req.tool)) return "allow";
       // manual mode, or auto mode with a non-safe tool: ask the user.
       const decision = await cb(req);
       if (decision === "allow-always") {
