@@ -53,6 +53,7 @@ import { goalPrompt, goalStatus, goalVerifyFailedPrompt, GOAL_MAX_DEFAULT } from
 import { degenerationReason } from "../agent/degeneration";
 import { basename } from "node:path";
 import { historyFromEvents } from "../session/history";
+import { createMemoryStore, type MemoryStore } from "../memory/store";
 import { makeTheme } from "../tui/theme";
 import { Mascot, OWL_MICRO, OWL_FRAMES, MASCOT_BIO } from "../tui/mascot";
 import { debug } from "../utils/debug";
@@ -120,7 +121,7 @@ export function inputHistoryFromEvents(events: SessionEvent[]): string[] {
   return out;
 }
 
-const SLASH_COMMANDS = ["/model", "/models", "/new", "/resume", "/rename", "/context", "/cost", "/config", "/doctor", "/diff", "/commit", "/commit-push-pr", "/branch", "/issue", "/pr-comments", "/review", "/security-review", "/autofix-pr", "/explore", "/agents", "/skills", "/learn", "/goal", "/expand", "/workflows", "/ultraplan", "/bg", "/plugins", "/provider", "/scan", "/consult", "/advisor", "/plan", "/verify", "/bench", "/log", "/mcp", "/help", "/compact", "/about", "/exit"];
+const SLASH_COMMANDS = ["/model", "/models", "/new", "/resume", "/rename", "/context", "/cost", "/memory", "/config", "/doctor", "/diff", "/commit", "/commit-push-pr", "/branch", "/issue", "/pr-comments", "/review", "/security-review", "/autofix-pr", "/explore", "/agents", "/skills", "/learn", "/goal", "/expand", "/workflows", "/ultraplan", "/bg", "/plugins", "/provider", "/scan", "/consult", "/advisor", "/plan", "/verify", "/bench", "/log", "/mcp", "/help", "/compact", "/about", "/exit"];
 
 // Spinner frames — proof of life while a turn runs. Not the braille snake every
 // other CLI ships: this is Bubo's eye. He holds your gaze, glances right, glances
@@ -185,6 +186,7 @@ const COMMAND_DESC: Record<string, string> = {
   "/bench": "race the performance ghost",
   "/log": "toggle the verification activity log",
   "/help": "list commands",
+  "/memory": "show/refresh cross-session memory (/memory [refresh|show])",
   "/compact": "compact the conversation",
   "/about": "meet Bubo, the freecode owl",
   "/exit": "exit freecode",
@@ -458,6 +460,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
     }),
   );
   const sessionRef = useRef<Session>(undefined as unknown as Session);
+  const memoryRef = useRef<MemoryStore | undefined>(undefined); // cross-session memory (Honcho)
   const conversationRef = useRef<ChatMessage[]>([]); // running provider-format history
   // The context window a LOCAL server actually loaded the model with (LM Studio),
   // which can be far below the model's name-based max. Overrides contextWindowFor
@@ -831,6 +834,41 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
     setMessages([...restoredMessagesFromEvents(events, s.id), { id: `s-${Date.now()}`, role: "system", text: `Resumed (${conversationRef.current.length} messages of context)` }]);
   }
 
+  // (Re)point the cross-session memory store at a session id and recall what the
+  // shared store already knows about this user. Flushes the previous session's
+  // queued turns first. Fail-soft: a down/slow Honcho just yields no memory.
+  function setupMemory(sessionId: string): void {
+    const prev = memoryRef.current;
+    if (prev) void prev.flush();
+    const mem = config.memory;
+    const store = createMemoryStore({
+      enabled: mem?.enabled ?? false,
+      baseUrl: mem?.baseUrl,
+      workspace: mem?.workspace ?? "freecode",
+      peer: mem?.peer ?? "user",
+      apiKey: mem?.apiKey,
+      sessionId,
+    });
+    memoryRef.current = store;
+    if (!store.enabled) return;
+    void (async () => {
+      const block = await store.recall();
+      const st = await store.status();
+      let text: string;
+      if (!st.reachable) {
+        text = `🧠 memory: Honcho unreachable at ${mem?.baseUrl} — running without persistent memory this session`;
+      } else if (block) {
+        text = `🧠 memory: recalled ${st.representationChars} chars about you from prior sessions (workspace ${st.workspace})`;
+      } else {
+        text = `🧠 memory: connected to Honcho (workspace ${st.workspace}) — nothing recalled yet; this session will add to it`;
+      }
+      setMessages((prev) => [...prev, { id: `mem-${Date.now()}`, role: "system", text }]);
+    })();
+  }
+
+  // Flush any queued memory turns when the REPL unmounts (quit).
+  useEffect(() => () => { void memoryRef.current?.flush(); }, []);
+
   const promptUser: ApprovalCallback = (req) => approvalQueue.enqueue(req);
 
   useEffect(() => {
@@ -848,6 +886,8 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
     }
     // Title from the session's name if it has one (resume), else the project folder.
     applyTabTitle(titleOf(readSession(sessionRef.current) as never));
+    // Point cross-session memory at this session and recall the user's history.
+    setupMemory(sessionRef.current.id);
     // Remember this session's provider/model so the next launch reopens here.
     writeLastSession({ provider: config.provider, model, baseUrl: config.baseUrl }, undefined, process.cwd());
     if (mcpStatus && mcpStatus.length > 0) {
@@ -887,6 +927,8 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
       setMessages((prev) => [...prev, { id, role: "user", text: prompt + (attachSuffix ? `  [${attachSuffix} attached]` : "") }]);
       appendEvent(sessionRef.current, { kind: "user", text: prompt, ts: new Date().toISOString() });
     }
+    // Feed the turn to cross-session memory (once per submit, incl. queued input).
+    memoryRef.current?.record("user", prompt);
     if (failed.length) setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: failed.join("\n") }]);
     let buffer = "";
     let streamedAny = false;
@@ -950,6 +992,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
         restrictedToolNames,
         verifyPlan,
         verifyMode: vmode,
+        memoryContext: memoryRef.current?.context(),
         permission,
         promptUser,
         signal: controller.signal,
@@ -1074,6 +1117,8 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
         setMessages((prev) => [...prev, { id: `a-${t0}`, role: "assistant", text: buffer }]);
       }
       appendEvent(sessionRef.current, { kind: "assistant", text: buffer, ts: new Date().toISOString(), usage: result.usage as unknown as Record<string, number> });
+      memoryRef.current?.record("assistant", buffer);
+      void memoryRef.current?.flush(); // end of turn: persist the pair now (survives a quick quit)
       // Persistent speedometer: bank the final burst's time, then show the run's
       // generation throughput as a dim line that stays in the transcript (the
       // live "Working…" readout vanishes when the turn ends).
@@ -1241,6 +1286,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
       case "/new": {
         const cwd = process.cwd();
         sessionRef.current = newSession(cwd);
+        setupMemory(sessionRef.current.id); // new freecode session → new Honcho session (same user memory)
         conversationRef.current = [];
         applyTabTitle(); // fresh session → back to the project-folder title
         setMessages([]);
@@ -1265,7 +1311,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
           const metas = listSessionMetas(process.cwd());
           const byTitle = metas.find((m) => (m.title ?? "").toLowerCase() === arg.toLowerCase());
           const s = byTitle ? resumeSession(process.cwd(), byTitle.id) : resumeSession(process.cwd(), arg);
-          if (s) doResume(s);
+          if (s) { doResume(s); setupMemory(s.id); }
           else setErrorLine(`No such session: ${arg}`);
         }
         break;
@@ -1996,6 +2042,33 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
         exitNow();
         break;
       }
+      case "/memory": {
+        const store = memoryRef.current;
+        if (!store || !store.enabled) {
+          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "Cross-session memory is off. Set memory.baseUrl in ~/.freecode/settings.json (or FREECODE_HONCHO_URL) to a Honcho instance to enable it." }]);
+          break;
+        }
+        const sub = arg.trim().toLowerCase();
+        if (sub === "refresh" || sub === "reload") {
+          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "· Refreshing memory from Honcho…" }]);
+          await store.flush();
+          const block = await store.recall();
+          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: block ? `🧠 memory refreshed — ${block.length} chars recalled.` : "🧠 memory refreshed — nothing recalled yet." }]);
+          break;
+        }
+        const st = await store.status();
+        const lines = [
+          `provider     honcho`,
+          `endpoint     ${st.baseUrl}  (${st.reachable ? "reachable ✓" : "UNREACHABLE ✗"})`,
+          `workspace    ${st.workspace}`,
+          `peer         ${st.peer}`,
+          `recalled     ${st.representationChars} chars${st.cardLines ? ` (+${st.cardLines} card lines)` : ""}`,
+          `pending      ${st.pending} turn(s) queued for ingest`,
+        ];
+        const preview = store.context();
+        setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: lines.join("\n") + (sub === "show" && preview ? `\n\n${preview}` : preview ? `\n\n(use /memory show to print the recalled text)` : "") }]);
+        break;
+      }
       case "/compact": {
         const msgs = conversationRef.current;
         if (msgs.length <= 3) {
@@ -2063,7 +2136,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
     if (picker) {
       if (key.upArrow) { setPicker((p) => (p ? { ...p, idx: Math.max(0, p.idx - 1) } : p)); return; }
       if (key.downArrow) { setPicker((p) => (p ? { ...p, idx: Math.min(p.items.length - 1, p.idx + 1) } : p)); return; }
-      if (key.return) { const sel = picker.items[picker.idx]; setPicker(null); if (sel) doResume({ id: sel.id, cwd: sel.cwd, path: sel.path }); return; }
+      if (key.return) { const sel = picker.items[picker.idx]; setPicker(null); if (sel) { doResume({ id: sel.id, cwd: sel.cwd, path: sel.path }); setupMemory(sel.id); } return; }
       if (key.escape) { setPicker(null); return; }
       return; // swallow everything else while picking
     }

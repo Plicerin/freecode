@@ -67,6 +67,9 @@ export interface AgentLoopOptions {
   /** Auto-verify gate: run these checks after a file-changing turn. */
   verifyPlan?: VerifyPlan;
   verifyMode?: "off" | "on" | "strict";
+  /** Persistent cross-session memory block (Honcho representation), appended to
+   *  the system prompt. Recalled once per session by the REPL and passed in. */
+  memoryContext?: string;
 }
 
 /** Per-turn output-token cap. 8192 truncates a large FileWrite (a whole game.js,
@@ -84,7 +87,8 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
     ...(opts.history ?? []),
     { role: "user", content: opts.prompt, ...(opts.images?.length ? { images: opts.images } : {}) },
   ];
-  const sys = opts.systemPrompt ?? toolListToSystemPrompt(tools);
+  const baseSys = opts.systemPrompt ?? toolListToSystemPrompt(tools);
+  const sys = opts.memoryContext?.trim() ? `${baseSys}\n\n${opts.memoryContext.trim()}` : baseSys;
 
   const tracker = new ContextTracker({
     windowSize: opts.contextWindow,

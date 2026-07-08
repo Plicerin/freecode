@@ -335,6 +335,20 @@ export function loadConfig(opts: LoadOptions): ResolvedConfig {
     ?? settings.maxRequestsPerMinute
     ?? 0;
 
+  // Cross-session memory (Honcho). Base URL from settings.memory or the
+  // FREECODE_HONCHO_URL / HONCHO_URL env. On by default when a URL is configured;
+  // an explicit memory.enabled:false disables it even with a URL present.
+  const memBaseUrl = settings.memory?.baseUrl ?? envValueFor("FREECODE_HONCHO_URL") ?? envValueFor("HONCHO_URL");
+  const memEnabled = (settings.memory?.enabled ?? !!memBaseUrl) && !!memBaseUrl;
+  const memory = {
+    enabled: memEnabled,
+    provider: "honcho" as const,
+    baseUrl: memBaseUrl,
+    workspace: settings.memory?.workspace ?? "freecode",
+    peer: settings.memory?.peer ?? "user",
+    apiKey: settings.memory?.apiKey ?? envValueFor("HONCHO_API_KEY"),
+  };
+
   debug.log("config resolved", {
     provider: finalProvider,
     model: finalModel,
@@ -366,6 +380,7 @@ export function loadConfig(opts: LoadOptions): ResolvedConfig {
     hooks: settings.hooks,
     verify: settings.verify,
     verifyMode: opts.flags.verifyMode ?? settings.verifyMode ?? "on",
+    memory,
     source: {
       provider: providerSource,
       model: modelPick.source as Source,

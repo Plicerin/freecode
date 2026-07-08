@@ -49,6 +49,18 @@ export const McpServerSchema = z.object({
 });
 export type McpServerConfig = z.infer<typeof McpServerSchema>;
 
+/** Cross-session memory backend (Honcho). All optional in settings; the loader
+ *  fills defaults and reads the base URL from settings or FREECODE_HONCHO_URL. */
+export const MemorySettingsSchema = z.object({
+  enabled: z.boolean().optional(),
+  provider: z.literal("honcho").optional(),
+  baseUrl: z.string().url().optional(),
+  workspace: z.string().min(1).optional(),
+  peer: z.string().min(1).optional(),
+  apiKey: z.string().optional(),
+});
+export type MemorySettings = z.infer<typeof MemorySettingsSchema>;
+
 /** A lifecycle hook: a shell command, optionally filtered by tool name. */
 export const HookSchema = z.object({
   matcher: z.string().optional(), // regex tested against the tool name (default: all)
@@ -74,6 +86,7 @@ export const SettingsSchema = z.object({
   hooks: HooksSchema.optional(),
   verify: z.union([z.string(), z.array(z.string())]).optional(),
   verifyMode: z.enum(["off", "on", "strict"]).optional(),
+  memory: MemorySettingsSchema.optional(),
 });
 export type Settings = z.infer<typeof SettingsSchema>;
 
@@ -94,6 +107,14 @@ export const ResolvedConfigSchema = z.object({
   hooks: HooksSchema.optional(),
   verify: z.union([z.string(), z.array(z.string())]).optional(),
   verifyMode: z.enum(["off", "on", "strict"]).default("on"),
+  memory: z.object({
+    enabled: z.boolean(),
+    provider: z.literal("honcho"),
+    baseUrl: z.string().url().optional(),
+    workspace: z.string(),
+    peer: z.string(),
+    apiKey: z.string().optional(),
+  }).optional(),
   source: z.object({
     provider: z.enum(["cli", "profile", "env", "settings", "default"]),
     model: z.enum(["cli", "profile", "env", "settings", "default"]),

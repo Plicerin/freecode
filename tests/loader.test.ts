@@ -93,3 +93,57 @@ describe("loadConfig priority", () => {
     });
   });
 });
+
+describe("loadConfig memory (cross-session / Honcho)", () => {
+  // Isolate from the real ~/.freecode/settings.json by always passing a settings file.
+  function withSettings(memory: unknown): string {
+    const dir = mkdtempSync(join(tmpdir(), "oc-mem-"));
+    const p = join(dir, "settings.json");
+    writeFileSync(p, JSON.stringify(memory === undefined ? {} : { memory }));
+    return p;
+  }
+
+  it("is OFF by default (no settings, no env)", () => {
+    withEnv({ FREECODE_HONCHO_URL: undefined, HONCHO_URL: undefined }, () => {
+      const cfg = loadConfig({ flags: {}, settingsPath: withSettings(undefined) });
+      expect(cfg.memory?.enabled).toBe(false);
+      expect(cfg.memory?.baseUrl).toBeUndefined();
+      expect(cfg.memory?.workspace).toBe("freecode"); // defaults present even when off
+      expect(cfg.memory?.peer).toBe("user");
+    });
+  });
+
+  it("turns ON with a settings baseUrl and fills workspace/peer defaults", () => {
+    withEnv({ FREECODE_HONCHO_URL: undefined, HONCHO_URL: undefined }, () => {
+      const cfg = loadConfig({ flags: {}, settingsPath: withSettings({ baseUrl: "http://box:8100" }) });
+      expect(cfg.memory?.enabled).toBe(true);
+      expect(cfg.memory?.baseUrl).toBe("http://box:8100");
+      expect(cfg.memory?.workspace).toBe("freecode");
+      expect(cfg.memory?.peer).toBe("user");
+    });
+  });
+
+  it("reads the base URL from FREECODE_HONCHO_URL when settings has none", () => {
+    withEnv({ FREECODE_HONCHO_URL: "http://env-box:8100", HONCHO_URL: undefined }, () => {
+      const cfg = loadConfig({ flags: {}, settingsPath: withSettings(undefined) });
+      expect(cfg.memory?.enabled).toBe(true);
+      expect(cfg.memory?.baseUrl).toBe("http://env-box:8100");
+    });
+  });
+
+  it("an explicit enabled:false disables it even with a baseUrl present", () => {
+    withEnv({ FREECODE_HONCHO_URL: undefined, HONCHO_URL: undefined }, () => {
+      const cfg = loadConfig({ flags: {}, settingsPath: withSettings({ baseUrl: "http://box:8100", enabled: false }) });
+      expect(cfg.memory?.enabled).toBe(false);
+      expect(cfg.memory?.baseUrl).toBe("http://box:8100"); // still resolved, just not active
+    });
+  });
+
+  it("honours a custom workspace and peer from settings", () => {
+    withEnv({ FREECODE_HONCHO_URL: undefined, HONCHO_URL: undefined }, () => {
+      const cfg = loadConfig({ flags: {}, settingsPath: withSettings({ baseUrl: "http://box:8100", workspace: "fc-dev", peer: "vrock" }) });
+      expect(cfg.memory?.workspace).toBe("fc-dev");
+      expect(cfg.memory?.peer).toBe("vrock");
+    });
+  });
+});
