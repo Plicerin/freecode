@@ -174,9 +174,11 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
         const result = await tracker.compact(messages, summarize);
         if (result.removedCount > 0) {
           messages.splice(0, messages.length, ...result.messages);
+          const fmt = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}K` : `${n}`);
+          const freed = Math.max(0, result.beforeTokens - result.afterTokens);
           opts.onEvent({
             type: "compacted",
-            text: `Context auto-compacted: summarized ${result.removedCount} older messages (~${result.summaryTokens} tokens).`,
+            text: `Context auto-compacted: summarized ${result.removedCount} older messages — ~${fmt(result.beforeTokens)} → ~${fmt(result.afterTokens)} tokens (freed ~${fmt(freed)}).`,
           });
         }
       } catch (err) {

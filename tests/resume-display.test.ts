@@ -41,6 +41,16 @@ describe("restoredMessagesFromEvents (/resume transcript)", () => {
     expect(blank).toHaveLength(0);
   });
 
+  test("a tool that returned NOTHING still shows a labelled row, not a bare gear", () => {
+    const evs: SessionEvent[] = [
+      { kind: "tool_call", id: "9", name: "FileWrite", args: { path: "x.ts" }, ts: "t" },
+      { kind: "tool_result", id: "9", output: "", ok: true, ts: "t", durationMs: 1 }, // no stdout
+    ];
+    const out = restoredMessagesFromEvents(evs, "s");
+    const result = out.find((m) => m.toolName === "result")!;
+    expect(result.text.trim()).toBe("(no output)");
+  });
+
   test("user/assistant text restored; an empty (tool-only) assistant turn is skipped", () => {
     expect(msgs.find((m) => m.role === "user")!.text).toBe("find the planet code");
     const assistants = msgs.filter((m) => m.role === "assistant");

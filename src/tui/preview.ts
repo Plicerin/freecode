@@ -3,6 +3,10 @@
 // it; this just keeps the on-screen transcript from turning into a wall when a
 // tool returns something big or single-line (e.g. minified JSON).
 export function previewToolResult(output: string, maxLines = 8, maxLineLen = 160): string {
+  // A tool that returns nothing (a successful write, a command with no stdout)
+  // must still render as a labelled row, never a bare "⚙ " — which is what filled
+  // a resumed transcript with rows of empty gear icons.
+  if (!output || !output.trim()) return "(no output)";
   const lines = output.split("\n");
   const head = lines
     .slice(0, maxLines)

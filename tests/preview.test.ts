@@ -22,3 +22,9 @@ test("short output passes through unchanged", () => {
   const small = "ok\ndone";
   expect(previewToolResult(small)).toBe("ok\ndone");
 });
+
+test("empty or whitespace-only output becomes a labelled row, never a bare gear", () => {
+  // A tool with no stdout must not render as an empty "⚙ " line (the resume wall).
+  expect(previewToolResult("")).toBe("(no output)");
+  expect(previewToolResult("   \n  ")).toBe("(no output)");
+});

@@ -1,7 +1,9 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, appendFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, appendFileSync, writeFileSync, statSync } from "node:fs";
+import { dirname } from "node:path";
 import { projectDir, sessionPath, PROJECTS_DIR } from "../utils/paths";
 import { newId, nowIso } from "../utils/ids";
 import { debug } from "../utils/debug";
+import type { ChatMessage } from "../providers/types";
 
 export type SessionEvent =
   | { kind: "user"; text: string; ts: string }
@@ -103,6 +105,41 @@ export function toolOutputs(events: SessionEvent[]): string[] {
   return events
     .filter((e): e is Extract<SessionEvent, { kind: "tool_result" }> => e.kind === "tool_result" && e.output.length > 0)
     .map((e) => e.output);
+}
+
+// The provider-format conversation (the model's actual working context, incl.
+// tool_use/tool_result pairs and any compaction summary) is persisted alongside
+// the event log so /resume restores the REAL context — not the text-only,
+// tool-stripped rebuild. Overwritten each turn (latest-wins), sized to whatever
+// the live session held (bounded by compaction), so it never grows unbounded.
+function statePath(session: Session): string {
+  return session.path.replace(/\.jsonl$/, ".state.json");
+}
+
+/** Persist the live provider-format conversation so a resume continues with the
+ *  full context (tool calls + results), not just user/assistant text. Never throws. */
+export function writeConversationState(session: Session, messages: ChatMessage[]): void {
+  try {
+    const p = statePath(session);
+    ensureDir(dirname(p));
+    writeFileSync(p, JSON.stringify({ v: 1, messages }));
+  } catch (err) {
+    debug.warn(`could not persist conversation state for ${session.id}`, String(err));
+  }
+}
+
+/** The persisted provider-format conversation, if any. undefined for sessions
+ *  saved before this existed (the caller falls back to historyFromEvents). */
+export function readConversationState(session: Session): ChatMessage[] | undefined {
+  const p = statePath(session);
+  if (!existsSync(p)) return undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(p, "utf8")) as { v?: number; messages?: ChatMessage[] };
+    return Array.isArray(parsed.messages) ? parsed.messages : undefined;
+  } catch (err) {
+    debug.warn(`corrupt conversation state for ${session.id}`, String(err));
+    return undefined;
+  }
 }
 
 /** Sessions with display metadata, newest first — for the resume picker. */

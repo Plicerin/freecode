@@ -46,7 +46,7 @@ import { parseMcpAdd, addMcpServer, removeMcpServer, listConfiguredMcp } from ".
 import { logActivity, setActivityLog, activityState } from "../utils/activity";
 import { closest } from "../utils/fuzzy";
 import { resolveVerify, resolveQuickVerify, runVerify } from "../agent/verify";
-import { newSession, appendEvent, resumeSession, readSession, setSessionTitle, titleOf, toolOutputs, listSessionMetas, type Session, type SessionMeta, type SessionEvent } from "../session/manager";
+import { newSession, appendEvent, resumeSession, readSession, setSessionTitle, titleOf, toolOutputs, listSessionMetas, writeConversationState, readConversationState, type Session, type SessionMeta, type SessionEvent } from "../session/manager";
 import { setTerminalTitle } from "../tui/terminal-title";
 import { writeLastSession } from "../config/last-session";
 import { goalPrompt, goalStatus, goalVerifyFailedPrompt, GOAL_MAX_DEFAULT } from "../agent/goal";
@@ -825,7 +825,10 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
   function doResume(s: Session): void {
     sessionRef.current = s;
     const events = readSession(s);
-    conversationRef.current = historyFromEvents(events);
+    // Restore the REAL provider-format context (tool calls + results, plus any
+    // compaction summary) if it was persisted; fall back to the text-only rebuild
+    // for sessions saved before conversation-state existed.
+    conversationRef.current = readConversationState(s) ?? historyFromEvents(events);
     applyTabTitle(titleOf(events));
     // Restore the up/down input history so a resumed session can recall what you typed.
     historyRef.current = inputHistoryFromEvents(events);
@@ -1103,6 +1106,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
         },
       });
       conversationRef.current = result.messages; // carry full context into the next turn
+      writeConversationState(sessionRef.current, result.messages); // …and to disk, so /resume restores it in full
       // Show ctx for EVERY provider — some (local servers, certain gateways) don't
       // report token usage, leaving the gauge at 0. Estimate it from the
       // conversation + system prompt so the bar always reflects reality.
@@ -2082,7 +2086,10 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
           const result = await tracker.compact(msgs, (m) => summarizeConversation(provider, model, m));
           if (result.removedCount > 0) {
             conversationRef.current = result.messages;
-            setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Compacted ${result.removedCount} older messages into a summary (~${result.summaryTokens} tokens); ${result.messages.length} messages kept.` }]);
+            writeConversationState(sessionRef.current, result.messages);
+            const fmt = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}K` : `${n}`);
+            const freed = Math.max(0, result.beforeTokens - result.afterTokens);
+            setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `Compacted ${result.removedCount} older messages into a summary. Context ~${fmt(result.beforeTokens)} → ~${fmt(result.afterTokens)} tokens (freed ~${fmt(freed)}); ${result.messages.length} messages kept.` }]);
           } else {
             setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "Not enough history to compact." }]);
           }

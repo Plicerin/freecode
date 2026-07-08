@@ -46,6 +46,50 @@ describe("ContextTracker.compact (V14)", () => {
     expect(res.messages.slice(1).some((m) => m.role === "system")).toBe(false);
   });
 
+  it("reports the token reclaim (before/after) so it's visible, not silent", async () => {
+    const tracker = new ContextTracker({ windowSize: 100, threshold: 0.5 });
+    const messages = [
+      { role: "user" as const, content: "first" },
+      { role: "assistant" as const, content: "a1" },
+      { role: "user" as const, content: "u2" },
+      { role: "assistant" as const, content: "a2" },
+      { role: "user" as const, content: "u3" },
+      { role: "assistant" as const, content: "a3" },
+    ];
+    const res = await tracker.compact(messages, async () => "SUMMARY");
+    // The reclaim is reported as real numbers (a tiny history can even grow — the
+    // summary wrapper outweighs the few tokens saved; the win shows on big inputs,
+    // covered by the tool-output trim test below).
+    expect(typeof res.beforeTokens).toBe("number");
+    expect(res.beforeTokens).toBeGreaterThan(0);
+    expect(typeof res.afterTokens).toBe("number");
+    expect(res.afterTokens).toBeGreaterThan(0);
+  });
+
+  it("stubs oversized tool outputs in the OLDER tail but keeps the recent ones", async () => {
+    // tool_result outputs dominate a coding session's tokens; summarizing the old
+    // portion isn't enough if the kept tail still carries fat dumps. Verify the
+    // older-tail big output is stubbed (pairing preserved) and the recent one isn't.
+    const tracker = new ContextTracker({ windowSize: 100, threshold: 0.5 });
+    const big = "X".repeat(8000); // > the 6000-char cap
+    const msgs: import("../src/providers/types").ChatMessage[] = [];
+    for (let i = 0; i < 26; i++) msgs.push({ role: i % 2 ? "assistant" : "user", content: `lead${i}` });
+    msgs.push({ role: "user", content: "tail-boundary" });                                          // 26 (non-tool boundary)
+    msgs.push({ role: "assistant", content: "", toolCalls: [{ id: "old", name: "FileRead", arguments: {} }] }); // 27
+    msgs.push({ role: "tool", toolCallId: "old", content: big });                                    // 28 OLD big output
+    for (let i = 0; i < 3; i++) msgs.push({ role: i % 2 ? "assistant" : "user", content: `mid${i}` }); // 29,30,31
+    msgs.push({ role: "assistant", content: "", toolCalls: [{ id: "new", name: "FileRead", arguments: {} }] }); // 32
+    msgs.push({ role: "tool", toolCallId: "new", content: big });                                    // 33 RECENT big output
+    msgs.push({ role: "user", content: "latest" });                                                 // 34,35
+    msgs.push({ role: "assistant", content: "done" });
+
+    const res = await tracker.compact(msgs, async () => "S");
+    const stubbed = res.messages.filter((m) => (m.content ?? "").includes("trimmed to save context"));
+    expect(stubbed).toHaveLength(1); // exactly the OLD big output
+    expect(res.messages.some((m) => m.role === "tool" && m.content === big)).toBe(true); // RECENT one intact
+    expect(res.afterTokens).toBeLessThan(res.beforeTokens);
+  });
+
   it("never leaves an orphan tool message at the tail boundary", async () => {
     const tracker = new ContextTracker({ windowSize: 100, threshold: 0.5 });
     const messages = [

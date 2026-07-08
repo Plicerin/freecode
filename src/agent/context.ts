@@ -7,6 +7,39 @@ export interface CompactionResult {
   messages: ChatMessage[];
   removedCount: number;
   summaryTokens: number;
+  /** Estimated context tokens before/after — so the reclaim is visible to the user. */
+  beforeTokens: number;
+  afterTokens: number;
+}
+
+// In a coding session tool_result outputs dominate the token budget (file dumps,
+// command logs — routinely ~80% of context). Summarizing the OLD portion barely
+// helps if the kept tail still carries fat outputs, which is why compaction can
+// "not seem to compact much". So we also stub oversized tool outputs in the tail
+// — except the most recent few messages (the live working set) — since the full
+// output stays in the session log and is recoverable via /expand.
+const TAIL_KEEP_RECENT = 6;
+const TOOL_OUTPUT_CAP = 6000; // chars (~1500 tokens)
+
+function estimateMsgTokens(m: ChatMessage): number {
+  let chars = m.content?.length ?? 0;
+  if (m.toolCalls) for (const c of m.toolCalls) chars += JSON.stringify(c.arguments ?? {}).length + (c.name?.length ?? 0);
+  return Math.ceil(chars / 4);
+}
+
+function estimateTokens(msgs: ChatMessage[]): number {
+  return msgs.reduce((n, m) => n + estimateMsgTokens(m), 0);
+}
+
+/** Stub oversized tool_result contents in all but the last few tail messages
+ *  (pairing preserved — only the content shrinks, so the format stays valid). */
+function trimTailToolOutputs(tail: ChatMessage[]): ChatMessage[] {
+  const cut = Math.max(0, tail.length - TAIL_KEEP_RECENT);
+  return tail.map((m, i) =>
+    i < cut && m.role === "tool" && (m.content?.length ?? 0) > TOOL_OUTPUT_CAP
+      ? { ...m, content: `[tool output trimmed to save context — ${m.content.length} chars; full output is in the session log (/expand to view)]` }
+      : m,
+  );
 }
 
 export interface ContextTrackerEvents {
@@ -87,8 +120,9 @@ export class ContextTracker extends EventEmitter {
    * The caller (agent loop) is responsible for calling the provider to summarize.
    */
   async compact(messages: ChatMessage[], summarize: (msgs: ChatMessage[]) => Promise<string>): Promise<CompactionResult> {
+    const beforeTokens = estimateTokens(messages);
     if (messages.length <= 2) {
-      return { messages, removedCount: 0, summaryTokens: 0 };
+      return { messages, removedCount: 0, summaryTokens: 0, beforeTokens, afterTokens: beforeTokens };
     }
     // Only preserve a separate head if it's a genuine LEADING system message.
     // (freecode passes the real system prompt out-of-band, so messages[0] is
@@ -106,7 +140,7 @@ export class ContextTracker extends EventEmitter {
     const tail = messages.slice(tailStart);
     const toSummarize = messages.slice(hasSystemHead ? 1 : 0, tailStart);
     if (toSummarize.length === 0) {
-      return { messages, removedCount: 0, summaryTokens: 0 };
+      return { messages, removedCount: 0, summaryTokens: 0, beforeTokens, afterTokens: beforeTokens };
     }
     const summary = await summarize(toSummarize);
     const summaryTokens = Math.ceil(summary.length / 4);
@@ -117,9 +151,11 @@ export class ContextTracker extends EventEmitter {
       role: "user",
       content: `[Summary of earlier conversation: ${summary}]`,
     };
-    const next: ChatMessage[] = head ? [head, summaryMsg, ...tail] : [summaryMsg, ...tail];
-    debug.log("compacted context", { removed: toSummarize.length, summaryTokens });
-    const result: CompactionResult = { messages: next, removedCount: toSummarize.length, summaryTokens };
+    const trimmedTail = trimTailToolOutputs(tail);
+    const next: ChatMessage[] = head ? [head, summaryMsg, ...trimmedTail] : [summaryMsg, ...trimmedTail];
+    const afterTokens = estimateTokens(next);
+    debug.log("compacted context", { removed: toSummarize.length, summaryTokens, beforeTokens, afterTokens });
+    const result: CompactionResult = { messages: next, removedCount: toSummarize.length, summaryTokens, beforeTokens, afterTokens };
     this.emit("compacted", result);
     return result;
   }
