@@ -22,7 +22,6 @@ done
 cd "$(dirname "$0")"  # run from the repo root (this script lives there)
 
 echo "== freecode setup =="
-command -v git >/dev/null 2>&1 || { echo "git not found - install Git first."; exit 1; }
 if ! command -v bun >/dev/null 2>&1; then
   echo "Bun not found - installing from bun.sh ..."
   curl -fsSL https://bun.sh/install | bash
@@ -31,10 +30,17 @@ if ! command -v bun >/dev/null 2>&1; then
 fi
 echo "bun $(bun --version)"
 
-echo "Fetching branch '$BRANCH' + installing deps ..."
-git fetch -q origin
-git checkout "$BRANCH"
-git pull --ff-only
+# Best-effort branch sync (the repo is already cloned). If git is absent or the
+# sync fails, warn and continue - bun install + settings still work.
+if command -v git >/dev/null 2>&1; then
+  echo "Syncing to branch '$BRANCH' ..."
+  git fetch -q origin && git checkout "$BRANCH" && git pull --ff-only \
+    || echo "git sync skipped - continuing on the current checkout (ensure you're on '$BRANCH')."
+else
+  echo "git not on PATH - skipping branch sync (ensure you're on '$BRANCH')."
+fi
+
+echo "Installing deps (bun install) ..."
 bun install
 
 APP_DIR="$HOME/.freecode"

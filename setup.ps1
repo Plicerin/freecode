@@ -21,7 +21,6 @@ function Warn($m) { Write-Host $m -ForegroundColor Yellow }
 
 Info "== freecode setup =="
 
-if (-not (Have git)) { throw "git not found. Install Git first: https://git-scm.com" }
 if (-not (Have bun)) {
   Warn "Bun not found - installing from bun.sh ..."
   Invoke-RestMethod https://bun.sh/install.ps1 | Invoke-Expression
@@ -30,10 +29,24 @@ if (-not (Have bun)) {
 }
 Ok ("bun " + (bun --version))
 
-Info "Fetching branch '$Branch' + installing deps ..."
-git fetch --quiet origin
-git checkout $Branch
-git pull --ff-only
+# Best-effort sync to the right branch + latest. The repo is ALREADY cloned, so
+# if git isn't usable in THIS shell (common: you cloned in Git Bash and git isn't
+# on PowerShell's PATH), just warn and carry on - bun install + settings still
+# work on whatever you have checked out.
+if (Have git) {
+  Info "Syncing to branch '$Branch' ..."
+  try {
+    git fetch --quiet origin
+    git checkout $Branch
+    git pull --ff-only
+  } catch {
+    Warn "git sync skipped ($($_.Exception.Message)). Continuing on the current checkout - make sure you're on '$Branch'."
+  }
+} else {
+  Warn "git not on PATH here - skipping branch sync. Ensure you're on '$Branch' (add Git's cmd dir to PATH, or use Git Bash, to sync)."
+}
+
+Info "Installing deps (bun install) ..."
 bun install
 
 $appDir = Join-Path $HOME ".freecode"
