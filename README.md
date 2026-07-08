@@ -20,6 +20,19 @@ bun run src/cli.tsx       # launch REPL (mock provider — no API key needed)
 
 First run uses the **Mock provider** so the app works with zero config. Wire a real provider by setting env vars or `.freecode-profile.json` (see below).
 
+## Another machine
+
+Clone this repo on the new box, then run the one-shot setup from inside it — it installs Bun (if missing), checks out this branch, `bun install`s, and optionally wires up shared cross-session memory:
+
+```bash
+# macOS / Linux
+./setup.sh --honcho http://<honcho-host>:8100
+# Windows (PowerShell)
+./setup.ps1 -HonchoUrl http://<honcho-host>:8100
+```
+
+Omit the `--honcho`/`-HonchoUrl` flag to skip memory (freecode still runs; memory is fail-soft). Shared memory keys off one `user` peer, so pointing two machines at the same Honcho gives them the **same** accumulated memory. The Honcho endpoint is Tailscale-only, so the new machine must be on your tailnet. Config lives in `~/.freecode/` (settings, vault, session logs); copy `vault.json` + `vault.key` to carry provider keys over. A standalone binary (no Bun needed to run) is `bun run build:exe` → `dist/freecode`.
+
 ## Providers
 
 Set the active provider with an env flag, then supply the matching key:
