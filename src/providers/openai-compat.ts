@@ -1,4 +1,4 @@
-import type { ChatMessage, ChatRequest, Provider, StreamEvent, TokenUsage } from "./types";
+import type { ChatMessage, ChatRequest, ModelInfo, Provider, StreamEvent, TokenUsage } from "./types";
 import { friendlyError, makeError } from "./friendly-errors";
 import { zodToJsonSchema } from "./schema-util";
 import { debug } from "../utils/debug";
@@ -88,21 +88,60 @@ export class OpenAICompatProvider implements Provider {
     this.opts = { ...DEFAULT_OPTIONS, ...opts };
   }
 
+  // Raw /models objects. no-store: providers whose catalog changes daily
+  // (OpenRouter) must return the LIVE list each time the picker opens, never a
+  // cached copy. Returns [] on any non-2xx (caller falls back to the default).
+  private async fetchModelObjects(): Promise<Array<Record<string, unknown>>> {
+    const headers: Record<string, string> = {};
+    const auth = this.opts.authHeader ?? "bearer";
+    if (auth !== "none" && this.apiKey) headers["authorization"] = `Bearer ${this.apiKey}`;
+    const resp = await fetch(`${this.baseUrl}/models`, { headers, cache: "no-store", signal: AbortSignal.timeout(8000) });
+    if (!resp.ok) return [];
+    const json = (await resp.json()) as { data?: Array<Record<string, unknown>> };
+    return json.data ?? [];
+  }
+
   async models(): Promise<string[]> {
     const fallback = this.opts.defaultModel ? [this.opts.defaultModel] : [];
     try {
-      const headers: Record<string, string> = {};
-      const auth = this.opts.authHeader ?? "bearer";
-      if (auth !== "none" && this.apiKey) headers["authorization"] = `Bearer ${this.apiKey}`;
-      // no-store: providers with dozens of models that change daily (OpenRouter)
-      // must return the LIVE list each time the picker opens, never a cached copy.
-      const resp = await fetch(`${this.baseUrl}/models`, { headers, cache: "no-store", signal: AbortSignal.timeout(8000) });
-      if (!resp.ok) return fallback;
-      const json = (await resp.json()) as { data?: Array<{ id?: string }> };
-      const ids = (json.data ?? []).map((m) => m.id).filter((x): x is string => !!x);
+      const ids = (await this.fetchModelObjects())
+        .map((m) => m.id)
+        .filter((x): x is string => typeof x === "string" && !!x);
       return ids.length ? ids.sort() : fallback;
     } catch {
       return fallback; // offline / no key / endpoint unsupported → known default
+    }
+  }
+
+  // Catalog with pricing/availability when the endpoint exposes it (OpenRouter:
+  // `pricing.{prompt,completion}` and `expiration_date`). Fields stay undefined
+  // for endpoints that only return ids (NIM, Ollama, …) — the picker then keeps
+  // its name-based fallback. [] on failure → picker falls back to models().
+  async modelCatalog(): Promise<ModelInfo[]> {
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      return (await this.fetchModelObjects())
+        .map((m): ModelInfo | null => {
+          const id = typeof m.id === "string" ? m.id : "";
+          if (!id) return null;
+          const pricing = m.pricing as { prompt?: unknown; completion?: unknown } | undefined;
+          const free =
+            pricing && pricing.prompt !== undefined && pricing.completion !== undefined
+              ? Number(pricing.prompt) === 0 && Number(pricing.completion) === 0
+              : undefined;
+          const exp = typeof m.expiration_date === "string" ? m.expiration_date : undefined;
+          const available = exp ? exp.slice(0, 10) >= today : undefined;
+          // A chat model outputs text ONLY; image/audio/video generators (which
+          // OpenRouter also lists, often priced free) are not usable by the agent.
+          const arch = m.architecture as { output_modalities?: unknown } | undefined;
+          const outs = Array.isArray(arch?.output_modalities) ? (arch!.output_modalities as unknown[]) : undefined;
+          const chat = outs ? outs.length > 0 && outs.every((o) => o === "text") : undefined;
+          return { id, free, available, chat };
+        })
+        .filter((x): x is ModelInfo => x !== null)
+        .sort((a, b) => a.id.localeCompare(b.id));
+    } catch {
+      return [];
     }
   }
 

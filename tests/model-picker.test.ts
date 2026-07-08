@@ -1,7 +1,8 @@
 // Pure logic behind the interactive /model picker (the keystroke wiring is
 // verified live — the harness can't drive keys).
 import { test, expect, describe } from "bun:test";
-import { filterChatModels, pickerWindow, searchModels, sortFreeFirst } from "../src/tui/model-picker";
+import { filterChatModels, orderChatModels, pickerWindow, searchModels, sortFreeFirst } from "../src/tui/model-picker";
+import type { ModelInfo } from "../src/providers/types";
 
 describe("sortFreeFirst", () => {
   test("floats free models to the top, stable within each group", () => {
@@ -50,6 +51,38 @@ describe("filterChatModels", () => {
     const { show, hidden } = filterChatModels(all);
     expect(show).toEqual(all);
     expect(hidden).toBe(0);
+  });
+});
+
+describe("orderChatModels (catalog-driven: availability + real free pricing)", () => {
+  const infos: ModelInfo[] = [
+    { id: "vendor/paid-chat", free: false, available: true, chat: true },
+    { id: "vendor/free-chat", free: true, available: true, chat: true },
+    { id: "vendor/free-music", free: true, available: true, chat: false }, // gen model — must be dropped
+    { id: "vendor/expired-free", free: true, available: false, chat: true }, // withdrawn — must be dropped
+    { id: "vendor/paid-chat-2", free: false, available: true, chat: true },
+  ];
+
+  test("drops unavailable + non-chat, floats truly-free chat models to the top", () => {
+    expect(orderChatModels(infos)).toEqual(["vendor/free-chat", "vendor/paid-chat", "vendor/paid-chat-2"]);
+  });
+
+  test("free is by PRICING, not name — a paid model named ':free' is not floated (and a free one that isn't named 'free' is)", () => {
+    const tricky: ModelInfo[] = [
+      { id: "x/model:free", free: false, available: true, chat: true }, // no-longer-free despite the name
+      { id: "y/actually-free", free: true, available: true, chat: true },
+    ];
+    expect(orderChatModels(tricky)).toEqual(["y/actually-free", "x/model:free"]);
+  });
+
+  test("falls back to the name heuristic when pricing/modality are unknown", () => {
+    const unknown: ModelInfo[] = [
+      { id: "a/plain" },
+      { id: "b/thing:free" },
+      { id: "c/whisper-1" }, // non-chat by name
+    ];
+    // b floated (name 'free'), whisper dropped (name heuristic), a kept
+    expect(orderChatModels(unknown)).toEqual(["b/thing:free", "a/plain"]);
   });
 });
 

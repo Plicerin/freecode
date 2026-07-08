@@ -14,7 +14,7 @@ import { createAgentTool } from "../tools/agent";
 import { resolveAgentTypes } from "../agent/agent-types";
 import { resolveSkills, getSkill } from "../agent/skills";
 import { resolveWorkflows, getWorkflow, runWorkflow, composeWorkflow, type WorkflowEvent } from "../agent/workflow";
-import { filterChatModels, pickerWindow, searchModels, sortFreeFirst } from "../tui/model-picker";
+import { filterChatModels, orderChatModels, pickerWindow, searchModels, sortFreeFirst } from "../tui/model-picker";
 import { matchCommands, resolveSubmit } from "../tui/slash-complete";
 import { createApprovalQueue } from "../tui/approval-queue";
 import { resolvePlugins, setPluginEnabled, installPlugin, uninstallPlugin } from "../plugins";
@@ -1155,14 +1155,24 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
     return { text: buffer, aborted, toolCalls: toolCallsThisRun };
   }
 
+  // The picker's model list, fetched LIVE each call (no cache): prefer the rich
+  // catalog — which drops models the provider marked expired and floats free ones
+  // by ACTUAL pricing — when the provider exposes one; otherwise the bare id list
+  // with the name-based free-first fallback.
+  async function modelListFor(prov: ReturnType<typeof buildProvider>): Promise<string[]> {
+    const infos = prov.modelCatalog ? await prov.modelCatalog() : [];
+    if (infos.length) return orderChatModels(infos);
+    const all = await prov.models();
+    const { show } = filterChatModels(all);
+    return sortFreeFirst(show.length ? show : all);
+  }
+
   // Open the interactive model picker for a given provider instance. Shared by
   // /model (no arg) and by /provider (which auto-opens it for the new provider).
   async function openModelPicker(prov: ReturnType<typeof buildProvider>, currentModel: string): Promise<void> {
     setBusy(true);
     try {
-      const all = await prov.models();
-      const { show } = filterChatModels(all);
-      const list = sortFreeFirst(show.length ? show : all); // free models to the top
+      const list = await modelListFor(prov);
       if (!list.length) { setErrorLine("Provider returned no models."); return; }
       const cur = list.indexOf(currentModel);
       setModelPicker({ all: list, query: "", idx: cur >= 0 ? cur : 0 });
@@ -1180,9 +1190,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
     setBusy(true);
     try {
       const cfg = loadConfig({ flags: { ...(flags ?? {}), provider: providerId as CliFlags["provider"] } });
-      const all = await buildProvider(cfg).models();
-      const { show } = filterChatModels(all);
-      const list = sortFreeFirst(show.length ? show : all);
+      const list = await modelListFor(buildProvider(cfg));
       if (!list.length) { setErrorLine(`${providerId} returned no models (no key, or endpoint unreachable).`); setConsultPicker(null); return; }
       const cur = list.indexOf(cfg.model);
       setConsultPicker({ stage: "model", task, providerId, cfg, all: list, query: "", idx: cur >= 0 ? cur : 0 });

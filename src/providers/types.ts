@@ -76,10 +76,27 @@ export interface ProviderError extends Error {
   provider?: string;
 }
 
+/** Richer per-model metadata, when the provider's catalog exposes it (e.g.
+ *  OpenRouter's /models carries pricing + expiration_date). Fields are optional
+ *  because most providers only return bare ids. */
+export interface ModelInfo {
+  id: string;
+  /** true/false when pricing is known; undefined when the provider doesn't say. */
+  free?: boolean;
+  /** false only when the catalog marks it expired/withdrawn; undefined = unknown. */
+  available?: boolean;
+  /** true = text-output chat model, false = a generation model (image/audio/…);
+   *  undefined when the provider doesn't report modality (fall back to the name). */
+  chat?: boolean;
+}
+
 export interface Provider {
   name: string;
   id: string;
   models(): Promise<string[]> | string[];
+  /** Optional: the catalog with pricing/availability, so the picker can drop
+   *  expired models and mark free ones accurately instead of guessing by name. */
+  modelCatalog?(): Promise<ModelInfo[]>;
   stream(req: ChatRequest): AsyncIterable<StreamEvent>;
   countTokens?(req: ChatRequest): Promise<number>;
 }
