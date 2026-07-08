@@ -158,5 +158,11 @@ export function listSessionMetas(cwd: string): SessionMeta[] {
       const count = events.filter((e) => e.kind === "user" || e.kind === "assistant").length;
       return { id, cwd, path, title: titleOf(events), preview, count, mtime };
     })
+    // Every launch creates a fresh session (a lone `system` start event). Those
+    // have no conversation to resume, yet sort newest-first — so the empty
+    // just-created session would top the picker and be the default pick, and
+    // resuming it gives the model ZERO context ("no idea what it's resuming").
+    // Show only sessions that actually hold a turn.
+    .filter((m) => m.count > 0)
     .sort((a, b) => b.mtime - a.mtime);
 }
