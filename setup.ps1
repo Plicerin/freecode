@@ -4,6 +4,8 @@
 # Does: prereq check (installs Bun if missing) -> checkout the branch -> bun install
 # -> optionally write ~/.freecode/settings.json with the shared-memory endpoint
 # -> typecheck. Non-destructive: never overwrites an existing settings.json.
+# NOTE: keep this file ASCII-only. Windows PowerShell 5.1 reads a BOM-less script
+# as ANSI, so a stray "curly" char (em-dash, check mark) corrupts the parse.
 param(
   [string]$Branch = "feat/tier-a-parity",
   [string]$HonchoUrl = $env:FREECODE_HONCHO_URL,  # optional; enables cross-machine memory
@@ -19,12 +21,12 @@ function Warn($m) { Write-Host $m -ForegroundColor Yellow }
 
 Info "== freecode setup =="
 
-if (-not (Have git)) { throw "git not found — install Git first: https://git-scm.com" }
+if (-not (Have git)) { throw "git not found. Install Git first: https://git-scm.com" }
 if (-not (Have bun)) {
-  Warn "Bun not found — installing from bun.sh ..."
+  Warn "Bun not found - installing from bun.sh ..."
   Invoke-RestMethod https://bun.sh/install.ps1 | Invoke-Expression
   $env:Path = "$HOME\.bun\bin;$env:Path"
-  if (-not (Have bun)) { throw "Bun installed but not on PATH — open a new terminal and re-run ./setup.ps1" }
+  if (-not (Have bun)) { throw "Bun installed but not on PATH. Open a new terminal and re-run ./setup.ps1" }
 }
 Ok ("bun " + (bun --version))
 
@@ -40,15 +42,15 @@ $settingsPath = Join-Path $appDir "settings.json"
 
 if ($HonchoUrl) {
   if (Test-Path $settingsPath) {
-    Warn "settings.json already exists — not touching it. To enable shared memory, add:"
+    Warn "settings.json already exists - not touching it. To enable shared memory, add:"
     Warn "  `"memory`": { `"provider`":`"honcho`", `"enabled`":true, `"baseUrl`":`"$HonchoUrl`", `"workspace`":`"freecode`", `"peer`":`"user`" }"
   } else {
     $json = @{ memory = @{ provider = "honcho"; enabled = $true; baseUrl = $HonchoUrl; workspace = "freecode"; peer = "user" } } | ConvertTo-Json -Depth 6
     [System.IO.File]::WriteAllText($settingsPath, $json)  # UTF-8, no BOM
     Ok "Wrote $settingsPath  (memory -> $HonchoUrl)"
   }
-  try { $null = Invoke-WebRequest "$HonchoUrl/health" -TimeoutSec 5 -UseBasicParsing; Ok "Honcho reachable at $HonchoUrl ✓" }
-  catch { Warn "Honcho NOT reachable at $HonchoUrl — is Tailscale up? (memory is fail-soft; freecode still runs without it)" }
+  try { $null = Invoke-WebRequest "$HonchoUrl/health" -TimeoutSec 5 -UseBasicParsing; Ok "Honcho reachable at $HonchoUrl [OK]" }
+  catch { Warn "Honcho NOT reachable at $HonchoUrl - is Tailscale up? (memory is fail-soft; freecode still runs without it)" }
 } else {
   Warn "No -HonchoUrl given -> shared memory not configured."
   Warn "Enable later:  ./setup.ps1 -HonchoUrl http://<honcho-host>:8100"

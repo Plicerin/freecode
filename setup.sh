@@ -22,12 +22,12 @@ done
 cd "$(dirname "$0")"  # run from the repo root (this script lives there)
 
 echo "== freecode setup =="
-command -v git >/dev/null 2>&1 || { echo "git not found — install Git first."; exit 1; }
+command -v git >/dev/null 2>&1 || { echo "git not found - install Git first."; exit 1; }
 if ! command -v bun >/dev/null 2>&1; then
-  echo "Bun not found — installing from bun.sh ..."
+  echo "Bun not found - installing from bun.sh ..."
   curl -fsSL https://bun.sh/install | bash
   export PATH="$HOME/.bun/bin:$PATH"
-  command -v bun >/dev/null 2>&1 || { echo "Bun installed but not on PATH — open a new shell and re-run ./setup.sh"; exit 1; }
+  command -v bun >/dev/null 2>&1 || { echo "Bun installed but not on PATH - open a new shell and re-run ./setup.sh"; exit 1; }
 fi
 echo "bun $(bun --version)"
 
@@ -43,7 +43,7 @@ SETTINGS="$APP_DIR/settings.json"
 
 if [ -n "$HONCHO_URL" ]; then
   if [ -f "$SETTINGS" ]; then
-    echo "settings.json already exists — not touching it. To enable shared memory, add:"
+    echo "settings.json already exists - not touching it. To enable shared memory, add:"
     echo "  \"memory\": { \"provider\":\"honcho\", \"enabled\":true, \"baseUrl\":\"$HONCHO_URL\", \"workspace\":\"freecode\", \"peer\":\"user\" }"
   else
     cat > "$SETTINGS" <<JSON
@@ -56,7 +56,7 @@ JSON
   if curl -fsS "$HONCHO_URL/health" >/dev/null 2>&1; then
     echo "Honcho reachable at $HONCHO_URL"
   else
-    echo "Honcho NOT reachable at $HONCHO_URL — is Tailscale up? (memory is fail-soft; freecode still runs without it)"
+    echo "Honcho NOT reachable at $HONCHO_URL - is Tailscale up? (memory is fail-soft; freecode still runs without it)"
   fi
 else
   echo "No --honcho URL -> shared memory not configured."
