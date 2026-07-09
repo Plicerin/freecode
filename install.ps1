@@ -8,7 +8,10 @@
 # the update check for a launch.
 #
 # Keep this file ASCII-only (Windows PowerShell 5.1 reads a BOM-less script as
-# ANSI, so a stray curly char would corrupt the parse).
+# ANSI, so a stray curly char would corrupt the parse). And 5.1-compatible: NO
+# ternary (? :), null-coalescing (??), or ?. — those are PowerShell 7 only and
+# 5.1 (the default shell on Windows) rejects them at parse time. Validate with
+# powershell.exe, not just pwsh (tests/install-scripts.test.ts does this).
 param(
   [string]$Branch = "feat/tier-a-parity",
   [string]$HonchoUrl = $env:FREECODE_HONCHO_URL,  # optional; enables cross-machine memory
@@ -86,7 +89,7 @@ if ($NoUpdateHook) {
 
 $profilePath = $PROFILE.CurrentUserAllHosts
 New-Item -ItemType Directory -Force -Path (Split-Path $profilePath) | Out-Null
-$existing = (Test-Path $profilePath) ? (Get-Content $profilePath -Raw) : ""
+$existing = if (Test-Path $profilePath) { Get-Content $profilePath -Raw } else { "" }
 # Remove any prior freecode launcher block (idempotent) or a legacy one-line alias.
 $cleaned = [regex]::Replace($existing, "(?s)# >>> freecode launcher.*?# <<< freecode launcher[^\r\n]*\r?\n?", "")
 $cleaned = ($cleaned -split "`r?`n" | Where-Object { $_ -notmatch '^\s*function\s+freecode\s*\{.*bun.*cli\.tsx' }) -join "`n"
