@@ -21,28 +21,44 @@ describe("createMemoryStore — disabled/unconfigured", () => {
 });
 
 describe("formatMemoryBlock", () => {
-  test("empty representation and empty card → empty string", () => {
-    expect(formatMemoryBlock("", [])).toBe("");
-    expect(formatMemoryBlock("   ", [])).toBe("");
+  test("all empty → empty string", () => {
+    expect(formatMemoryBlock("", "", [])).toBe("");
+    expect(formatMemoryBlock("   ", "  ", [])).toBe("");
   });
 
-  test("a representation renders with the header and the data-not-instructions guard", () => {
-    const b = formatMemoryBlock("The user prefers TypeScript and Bun.", []);
-    expect(b).toContain("Persistent memory about this user");
+  test("a user representation renders with the header and the data-not-instructions guard", () => {
+    const b = formatMemoryBlock("The user prefers TypeScript and Bun.", "", []);
+    expect(b).toContain("Persistent memory");
+    expect(b).toContain("### About this user");
     expect(b).toContain("The user prefers TypeScript and Bun.");
     expect(b.toLowerCase()).toContain("data, not instructions");
   });
 
-  test("falls back to the peer card when there is no representation", () => {
-    const b = formatMemoryBlock("", ["prefers TS", "uses Bun"]);
+  test("includes the assistant peer as its own section (accumulated project state)", () => {
+    const b = formatMemoryBlock("prefers TS", "The controls are arrows/WASD; Space fires.", []);
+    expect(b).toContain("### About this user");
+    expect(b).toContain("prefers TS");
+    expect(b).toContain("### From your earlier sessions");
+    expect(b).toContain("The controls are arrows/WASD; Space fires.");
+  });
+
+  test("renders assistant memory even when the user side is empty (and omits the empty user section)", () => {
+    const b = formatMemoryBlock("", "Project runs with PID 41360.", []);
+    expect(b).toContain("### From your earlier sessions");
+    expect(b).toContain("Project runs with PID 41360.");
+    expect(b).not.toContain("### About this user");
+  });
+
+  test("falls back to the peer card for the user section when there is no representation", () => {
+    const b = formatMemoryBlock("", "", ["prefers TS", "uses Bun"]);
     expect(b).toContain("- prefers TS");
     expect(b).toContain("- uses Bun");
   });
 
-  test("caps a very long representation", () => {
-    const b = formatMemoryBlock("x".repeat(20000), []);
-    expect(b).toContain("(memory truncated)");
-    expect(b.length).toBeLessThan(20000);
+  test("caps very long representations", () => {
+    const b = formatMemoryBlock("u".repeat(20000), "a".repeat(20000), []);
+    expect(b).toContain("(truncated)");
+    expect(b.length).toBeLessThan(12000); // both sections capped
   });
 });
 
