@@ -298,7 +298,21 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
       // cap from its own error, trim the conversation to the most-recent N, and
       // retry once. Only when nothing was emitted (a clean request-time reject).
       const limit = !emitted && !imageCapTried ? parseImageLimit(err) : null;
-      if (limit === null) throw err;
+      if (limit === null) {
+        // A user interrupt (ESC) also surfaces as a throw here — let it propagate
+        // so the REPL shows "Interrupted" and drops the turn the user chose to stop.
+        if (opts.signal?.aborted) throw err;
+        // Otherwise the stream FAILED involuntarily — openai-compat THROWS when its
+        // idle watchdog fires mid-stream (i.e. AFTER partial output). Don't discard
+        // the turn by re-throwing: surface the error and end gracefully so the
+        // partial assistant text in `turnText` is preserved in `messages` (the
+        // caller persists it). Otherwise a follow-up "continue" has no trace of what
+        // was being generated and the model asks "continue what?".
+        opts.onEvent({ type: "error", error: String((err as { message?: string })?.message ?? err) });
+        sawError = true;
+        aborted = true;
+        break; // stop retrying; fall through to the single assistant push below
+      }
       imageCapTried = true;
       imageLimit = limit; // sticks for the rest of the session
       const had = countImages(messages);
@@ -309,7 +323,14 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
      }
     }
 
-    messages.push({ role: "assistant", content: turnText, toolCalls: turnToolCalls });
+    // One assistant message per turn (the cold-load pop below depends on this
+    // single push having happened when !sawError). Skip it ONLY when the turn
+    // errored before producing anything — an empty, errored assistant message can
+    // break the next request; a partial (turnText non-empty) is always kept so
+    // "continue" retains what was being generated.
+    if (turnText || turnToolCalls.length > 0 || !sawError) {
+      messages.push({ role: "assistant", content: turnText, toolCalls: turnToolCalls });
+    }
     lastTurnToolCalls = turnToolCalls.length;
 
     if (turnText.trim()) producedText = true;
