@@ -9,6 +9,7 @@ import { zodToJsonSchema } from "../providers/schema-util";
 import { buildToolRegistry, toolListToSystemPrompt } from "../tools/registry";
 import { createPermissionEngine, approvalDecisionForKey, type ApprovalCallback, type ApprovalDecision, type ApprovalRequest, type PermissionEngine } from "../permissions/modes";
 import { makeGrantStore } from "../config/permission-grants";
+import { VERSION } from "../version";
 import { runAgentLoop } from "../agent/loop";
 import { branch as gitBranch, commitPushPr, issue as ghIssue, prComments } from "./git-workflow";
 import { createAgentTool } from "../tools/agent";
@@ -353,7 +354,7 @@ function Intro({ provider, model, endpoint, isLocal, providerNote, hasKey, theme
       </Box>
       <Box marginLeft={1} marginTop={1}>
         <Text color={theme.dim}>freecode </Text>
-        <Text color={theme.hex.assistant}>v0.1.0</Text>
+        <Text color={theme.hex.assistant}>{VERSION}</Text>
       </Box>
     </Box>
   );
