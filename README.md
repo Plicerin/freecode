@@ -22,16 +22,22 @@ First run uses the **Mock provider** so the app works with zero config. Wire a r
 
 ## Another machine
 
-Clone this repo on the new box, then run the one-shot setup from inside it — it installs Bun (if missing), checks out this branch, `bun install`s, and optionally wires up shared cross-session memory:
+Clone once, then run the one-command installer from inside it. It installs Bun (if missing), checks out this branch, `bun install`s, wires up shared memory, and installs an **auto-updating `freecode` launcher** into your shell profile:
 
 ```bash
+# fresh clone (private repo → needs GitHub auth)
+gh repo clone Plicerin/freecode && cd freecode
+git checkout feat/tier-a-parity
+
 # macOS / Linux
-./setup.sh --honcho http://<honcho-host>:8100
+./install.sh --honcho http://<honcho-host>:8100
 # Windows (PowerShell)
-./setup.ps1 -HonchoUrl http://<honcho-host>:8100
+./install.ps1 -HonchoUrl http://<honcho-host>:8100
 ```
 
-Omit the `--honcho`/`-HonchoUrl` flag to skip memory (freecode still runs; memory is fail-soft). Shared memory keys off one `user` peer, so pointing two machines at the same Honcho gives them the **same** accumulated memory. The Honcho endpoint is Tailscale-only, so the new machine must be on your tailnet. Config lives in `~/.freecode/` (settings, vault, session logs); copy `vault.json` + `vault.key` to carry provider keys over. A standalone binary (no Bun needed to run) is `bun run build:exe` → `dist/freecode`.
+Open a new terminal, then just `freecode` from **any** folder. Each launch fast-forwards to the latest (at most hourly, best-effort) and runs from source, so you stay current with no manual `git pull`. Skip the update check for one launch with `FREECODE_NO_UPDATE=1`; install without the auto-update hook via `--no-update-hook` / `-NoUpdateHook`.
+
+Notes: omit the `--honcho`/`-HonchoUrl` flag to skip memory (freecode still runs; memory is fail-soft). Shared memory keys off one `user` peer, so pointing two machines at the same Honcho gives them the **same** accumulated memory — but the Honcho endpoint is Tailscale-only, so the machine must be on your tailnet. Config lives in `~/.freecode/` (settings, vault, session logs); copy `vault.json` + `vault.key` to carry provider keys over. A standalone binary (no Bun needed to run) is `bun run build:exe` → `dist/freecode`. (`setup.sh`/`setup.ps1` still exist for env-only setup without the launcher.)
 
 ## Providers
 
