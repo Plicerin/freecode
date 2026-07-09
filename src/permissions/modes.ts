@@ -20,6 +20,16 @@ export interface PermissionEngine {
   isDenied(req: ApprovalRequest): boolean;
 }
 
+/** Optional persistence for "allow always" grants so they survive a relaunch —
+ *  in-memory grants reset every launch, which reads as "permissions don't stick".
+ *  load() returns previously-persisted tool names for the current scope (e.g. this
+ *  project folder); persist() is called when a new allow-always grant is made. The
+ *  store decides which tools are eligible to persist (e.g. never Bash). */
+export interface GrantStore {
+  load(): string[];
+  persist(tool: string): void;
+}
+
 const SAFE_TOOLS = new Set(["FileRead", "Glob", "Grep", "WebSearch", "WebFetch"]);
 
 /** Map an approval keypress to a decision. Convention (matches other CLIs):
@@ -33,9 +43,13 @@ export function approvalDecisionForKey(input: string | undefined, escape: boolea
   return null;
 }
 
-export function createPermissionEngine(mode: PermissionMode, _prompt?: ApprovalCallback): PermissionEngine {
+export function createPermissionEngine(mode: PermissionMode, opts?: { grants?: GrantStore }): PermissionEngine {
   const denied = new Set<string>();
-  const allowedTools = new Set<string>(); // "allow always" grants — must live for the whole session
+  const allowedTools = new Set<string>(); // "allow always" grants — live for the whole session
+  const grants = opts?.grants;
+  // Restore grants persisted in a prior session for this scope (per-project), so
+  // "allow always" survives a relaunch instead of resetting every launch.
+  if (grants) for (const t of grants.load()) allowedTools.add(t);
 
   const key = (r: ApprovalRequest) => `${r.tool}::${r.argsSummary}`;
   let currentMode = mode;
@@ -56,6 +70,7 @@ export function createPermissionEngine(mode: PermissionMode, _prompt?: ApprovalC
       const decision = await cb(req);
       if (decision === "allow-always") {
         allowedTools.add(req.tool);
+        grants?.persist(req.tool); // survive a relaunch (the store excludes e.g. Bash)
         return "allow";
       }
       return decision;

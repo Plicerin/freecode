@@ -11,7 +11,7 @@ import { createPermissionEngine, type ApprovalCallback } from "../src/permission
 import type { Tool } from "../src/tools/types";
 
 const allow = (async () => "allow") as ApprovalCallback;
-const perm = () => createPermissionEngine("bypass", allow);
+const perm = () => createPermissionEngine("bypass");
 
 // A provider that echoes back the prompt it was given, so we can assert what each
 // sub-agent actually received (i.e. that interpolation happened).

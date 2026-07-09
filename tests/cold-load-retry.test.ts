@@ -33,7 +33,7 @@ async function runWith(
   await runAgentLoop({
     provider: provider as never,
     tools: [],
-    permission: createPermissionEngine("bypass", (async () => "allow") as never),
+    permission: createPermissionEngine("bypass"),
     promptUser: (async () => "allow") as never,
     model: "x",
     history: [{ role: "user", content: "do it" }],

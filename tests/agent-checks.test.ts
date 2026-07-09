@@ -78,7 +78,7 @@ async function run(tools: Tool[], turns: Array<Array<Record<string, unknown>>>):
   const events: AgentEvent[] = [];
   await runAgentLoop({
     provider: scripted(turns) as never, tools,
-    permission: createPermissionEngine("bypass", (async () => "allow") as never),
+    permission: createPermissionEngine("bypass"),
     promptUser: (async () => "allow") as never,
     model: "x", history: [{ role: "user", content: "do it" }],
     onEvent: (e: AgentEvent) => events.push(e),

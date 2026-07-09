@@ -19,7 +19,7 @@ class SpyProvider implements Provider {
   }
 }
 
-const perm = createPermissionEngine("bypass", (async () => "allow") as ApprovalCallback);
+const perm = createPermissionEngine("bypass");
 const base = {
   tools: [],
   model: "mock-1",

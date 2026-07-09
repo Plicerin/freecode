@@ -8,6 +8,7 @@ import { discoverServers, type DiscoveredServer } from "../providers/server-disc
 import { zodToJsonSchema } from "../providers/schema-util";
 import { buildToolRegistry, toolListToSystemPrompt } from "../tools/registry";
 import { createPermissionEngine, approvalDecisionForKey, type ApprovalCallback, type ApprovalDecision, type ApprovalRequest, type PermissionEngine } from "../permissions/modes";
+import { makeGrantStore } from "../config/permission-grants";
 import { runAgentLoop } from "../agent/loop";
 import { branch as gitBranch, commitPushPr, issue as ghIssue, prComments } from "./git-workflow";
 import { createAgentTool } from "../tools/agent";
@@ -455,7 +456,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
   // in a ref (created once); a live permission-mode change syncs onto it below
   // instead of rebuilding, so switching provider/model never forgets approvals.
   const permissionRef = useRef<PermissionEngine | null>(null);
-  if (!permissionRef.current) permissionRef.current = createPermissionEngine(config.permissionMode);
+  if (!permissionRef.current) permissionRef.current = createPermissionEngine(config.permissionMode, { grants: makeGrantStore(process.cwd()) });
   const permission = permissionRef.current;
   useEffect(() => { permission.setMode(config.permissionMode); }, [config.permissionMode]);
   const trackerRef = useRef(

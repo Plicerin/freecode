@@ -22,7 +22,7 @@ class OneImageProvider implements Provider {
   }
 }
 
-const perm = createPermissionEngine("bypass", (async () => "allow") as ApprovalCallback);
+const perm = createPermissionEngine("bypass");
 
 describe("loop recovers from a per-request image limit", () => {
   test("caps to the limit and retries instead of failing the turn", async () => {

@@ -8,7 +8,7 @@ import { createPermissionEngine, type ApprovalCallback } from "../src/permission
 import type { Provider, ChatRequest, StreamEvent } from "../src/providers/types";
 import type { Tool } from "../src/tools/types";
 
-const perm = createPermissionEngine("bypass", (async () => "allow") as ApprovalCallback);
+const perm = createPermissionEngine("bypass");
 const base = {
   model: "mock-1",
   permission: perm,

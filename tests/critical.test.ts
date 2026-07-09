@@ -28,7 +28,7 @@ async function runLoop(provider: unknown, cwd: string): Promise<AgentEvent[]> {
   try {
     await runAgentLoop({
       provider: provider as never, tools,
-      permission: createPermissionEngine("bypass", (async () => "allow") as never),
+      permission: createPermissionEngine("bypass"),
       promptUser: (async () => "allow") as never,
       model: "x", prompt: "do it", history: [], onEvent: (e: AgentEvent) => events.push(e), maxTurns: 20,
     } as never);
@@ -42,7 +42,7 @@ describe("CRITICAL — memory", () => {
     const provider = { name: "c", id: "c", models: () => ["x"], async *stream(req: { messages: ChatMessage[] }) { captured = req.messages; yield { type: "text_delta", delta: "ok" }; } };
     await runAgentLoop({
       provider: provider as never, tools,
-      permission: createPermissionEngine("bypass", (async () => "allow") as never),
+      permission: createPermissionEngine("bypass"),
       promptUser: (async () => "allow") as never, model: "x",
       history: [{ role: "user", content: "my name is Zorp" }, { role: "assistant", content: "noted" }],
       prompt: "what did I say my name was?", onEvent: () => {}, maxTurns: 3,
@@ -96,7 +96,7 @@ describe("CRITICAL — safety", () => {
     await runAgentLoop({
       provider: scripted([[call("Bash", { command: "rm -rf /" })], [{ type: "text_delta", delta: "k" }]]) as never,
       tools: [dangerTool] as never,
-      permission: createPermissionEngine("manual", (async () => "deny") as never),
+      permission: createPermissionEngine("manual"),
       promptUser: (async () => "deny") as never,
       model: "x", prompt: "wipe everything", history: [], onEvent: (e: AgentEvent) => events.push(e), maxTurns: 5,
     } as never);

@@ -34,7 +34,7 @@ describe("auto-verify gate", () => {
     const events: AgentEvent[] = [];
     await runAgentLoop({
       provider: makeProvider(), tools: [editTool], model: "m", maxTurns: 8, prompt: "go",
-      permission: createPermissionEngine("bypass", (async () => "allow") as ApprovalCallback),
+      permission: createPermissionEngine("bypass"),
       promptUser: (async () => "allow") as ApprovalCallback,
       verifyMode: "on",
       // first verify run fails, second passes — modeled via a command that
@@ -55,7 +55,7 @@ describe("auto-verify gate", () => {
     const texts: string[] = [];
     await runAgentLoop({
       provider: makeProvider("tic-tac-toe.html"), tools: [editTool], model: "m", maxTurns: 8, prompt: "make a game",
-      permission: createPermissionEngine("bypass", (async () => "allow") as ApprovalCallback),
+      permission: createPermissionEngine("bypass"),
       promptUser: (async () => "allow") as ApprovalCallback,
       verifyMode: "on",
       // exit 0 WOULD trivially pass — but it must never run, because it doesn't
@@ -72,7 +72,7 @@ describe("auto-verify gate", () => {
     const provider = { id: "m", name: "m", models: () => ["m"], async *stream(): AsyncIterable<StreamEvent> { yield { type: "text_delta", delta: "hi" }; yield { type: "end", reason: "end_turn" }; } } as Provider;
     await runAgentLoop({
       provider, tools: [], model: "m", maxTurns: 3, prompt: "hi",
-      permission: createPermissionEngine("bypass", (async () => "allow") as ApprovalCallback),
+      permission: createPermissionEngine("bypass"),
       promptUser: (async () => "allow") as ApprovalCallback,
       verifyMode: "on", verifyPlan: { commands: ["exit 1"], source: "config" },
       onEvent: (e) => { if (e.type === "verify") verifyCalls++; },

@@ -11,7 +11,7 @@ import { createPermissionEngine, type ApprovalCallback } from "../src/permission
 import type { Tool } from "../src/tools/types";
 
 const allow = (async () => "allow") as ApprovalCallback;
-const perm = () => createPermissionEngine("bypass", allow);
+const perm = () => createPermissionEngine("bypass");
 
 // A provider scripted to emit a fixed sequence of events per turn.
 function scripted(turns: Array<Array<Record<string, unknown>>>): unknown {

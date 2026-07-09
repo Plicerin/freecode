@@ -16,7 +16,7 @@ class CapturingProvider implements Provider {
 
 describe("multi-turn conversation memory", () => {
   it("threads prior turns into the next request", async () => {
-    const perm = createPermissionEngine("bypass", (async () => "allow") as ApprovalCallback);
+    const perm = createPermissionEngine("bypass");
     const p = new CapturingProvider();
     const base = { provider: p, tools: [], model: "m", maxTurns: 2, permission: perm, promptUser: (async () => "allow") as ApprovalCallback, onEvent: () => {} };
 

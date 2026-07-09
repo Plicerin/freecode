@@ -19,7 +19,7 @@ class CallsBashThenStops implements Provider {
     }
   }
 }
-const perm = createPermissionEngine("bypass", (async () => "allow") as ApprovalCallback);
+const perm = createPermissionEngine("bypass");
 const run = async (restrictedToolNames: string[]): Promise<string[]> => {
   const events: AgentEvent[] = [];
   await runAgentLoop({

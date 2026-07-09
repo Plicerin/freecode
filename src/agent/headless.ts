@@ -68,7 +68,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
   appendEvent(session, { kind: "user", text: opts.prompt, ts: nowIso() });
 
   const allow = (async () => "allow") as ApprovalCallback;
-  const permission = createPermissionEngine(config.permissionMode, allow);
+  const permission = createPermissionEngine(config.permissionMode); // headless: `allow` cb auto-approves; no persisted grants
   tools.push(createAgentTool(() => ({
     provider, model: config.model, tools, permission, promptUser: allow,
     hooks: config.hooks, contextWindow: contextWindowFor(config.model),

@@ -55,7 +55,7 @@ describe("hooks in the agent loop", () => {
     const events: any[] = [];
     await runAgentLoop({
       provider, tools: [noop], model: "m", maxTurns: 3, prompt: "go",
-      permission: createPermissionEngine("bypass", (async () => "allow") as ApprovalCallback),
+      permission: createPermissionEngine("bypass"),
       promptUser: (async () => "allow") as ApprovalCallback,
       hooks: { PreToolUse: [{ command: "exit 1" }] },
       onEvent: (e) => events.push(e),

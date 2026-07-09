@@ -75,13 +75,13 @@ describe("Session append-only (V6)", () => {
 
 describe("Permission engine (V3, V18)", () => {
   it("bypass mode allows everything without prompt", async () => {
-    const eng = createPermissionEngine("bypass", (async () => "deny") as ApprovalCallback);
+    const eng = createPermissionEngine("bypass");
     const d = await eng.decide({ tool: "Bash", argsSummary: "rm -rf /" }, (async () => "deny") as ApprovalCallback);
     expect(d).toBe("allow");
   });
   it("manual mode prompts and remembers denials", async () => {
     let calls = 0;
-    const eng = createPermissionEngine("manual", (async () => { calls++; return "deny"; }) as ApprovalCallback);
+    const eng = createPermissionEngine("manual");
     const req = { tool: "Bash", argsSummary: "x" };
     expect(await eng.decide(req, (async () => "deny") as ApprovalCallback)).toBe("deny");
     eng.rememberDenied(req);
@@ -92,7 +92,7 @@ describe("Permission engine (V3, V18)", () => {
 describe("Agent loop integration", () => {
   it("runs mock provider to end_turn", async () => {
     const tools: Tool[] = [];
-    const perm = createPermissionEngine("bypass", (async () => "allow") as ApprovalCallback);
+    const perm = createPermissionEngine("bypass");
     const res = await runAgentLoop({
       provider: new MockProvider(0),
       tools,

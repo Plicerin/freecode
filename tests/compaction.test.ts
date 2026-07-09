@@ -140,7 +140,7 @@ describe("Agent loop auto-compaction (V14)", () => {
       async run() { return { ok: true, output: "ok" }; },
     };
     const events: AgentEvent[] = [];
-    const perm = createPermissionEngine("bypass", (async () => "allow") as ApprovalCallback);
+    const perm = createPermissionEngine("bypass");
     await runAgentLoop({
       provider: new ToolLoopProvider(),
       tools: [noop],
