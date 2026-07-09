@@ -34,6 +34,35 @@ export function pathFromDiffHeader(diff: string): string | null {
   return null;
 }
 
+/** Recompute each `@@ -a,X +c,Y @@` hunk header's line counts from the ACTUAL
+ *  body lines. Weak models get the body (the +/-/space lines) right but the
+ *  header counts wrong, and the `diff` library THROWS on the mismatch ("Added
+ *  line count did not match for hunk…") rather than applying. Rewriting the
+ *  counts from the body — a no-op for an already-correct diff — makes the common
+ *  malformed-header case apply cleanly. Start lines are preserved untouched. */
+export function normalizeHunkCounts(diff: string): string {
+  const lines = diff.split("\n");
+  const hdr = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$/;
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i]!.match(hdr);
+    if (!m) { out.push(lines[i]!); continue; }
+    let oldC = 0, newC = 0;
+    for (let j = i + 1; j < lines.length; j++) {
+      const line = lines[j]!;
+      if (line.startsWith("@@") || line.startsWith("--- ") || line.startsWith("+++ ")) break;
+      const c = line[0];
+      if (c === " ") { oldC++; newC++; }
+      else if (c === "-") oldC++;
+      else if (c === "+") newC++;
+      else if (c === "\\") { /* "\ No newline at end of file" — not a content line */ }
+      else break; // blank/unknown line ends the hunk body
+    }
+    out.push(`@@ -${m[1]},${oldC} +${m[2]},${newC} @@${m[3]}`);
+  }
+  return out.join("\n");
+}
+
 function countOccurrences(haystack: string, needle: string): number {
   if (!needle) return 0;
   let count = 0;
@@ -169,11 +198,19 @@ export const FileEditTool: Tool<z.infer<typeof ArgsSchema>> = {
     }
 
     if (unified) {
-      // applyPatch (singular) is synchronous and returns the patched string,
-      // or false if the patch doesn't apply cleanly.
-      const result = applyPatch(original, unified);
+      // Recompute hunk header counts from the body first: weak models fumble the
+      // `@@ -a,X +c,Y @@` counts, and the diff library THROWS on the mismatch
+      // (surfacing a cryptic "Added line count did not match…"). applyPatch is
+      // synchronous and returns the patched string, or false if the CONTEXT
+      // doesn't match — but it can also throw on a malformed patch, so guard it.
+      let result: string | false;
+      try {
+        result = applyPatch(original, normalizeHunkCounts(unified));
+      } catch (err) {
+        return { ok: false, output: "", error: `The unified diff is malformed (${String((err as Error)?.message ?? err)}). Re-read the file for its CURRENT exact lines, or use oldText + newText (an exact snippet and its replacement) instead — it's more forgiving than a hand-written diff.` };
+      }
       if (result === false) {
-        return { ok: false, output: "", error: "Patch did not apply cleanly against the current file contents" };
+        return { ok: false, output: "", error: "The unified diff didn't apply — its context lines don't match the current file (it may have changed, or the surrounding lines are off). Re-read the file to copy the exact lines, or switch to oldText + newText (an exact snippet and its replacement)." };
       }
       const jsonError = structuredWriteError(path, result);
       if (jsonError) {
