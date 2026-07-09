@@ -73,7 +73,7 @@ export interface ReplOptions {
   mcp?: McpManager;
 }
 
-interface UiMessage {
+export interface UiMessage {
   id: string;
   role: "user" | "assistant" | "tool" | "system" | "ledger" | "warning" | "reasoning";
   text: string;
@@ -85,6 +85,26 @@ interface UiMessage {
   // caution reads as PART OF the turn (not a post-script line dropped at
   // bottom). The renderer in MessageLine is the only consumer.
   warning?: string;
+}
+
+export type StaticItem =
+  | { kind: "intro"; key: string }
+  | { kind: "msg"; key: string; m: UiMessage };
+
+/** The <Static> scrollback items. INVARIANT: append-only — Ink's <Static> tracks
+ *  by COUNT and only writes items past what it already emitted, so mutating a
+ *  PREFIX makes it re-emit shifted items (and repaint from the top). The old code
+ *  prepended the intro once the splash settled; if a startup message (memory/MCP
+ *  status) had already landed in Static before that, prepending shifted it → the
+ *  message duplicated and the terminal jumped to the top. Fix: gate everything on
+ *  `introReady` — Static stays empty until the splash settles, then it's
+ *  [intro, ...settled messages] and only ever grows at the end. */
+export function buildStaticItems(introReady: boolean, messages: UiMessage[], settled: number): StaticItem[] {
+  if (!introReady) return [];
+  return [
+    { kind: "intro", key: "intro" },
+    ...messages.slice(0, settled).filter((m) => m.id).map((m, i): StaticItem => ({ kind: "msg", key: `${m.id}:${i}`, m })),
+  ];
 }
 
 /** Rebuild the visible transcript from a session's stored events for /resume.
@@ -2445,12 +2465,10 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
           message from finished turns. Static writes each item to scrollback
           exactly once, so this whole region never re-renders. */}
       <Static
-        items={[
-          // The intro joins Static only after the launch splash settles, so it's
-          // written to scrollback exactly once, frozen (eyes open).
-          ...(introReady ? [{ kind: "intro" as const, key: "intro" }] : []),
-          ...messages.slice(0, settled).filter((m) => m.id).map((m, i) => ({ kind: "msg" as const, key: `${m.id}:${i}`, m })),
-        ]}
+        // Append-only (see buildStaticItems): gated on introReady so a startup
+        // message can't land in Static before the intro and then get duplicated
+        // when the intro prepends.
+        items={buildStaticItems(introReady, messages, settled)}
       >
         {(item) =>
           item.kind === "intro" ? (
