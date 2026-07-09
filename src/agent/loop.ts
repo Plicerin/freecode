@@ -10,6 +10,7 @@ import { estimateMessagesTokens, trimToFit } from "./token-estimate";
 import { overclaimWarning, editClaimWithoutChange } from "./overclaim";
 import { looksLikeTextToolCall, announcedNextActionWithoutCalling } from "./text-tool-call";
 import { parseImageLimit, capImagesTo, countImages } from "./image-cap";
+import { parseContextLimit } from "./context-limit";
 import { getEnv } from "../utils/env";
 import { summarizeConversation } from "./summarize";
 import { runHooks } from "./hooks";
@@ -70,7 +71,15 @@ export interface AgentLoopOptions {
   /** Persistent cross-session memory block (Honcho representation), appended to
    *  the system prompt. Recalled once per session by the REPL and passed in. */
   memoryContext?: string;
+  /** Called when a context-overflow 400 reveals the model's REAL usable window
+   *  (tokens). The REPL remembers it so later turns size compaction correctly
+   *  instead of re-learning the same limit each turn. */
+  onContextLimit?: (limitTokens: number) => void;
 }
+
+// How many times, per turn, to shrink+retry after a context-overflow 400 before
+// giving up (a single message genuinely bigger than the window can't be fit).
+const MAX_CONTEXT_HEALS = 4;
 
 /** Per-turn output-token cap. 8192 truncates a large FileWrite (a whole game.js,
  *  a full index.html) mid-write — the turn then ends and the user has to say
@@ -99,7 +108,9 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
   const summarize = (msgs: ChatMessage[]): Promise<string> =>
     summarizeConversation(opts.provider, opts.model, msgs, opts.signal);
 
-  const windowSize = opts.contextWindow ?? 200_000;
+  // Mutable: a context-overflow 400 tells us the server's REAL usable window
+  // (more reliable than /props or a name guess), and we shrink to it and retry.
+  let windowSize = opts.contextWindow ?? 200_000;
   const threshold = opts.contextThreshold ?? 0.8;
   // Approximate live context size = tokens sent+produced on the most recent
   // turn (the whole history is re-sent each turn, so this tracks the window).
@@ -247,6 +258,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
     // incrementally. Retry only applies before the first event (e.g. a 429 at
     // connection time); once streaming has started we don't re-run.
     let imageCapTried = false;
+    let contextHeals = 0; // context-overflow self-heals used this turn
     for (;;) {
      try {
       await withRetry(
@@ -297,29 +309,56 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
       // Self-heal a "too many images" 400: learn the model's per-request image
       // cap from its own error, trim the conversation to the most-recent N, and
       // retry once. Only when nothing was emitted (a clean request-time reject).
-      const limit = !emitted && !imageCapTried ? parseImageLimit(err) : null;
-      if (limit === null) {
-        // A user interrupt (ESC) also surfaces as a throw here — let it propagate
-        // so the REPL shows "Interrupted" and drops the turn the user chose to stop.
-        if (opts.signal?.aborted) throw err;
-        // Otherwise the stream FAILED involuntarily — openai-compat THROWS when its
-        // idle watchdog fires mid-stream (i.e. AFTER partial output). Don't discard
-        // the turn by re-throwing: surface the error and end gracefully so the
-        // partial assistant text in `turnText` is preserved in `messages` (the
-        // caller persists it). Otherwise a follow-up "continue" has no trace of what
-        // was being generated and the model asks "continue what?".
-        opts.onEvent({ type: "error", error: String((err as { message?: string })?.message ?? err) });
-        sawError = true;
-        aborted = true;
-        break; // stop retrying; fall through to the single assistant push below
+      const imgLimit = !emitted && !imageCapTried ? parseImageLimit(err) : null;
+      if (imgLimit !== null) {
+        imageCapTried = true;
+        imageLimit = imgLimit; // sticks for the rest of the session
+        const had = countImages(messages);
+        messages.splice(0, messages.length, ...capImagesTo(messages, imgLimit));
+        req.messages = capImagesTo(sanitizeToolPairing(messages), imgLimit);
+        opts.onEvent({ type: "compacted", text: `${opts.model} accepts at most ${imgLimit} image(s) per request — kept the most recent ${Math.min(imgLimit, had)}, dropped ${Math.max(0, had - imgLimit)}, and retried.` });
+        continue; // retry the stream with the capped request
       }
-      imageCapTried = true;
-      imageLimit = limit; // sticks for the rest of the session
-      const had = countImages(messages);
-      messages.splice(0, messages.length, ...capImagesTo(messages, limit));
-      req.messages = capImagesTo(sanitizeToolPairing(messages), limit);
-      opts.onEvent({ type: "compacted", text: `${opts.model} accepts at most ${limit} image(s) per request — kept the most recent ${Math.min(limit, had)}, dropped ${Math.max(0, had - limit)}, and retried.` });
-      // loop retries the stream with the capped request
+
+      // Self-heal a CONTEXT OVERFLOW: the server just told us its REAL usable
+      // window (llama.cpp: "exceeds the available context size (64000 tokens)").
+      // /props can overstate the window and our char/4 estimate can undercount the
+      // real tokenizer, so trust the server's number: shrink to it, compact/trim
+      // the conversation to fit, and retry — instead of dead-ending on the 400.
+      const ctxLimit = !emitted ? parseContextLimit(err) : null;
+      if (ctxLimit !== null && contextHeals < MAX_CONTEXT_HEALS && messages.length > 1) {
+        contextHeals += 1;
+        // Each repeat shrinks a bit more (0.9^n) to absorb estimate/tokenizer drift
+        // and leave room for the reply, converging instead of re-tripping the 400.
+        const target = Math.floor(ctxLimit * Math.pow(0.9, contextHeals));
+        windowSize = Math.max(2048, Math.min(windowSize, target));
+        opts.onContextLimit?.(ctxLimit); // remember it for later turns in this run
+        const reserve = Math.min(8192, Math.max(512, Math.floor(windowSize * 0.05)));
+        try {
+          const r = await tracker.compact(messages, summarize); // summarize the middle
+          if (r.removedCount > 0) messages.splice(0, messages.length, ...r.messages);
+        } catch { /* fall through to the hard trim */ }
+        const fit = trimToFit(messages, sys, Math.max(0, windowSize - reserve)); // drop oldest if a fat tail remains
+        if (fit.dropped > 0) messages.splice(0, messages.length, ...sanitizeToolPairing(fit.messages));
+        req.messages = sanitizeToolPairing(messages);
+        if (imageLimit !== null) req.messages = capImagesTo(req.messages, imageLimit);
+        opts.onEvent({ type: "compacted", text: `Server context limit is ${ctxLimit.toLocaleString()} tokens — compacted to fit and retrying.` });
+        continue; // retry the stream with the shrunk request
+      }
+
+      // A user interrupt (ESC) surfaces as a throw here — let it propagate so the
+      // REPL shows "Interrupted" and drops the turn the user chose to stop.
+      if (opts.signal?.aborted) throw err;
+      // Otherwise the stream FAILED involuntarily (e.g. openai-compat THROWS when
+      // its idle watchdog fires mid-stream, AFTER partial output). Don't discard
+      // the turn by re-throwing: surface the error and end gracefully so the
+      // partial assistant text in `turnText` is preserved in `messages` (the
+      // caller persists it). Otherwise a follow-up "continue" has no trace of what
+      // was being generated and the model asks "continue what?".
+      opts.onEvent({ type: "error", error: String((err as { message?: string })?.message ?? err) });
+      sawError = true;
+      aborted = true;
+      break; // stop retrying; fall through to the single assistant push below
      }
     }
 

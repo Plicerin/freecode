@@ -995,6 +995,10 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
         images,
         history: conversationRef.current,
         contextWindow: windowFor(aModel),
+        // The server can reject with its REAL usable window (llama.cpp /props
+        // overstates it). Remember what the loop learned so later turns — and the
+        // ctx gauge — size to the truth instead of re-tripping the same 400.
+        onContextLimit: (n) => { detectedWindowRef.current = n; trackerRef.current.setWindow(n); setCtxFill(trackerRef.current.contextFill()); },
         contextThreshold: config.contextThreshold,
         enablePromptCache: config.enablePromptCache,
         enableExtendedThinking: config.enableExtendedThinking,
