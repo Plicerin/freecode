@@ -11,6 +11,7 @@ import { overclaimWarning, editClaimWithoutChange } from "./overclaim";
 import { looksLikeTextToolCall, announcedNextActionWithoutCalling } from "./text-tool-call";
 import { parseImageLimit, capImagesTo, countImages } from "./image-cap";
 import { parseContextLimit } from "./context-limit";
+import { isJunkResponse } from "./degeneration";
 import { getEnv } from "../utils/env";
 import { summarizeConversation } from "./summarize";
 import { runHooks } from "./hooks";
@@ -92,8 +93,16 @@ function maxOutputTokens(): number {
 export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: number; usage: TokenUsage; aborted: boolean; messages: ChatMessage[] }> {
   const tools = opts.tools;
   const maxOut = maxOutputTokens();
+  // Drop any junk assistant scraps (a bare "')" etc.) the model emitted when it
+  // degenerated in a PRIOR turn. Re-sending them poisons this turn — the model
+  // parrots its own junk in a self-reinforcing loop that never recovers. They
+  // carry no tool calls, so removing them can't orphan a tool result. This also
+  // auto-heals a session that was already stuck in the loop.
+  const history = (opts.history ?? []).filter(
+    (m) => !(m.role === "assistant" && !(m.toolCalls && m.toolCalls.length) && isJunkResponse(m.content)),
+  );
   const messages: ChatMessage[] = [
-    ...(opts.history ?? []),
+    ...history,
     { role: "user", content: opts.prompt, ...(opts.images?.length ? { images: opts.images } : {}) },
   ];
   const baseSys = opts.systemPrompt ?? toolListToSystemPrompt(tools);
@@ -390,6 +399,16 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
     // Make a silent stop legible: an empty reply, or a tool call leaked as text.
     else if (turnToolCalls.length === 0 && looksLikeTextToolCall(turnText)) {
       opts.onEvent({ type: "error", error: "⚠ The model wrote a tool call as TEXT (e.g. <function_calls>) instead of calling the tool — the provider isn't parsing this model's tool-call format into a structured call, so freecode can't run it. Use a model with provider-supported tool calling, or check the model's tool template/settings (common with some local models in LM Studio/Ollama)." });
+    } else if (turnToolCalls.length === 0 && isJunkResponse(turnText)) {
+      // A trivial junk scrap ("')") with no tool call — the model has degenerated
+      // (common when a local model is fed dense/repetitive content like a
+      // disassembly dump). It's filtered from FUTURE turns by the history filter
+      // above; pop it from THIS run's context too, surface it clearly, and STOP
+      // instead of looping "continue" and re-feeding the junk.
+      messages.pop();
+      opts.onEvent({ type: "error", error: `⚠ The model returned only "${turnText.trim()}" — no usable answer. It has degenerated (common when a local model is fed dense/repetitive input, e.g. a disassembly dump). freecode won't feed that junk back into the context. Start fresh with /new, /compact to shrink the context, or switch models (/model).` });
+      aborted = true;
+      break;
     } else if (turnToolCalls.length === 0 && !turnText.trim() && !sawError && !producedText) {
       // Cold-load retry (silent one-shot). A freshly-loaded local model
       // (Ollama after a long idle, llama-server first hit) often returns an

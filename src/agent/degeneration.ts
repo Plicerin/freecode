@@ -62,3 +62,15 @@ export function degenerationReason(text: string): string | null {
 export function isDegenerate(text: string): boolean {
   return degenerationReason(text) !== null;
 }
+
+/** A "response" that carries no usable content — a tiny punctuation-only scrap a
+ *  collapsing model emits ("')", ")", ".", "…"). Distinct from EMPTY (handled
+ *  separately) and from a real short reply ("ok", "done", "42", "yes"), which
+ *  contain a letter or digit. These are the deadly ones: fed back into the
+ *  context they POISON the next turn — the model, a next-token predictor, sees a
+ *  history of "assistant: ') / continue / assistant: ')" and parrots its own
+ *  junk forever. So the loop must never keep or re-send them. */
+export function isJunkResponse(text: string): boolean {
+  const t = text.trim();
+  return t.length > 0 && t.length <= 4 && !/[\p{L}\p{N}]/u.test(t);
+}
