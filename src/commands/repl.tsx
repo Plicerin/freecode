@@ -889,7 +889,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
       if (!st.reachable) {
         text = `🧠 memory: Honcho unreachable at ${mem?.baseUrl} — running without persistent memory this session`;
       } else if (block) {
-        text = `🧠 memory: recalled ${st.representationChars} chars about you from prior sessions (workspace ${st.workspace})`;
+        text = `🧠 memory: recalled ${st.representationChars} chars from prior sessions${st.cached ? " (cached — Honcho didn't respond this time)" : ""} (workspace ${st.workspace})`;
       } else {
         text = `🧠 memory: connected to Honcho (workspace ${st.workspace}) — nothing recalled yet; this session will add to it`;
       }

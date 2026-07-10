@@ -11,6 +11,7 @@
 // workspace, isolated from anything else in the same Honcho.
 
 import { HonchoClient, type HonchoMessage } from "./honcho";
+import { readMemoryCache, writeMemoryCache } from "./cache";
 import { debug } from "../utils/debug";
 
 export const ASSISTANT_PEER = "assistant";
@@ -42,6 +43,9 @@ export interface MemoryStatus {
   representationChars: number;
   cardLines: number;
   pending: number;
+  /** The recalled block came from the on-disk last-known-good cache (Honcho gave
+   *  nothing this time), not a fresh fetch. */
+  cached: boolean;
   baseUrl?: string;
   workspace: string;
   peer: string;
@@ -70,6 +74,7 @@ class HonchoMemoryStore implements MemoryStore {
   private cachedContext = "";
   private lastRepChars = 0;
   private lastCardLines = 0;
+  private cachedFromDisk = false; // did the last recall fall back to the disk cache?
 
   constructor(cfg: MemoryConfig) {
     this.cfg = cfg;
@@ -105,13 +110,31 @@ class HonchoMemoryStore implements MemoryStore {
       ]);
       let card: string[] = [];
       if (!userRep.trim() && !assistantRep.trim()) card = await this.client.getPeerCard(this.cfg.peer).catch(() => []);
-      this.lastRepChars = userRep.trim().length + assistantRep.trim().length;
-      this.lastCardLines = card.length;
-      this.cachedContext = formatMemoryBlock(userRep, assistantRep, card);
+      const block = formatMemoryBlock(userRep, assistantRep, card);
+      if (block.trim()) {
+        // Good recall — remember it so a later transient failure degrades to
+        // "slightly stale" instead of "gone" (memory shouldn't vanish between
+        // sessions just because Honcho was briefly slow at the wrong moment).
+        writeMemoryCache(this.cfg.workspace, block);
+        this.lastRepChars = userRep.trim().length + assistantRep.trim().length;
+        this.lastCardLines = card.length;
+        this.cachedFromDisk = false;
+        this.cachedContext = block;
+        return block;
+      }
+      // Empty this time — fall back to the last-known-good recall on disk.
+      const disk = readMemoryCache(this.cfg.workspace);
+      this.cachedFromDisk = !!disk;
+      this.lastRepChars = disk ? disk.length : 0;
+      this.cachedContext = disk ?? "";
       return this.cachedContext;
     } catch (e) {
       debug.warn("memory recall failed", String(e));
-      return this.cachedContext; // keep any earlier value ("" if none)
+      if (!this.cachedContext) {
+        const disk = readMemoryCache(this.cfg.workspace); // last-known-good, even on a hard failure
+        if (disk) { this.cachedFromDisk = true; this.lastRepChars = disk.length; this.cachedContext = disk; }
+      }
+      return this.cachedContext;
     }
   }
 
@@ -156,6 +179,7 @@ class HonchoMemoryStore implements MemoryStore {
       representationChars: this.lastRepChars,
       cardLines: this.lastCardLines,
       pending: this.pending.length,
+      cached: this.cachedFromDisk,
       baseUrl: this.cfg.baseUrl,
       workspace: this.cfg.workspace,
       peer: this.cfg.peer,
@@ -179,7 +203,7 @@ class NullMemoryStore implements MemoryStore {
     /* no-op */
   }
   async status(): Promise<MemoryStatus> {
-    return { enabled: false, reachable: false, representationChars: 0, cardLines: 0, pending: 0, workspace: "", peer: "" };
+    return { enabled: false, reachable: false, representationChars: 0, cardLines: 0, pending: 0, cached: false, workspace: "", peer: "" };
   }
 }
 
