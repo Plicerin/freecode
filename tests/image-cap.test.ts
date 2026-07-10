@@ -1,8 +1,28 @@
 import { test, expect, describe } from "bun:test";
-import { parseImageLimit, countImages, capImagesTo } from "../src/agent/image-cap";
+import { parseImageLimit, isImageUnsupported, countImages, capImagesTo } from "../src/agent/image-cap";
 import type { ChatMessage, ImagePart } from "../src/providers/types";
 
 const img = (id: string): ImagePart => ({ mediaType: "image/png", data: `data-${id}` } as unknown as ImagePart);
+
+describe("isImageUnsupported", () => {
+  test("detects a no-vision rejection (DeepSeek et al.)", () => {
+    expect(isImageUnsupported(new Error('unknown variant `image_url`, expected `text` at line 1'))).toBe(true);
+    expect(isImageUnsupported(new Error("This model does not support image input"))).toBe(true);
+    expect(isImageUnsupported(new Error("vision is not supported by this model"))).toBe(true);
+  });
+  test("does NOT fire on a count limit or unrelated errors (those go through parseImageLimit)", () => {
+    expect(isImageUnsupported(new Error("supports at most 1 image per prompt"))).toBe(false);
+    expect(isImageUnsupported(new Error("429 rate limit"))).toBe(false);
+    expect(isImageUnsupported(new Error("context length exceeded"))).toBe(false);
+  });
+});
+
+test("capImagesTo honours a note override (for the no-vision case)", () => {
+  const msgs: ChatMessage[] = [{ role: "user", content: "x", images: [img("a")] }];
+  const out = capImagesTo(msgs, 0, "[image not sent — no vision]");
+  expect(countImages(out)).toBe(0);
+  expect(out[0]!.content).toContain("no vision");
+});
 
 describe("parseImageLimit", () => {
   test("reads the limit from the kimi-style 400", () => {

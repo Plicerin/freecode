@@ -24,6 +24,23 @@ export function parseImageLimit(err: unknown): number | null {
   return null;
 }
 
+/** True when a provider rejects the request because the model has NO vision at
+ *  all (not a count limit) — e.g. DeepSeek: "unknown variant `image_url`,
+ *  expected `text`". The fix is to strip ALL images (cap 0), not just trim to N.
+ *  Once one lands in the history it poisons every later request, so we detect and
+ *  remove it. */
+export function isImageUnsupported(err: unknown): boolean {
+  const m = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  return (
+    /unknown variant .{0,2}image_url/.test(m) || // deserialize error (deepseek et al.)
+    /does not support (image|vision)/.test(m) ||
+    /(image|vision).{0,24}(is )?not supported/.test(m) ||
+    /image input is not/.test(m) ||
+    /no support for image/.test(m) ||
+    (/image_url/.test(m) && /expected .{0,2}text/.test(m))
+  );
+}
+
 /** Count image parts across a conversation. */
 export function countImages(messages: ChatMessage[]): number {
   return messages.reduce((n, m) => n + (m.images?.length ?? 0), 0);
@@ -32,7 +49,7 @@ export function countImages(messages: ChatMessage[]): number {
 /** Return a copy of `messages` carrying at most `limit` images — keeping the
  *  MOST RECENT ones (the latest view is usually what matters) and replacing the
  *  dropped image parts with a text note so the model still knows they existed. */
-export function capImagesTo(messages: ChatMessage[], limit: number): ChatMessage[] {
+export function capImagesTo(messages: ChatMessage[], limit: number, noteOverride?: string): ChatMessage[] {
   const cap = Math.max(0, limit);
   let kept = 0;
   const out: ChatMessage[] = [];
@@ -50,7 +67,7 @@ export function capImagesTo(messages: ChatMessage[], limit: number): ChatMessage
     const keepImgs = room > 0 ? imgs.slice(imgs.length - room) : [];
     kept += keepImgs.length;
     const dropped = imgs.length - keepImgs.length;
-    const note = `[${dropped} earlier image(s) omitted — this model accepts at most ${cap} image(s) per request; view them one at a time if you need them]`;
+    const note = noteOverride ?? `[${dropped} earlier image(s) omitted — this model accepts at most ${cap} image(s) per request; view them one at a time if you need them]`;
     out.unshift({
       ...m,
       images: keepImgs.length ? keepImgs : undefined,

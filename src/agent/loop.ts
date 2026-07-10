@@ -9,7 +9,7 @@ import { ContextTracker } from "./context";
 import { estimateMessagesTokens, trimToFit } from "./token-estimate";
 import { overclaimWarning, editClaimWithoutChange } from "./overclaim";
 import { looksLikeTextToolCall, announcedNextActionWithoutCalling } from "./text-tool-call";
-import { parseImageLimit, capImagesTo, countImages } from "./image-cap";
+import { parseImageLimit, isImageUnsupported, capImagesTo, countImages } from "./image-cap";
 import { parseContextLimit } from "./context-limit";
 import { isJunkResponse } from "./degeneration";
 import { resolveTool } from "../tools/resolve";
@@ -316,17 +316,26 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
       );
       break; // stream consumed successfully
      } catch (err) {
-      // Self-heal a "too many images" 400: learn the model's per-request image
-      // cap from its own error, trim the conversation to the most-recent N, and
-      // retry once. Only when nothing was emitted (a clean request-time reject).
-      const imgLimit = !emitted && !imageCapTried ? parseImageLimit(err) : null;
+      // Self-heal an image-rejection 400: either a per-request COUNT limit ("at
+      // most N images") or a NO-VISION model that rejects image content outright
+      // (DeepSeek: "unknown variant `image_url`"). Learn it, cap the conversation
+      // to the allowed count (0 = strip all), and retry — stripping `messages` (not
+      // just req.messages) so the image can't re-poison every later turn. Only when
+      // nothing was emitted (a clean request-time reject).
+      const imgLimit = !emitted && !imageCapTried
+        ? (parseImageLimit(err) ?? (isImageUnsupported(err) ? 0 : null))
+        : null;
       if (imgLimit !== null) {
         imageCapTried = true;
-        imageLimit = imgLimit; // sticks for the rest of the session
+        imageLimit = imgLimit; // sticks for the rest of the run
         const had = countImages(messages);
-        messages.splice(0, messages.length, ...capImagesTo(messages, imgLimit));
-        req.messages = capImagesTo(sanitizeToolPairing(messages), imgLimit);
-        opts.onEvent({ type: "compacted", text: `${opts.model} accepts at most ${imgLimit} image(s) per request — kept the most recent ${Math.min(imgLimit, had)}, dropped ${Math.max(0, had - imgLimit)}, and retried.` });
+        const noVision = imgLimit === 0;
+        const note = noVision ? "[image not sent — this model has no vision; switch to a vision-capable model to view it]" : undefined;
+        messages.splice(0, messages.length, ...capImagesTo(messages, imgLimit, note));
+        req.messages = capImagesTo(sanitizeToolPairing(messages), imgLimit, note);
+        opts.onEvent({ type: "compacted", text: noVision
+          ? `${opts.model} has no vision — removed ${had} image(s) from the context (kept as text notes) and retried. Use a vision-capable model to see images.`
+          : `${opts.model} accepts at most ${imgLimit} image(s) per request — kept the most recent ${Math.min(imgLimit, had)}, dropped ${Math.max(0, had - imgLimit)}, and retried.` });
         continue; // retry the stream with the capped request
       }
 

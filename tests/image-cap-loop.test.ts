@@ -47,3 +47,37 @@ describe("loop recovers from a per-request image limit", () => {
     expect(events.some((e) => e.type === "error" && /at most .* image/i.test(e.error ?? ""))).toBe(false);
   });
 });
+
+// A NO-VISION model (DeepSeek) rejects image content outright, not a count limit.
+class NoVisionProvider implements Provider {
+  id = "mock"; name = "no-vision"; calls = 0;
+  models() { return ["m"]; }
+  async *stream(req: ChatRequest): AsyncIterable<StreamEvent> {
+    this.calls += 1;
+    const imgs = req.messages.reduce((n, m) => n + (m.images?.length ?? 0), 0);
+    if (imgs > 0) throw new Error('400 {"error":{"message":"Failed to deserialize the JSON body into the target type: messages[3]: unknown variant `image_url`, expected `text`","type":"invalid_request_error"}}');
+    yield { type: "text_delta", delta: "No vision here, but I read the note." };
+    yield { type: "end", reason: "end_turn" };
+  }
+}
+
+describe("loop recovers from a no-vision model rejecting images", () => {
+  test("strips ALL images, retries, and clears them from the context so they can't re-poison", async () => {
+    const provider = new NoVisionProvider();
+    const events: AgentEvent[] = [];
+    const result = await runAgentLoop({
+      provider, tools: [], model: "deepseek", maxTurns: 3,
+      prompt: "look at this screenshot",
+      images: [img("cockpit")], // any image → the request 400s on a no-vision model
+      permission: perm, promptUser: (async () => "allow") as ApprovalCallback,
+      onEvent: (e) => events.push(e),
+    });
+
+    expect(provider.calls).toBe(2); // 400, then the image-stripped retry
+    expect(result.messages.some((m) => (m.images?.length ?? 0) > 0)).toBe(false); // no images left in context
+    expect(result.messages.some((m) => m.role === "assistant" && /read the note/i.test(m.content ?? ""))).toBe(true);
+    // A clear "no vision" note surfaced; no raw deserialize error leaked as fatal.
+    expect(events.some((e) => e.type === "compacted" && /no vision/i.test(e.text ?? ""))).toBe(true);
+    expect(events.some((e) => e.type === "error" && /image_url/i.test(e.error ?? ""))).toBe(false);
+  });
+});
