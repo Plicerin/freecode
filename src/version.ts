@@ -12,9 +12,19 @@
 // `typeof` on an undeclared identifier is safe (never throws), so this works in
 // both modes without a try/catch.
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
 declare const __FREECODE_VERSION__: string | undefined;
+
+/** This module's directory, portably: Bun exposes import.meta.dir; Node derives
+ *  it from import.meta.url. Lets the git-sha read work under both runtimes. */
+function moduleDir(): string {
+  const meta = import.meta as { dir?: string; url?: string };
+  if (meta.dir) return meta.dir; // Bun
+  if (meta.url) return dirname(fileURLToPath(meta.url)); // Node
+  return process.cwd();
+}
 
 /** The freecode repo's current HEAD short SHA, read straight from .git relative
  *  to THIS file — so it works even when freecode runs with the user's project as
@@ -22,7 +32,7 @@ declare const __FREECODE_VERSION__: string | undefined;
  *  compiled binary, where the baked version is used). */
 export function devGitSha(): string | null {
   try {
-    const gitDir = join(import.meta.dir, "..", ".git");
+    const gitDir = join(moduleDir(), "..", ".git");
     const head = readFileSync(join(gitDir, "HEAD"), "utf8").trim();
     const ref = head.match(/^ref:\s*(.+)$/);
     let sha: string;

@@ -20,24 +20,26 @@ bun run src/cli.tsx       # launch REPL (mock provider — no API key needed)
 
 First run uses the **Mock provider** so the app works with zero config. Wire a real provider by setting env vars or `.freecode-profile.json` (see below).
 
-## Another machine
+## Install (another machine)
 
-Clone once, then run the one-command installer from inside it. It installs Bun (if missing), checks out this branch, `bun install`s, wires up shared memory, and installs an **auto-updating `freecode` launcher** into your shell profile:
+One command, runs on **Node** (no clone, no Bun on the target). The repo is private, so the machine needs GitHub access once — an SSH key, `gh auth login`, or a PAT in your git credential helper.
 
 ```bash
-# fresh clone (private repo → needs GitHub auth)
-gh repo clone Plicerin/freecode && cd freecode
-git checkout feat/tier-a-parity
-
-# macOS / Linux
-./install.sh --honcho http://<honcho-host>:8100
-# Windows (PowerShell)
-./install.ps1 -HonchoUrl http://<honcho-host>:8100
+npm install -g "github:Plicerin/freecode#feat/tier-a-parity"
+freecode
 ```
 
-Open a new terminal, then just `freecode` from **any** folder. Each launch fast-forwards to the latest (at most hourly, best-effort) and runs from source, so you stay current with no manual `git pull`. Skip the update check for one launch with `FREECODE_NO_UPDATE=1`; install without the auto-update hook via `--no-update-hook` / `-NoUpdateHook`.
+That clones, installs deps, bundles a Node-runnable CLI (via esbuild — no Bun needed), and puts `freecode` on your PATH. **Upgrade** by re-running the same command. (The `#feat/tier-a-parity` picks the working branch; once it merges to `main`, plain `github:Plicerin/freecode` will do.) Requires Node ≥ 18.
 
-Notes: omit the `--honcho`/`-HonchoUrl` flag to skip memory (freecode still runs; memory is fail-soft). Shared memory keys off one `user` peer, so pointing two machines at the same Honcho gives them the **same** accumulated memory — but the Honcho endpoint is Tailscale-only, so the machine must be on your tailnet. Config lives in `~/.freecode/` (settings, vault, session logs); copy `vault.json` + `vault.key` to carry provider keys over. A standalone binary (no Bun needed to run) is `bun run build:exe` → `dist/freecode`. (`setup.sh`/`setup.ps1` still exist for env-only setup without the launcher.)
+Enable shared cross-session memory by writing `~/.freecode/settings.json` (Honcho is Tailscale-only, so the machine must be on your tailnet):
+
+```json
+{ "memory": { "provider": "honcho", "enabled": true, "baseUrl": "http://<honcho-host>:8100", "workspace": "freecode", "peer": "user" } }
+```
+
+Memory keys off one `user` peer, so pointing two machines at the same Honcho gives them the **same** accumulated memory; it's fail-soft, so freecode runs fine without it. Other config (vault keys, session logs) lives in `~/.freecode/` — copy `vault.json` + `vault.key` to carry provider keys over.
+
+**Alternative — auto-updating source install.** If you'd rather run from source with an `freecode` launcher that self-updates on launch, clone and run `./install.sh --honcho <url>` (macOS/Linux) or `./install.ps1 -HonchoUrl <url>` (Windows); details in [`install.sh`](install.sh). A standalone binary (no runtime at all) is `bun run build:exe` → `dist/freecode`.
 
 ## Providers
 
