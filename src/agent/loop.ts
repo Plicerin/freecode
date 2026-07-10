@@ -12,6 +12,7 @@ import { looksLikeTextToolCall, announcedNextActionWithoutCalling } from "./text
 import { parseImageLimit, capImagesTo, countImages } from "./image-cap";
 import { parseContextLimit } from "./context-limit";
 import { isJunkResponse } from "./degeneration";
+import { resolveTool } from "../tools/resolve";
 import { getEnv } from "../utils/env";
 import { summarizeConversation } from "./summarize";
 import { runHooks } from "./hooks";
@@ -503,12 +504,15 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
     const pendingImages: ImagePart[] = [];
     for (const call of turnToolCalls) {
       if (opts.signal?.aborted) { aborted = true; break; }
-      const tool = tools.find((t) => t.name === call.name);
+      // Resolve the called name tolerantly — case + common cross-framework
+      // aliases (Write→FileWrite, shell→Bash, …) — so a model doesn't burn a turn
+      // on "tool not found" just because it used its trained name for the tool.
+      const tool = resolveTool(tools, call.name);
       if (!tool) {
         const restricted = opts.restrictedToolNames?.includes(call.name);
         const msg = restricted
           ? `${call.name} is unavailable in plan mode (read-only). Don't try to run commands or edit files — investigate with FileRead/Grep/Glob and PROPOSE a plan. The user runs /plan to exit plan mode and let you act.`
-          : `Error: tool ${call.name} not found`;
+          : `Error: tool "${call.name}" not found. Available tools (use these EXACT names): ${tools.map((t) => t.name).join(", ")}.`;
         messages.push({ role: "tool", toolCallId: call.id, content: msg });
         opts.onEvent({ type: "tool_result", result: { id: call.id, output: msg, ok: false, durationMs: 0 } });
         continue;
