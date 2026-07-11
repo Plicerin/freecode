@@ -49,6 +49,8 @@ import { logActivity, setActivityLog, activityState } from "../utils/activity";
 import { closest } from "../utils/fuzzy";
 import { resolveVerify, resolveQuickVerify, runVerify } from "../agent/verify";
 import { newSession, appendEvent, resumeSession, readSession, setSessionTitle, titleOf, toolOutputs, listSessionMetas, writeConversationState, readConversationState, type Session, type SessionMeta, type SessionEvent } from "../session/manager";
+import { collectSnapshots, writeRecovered, currentFileInfo } from "../session/recover";
+import { isAbsolute as pathIsAbsolute, resolve as pathResolve } from "node:path";
 import { setTerminalTitle } from "../tui/terminal-title";
 import { writeLastSession } from "../config/last-session";
 import { goalPrompt, goalStatus, goalVerifyFailedPrompt, GOAL_MAX_DEFAULT } from "../agent/goal";
@@ -143,7 +145,7 @@ export function inputHistoryFromEvents(events: SessionEvent[]): string[] {
   return out;
 }
 
-const SLASH_COMMANDS = ["/model", "/models", "/new", "/resume", "/rename", "/context", "/cost", "/memory", "/config", "/doctor", "/diff", "/commit", "/commit-push-pr", "/branch", "/issue", "/pr-comments", "/review", "/security-review", "/autofix-pr", "/explore", "/agents", "/skills", "/learn", "/goal", "/expand", "/workflows", "/ultraplan", "/bg", "/plugins", "/provider", "/scan", "/consult", "/advisor", "/plan", "/verify", "/bench", "/log", "/mcp", "/help", "/compact", "/about", "/exit"];
+const SLASH_COMMANDS = ["/model", "/models", "/new", "/resume", "/rename", "/context", "/cost", "/memory", "/config", "/doctor", "/diff", "/commit", "/commit-push-pr", "/branch", "/issue", "/pr-comments", "/review", "/security-review", "/autofix-pr", "/explore", "/agents", "/skills", "/learn", "/goal", "/expand", "/recover", "/workflows", "/ultraplan", "/bg", "/plugins", "/provider", "/scan", "/consult", "/advisor", "/plan", "/verify", "/bench", "/log", "/mcp", "/help", "/compact", "/about", "/exit"];
 
 // Spinner frames — proof of life while a turn runs. Not the braille snake every
 // other CLI ships: this is Bubo's eye. He holds your gaze, glances right, glances
@@ -203,6 +205,7 @@ const COMMAND_DESC: Record<string, string> = {
   "/learn": "self-improvement: propose (/learn), save (/learn save <n|all>), score (/learn stats), prune",
   "/goal": "work autonomously toward an objective until done (/goal <objective>, /goal stop)",
   "/expand": "show the full output of a truncated tool result (/expand [n], n=1 = most recent)",
+  "/recover": "restore an earlier version of a file from backups/session log to <file>.recovered (/recover <file> [n])",
   "/plugins": "list/install/uninstall/enable/disable plugins (/plugins install <git-url|path>)",
   "/verify": "run the project's checks",
   "/bench": "race the performance ghost",
@@ -1615,6 +1618,48 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
           ? allLines.slice(0, CAP).join("\n") + `\n… (+${allLines.length - CAP} more lines — full output is in the session log: /log)`
           : full;
         setMessages((prev) => [...prev, { id: `exp-${Date.now()}`, role: "system", text: `Full output of tool result #${n} (${allLines.length} lines):\n${shown}` }]);
+        break;
+      }
+      case "/recover": {
+        // Restore an earlier version of a file after a destructive edit. Sources:
+        // the shadow backups taken before each mutation, plus the session log
+        // (every FileWrite's bytes + every complete FileRead). Always writes to
+        // <file>.recovered — never touches the working file — so it's safe to run.
+        const parts = arg.trim().split(/\s+/).filter(Boolean);
+        const rel = parts[0];
+        if (!rel) {
+          setErrorLine("Usage: /recover <file> [n] — restores a file's saved version to <file>.recovered (non-destructive). n picks an older version from the list.");
+          break;
+        }
+        const pick = parts[1] ? Math.max(1, parseInt(parts[1], 10) || 1) : 1;
+        const abs = pathIsAbsolute(rel) ? rel : pathResolve(process.cwd(), rel);
+        const snaps = collectSnapshots(process.cwd(), abs);
+        if (!snaps.length) {
+          setErrorLine(`No saved versions of ${rel} found in this project's backups or session log.`);
+          break;
+        }
+        const chosen = snaps[pick - 1];
+        if (!chosen) {
+          setErrorLine(`Only ${snaps.length} version(s) available — /recover ${rel} 1..${snaps.length}.`);
+          break;
+        }
+        const listing = snaps
+          .map((s, i) => `  [${i + 1}] ${s.ts.replace("T", " ").replace(/\..*$/, "")}  ${s.lines} lines, ${s.bytes} bytes  (${s.source}${s.sessionId ? ` · ${s.sessionId}` : ""})`)
+          .join("\n");
+        const cur = currentFileInfo(abs);
+        let dest: string;
+        try {
+          dest = writeRecovered(abs, chosen.content);
+        } catch (err) {
+          setErrorLine(`Could not write recovery file: ${(err as Error).message}`);
+          break;
+        }
+        setMessages((prev) => [...prev, { id: `rec-${Date.now()}`, role: "system", text:
+          `Recovered ${rel} → ${dest} (non-destructive — your working file is untouched).\n` +
+          `Restored version [${pick}]: ${chosen.lines} lines, ${chosen.bytes} bytes (${chosen.source}${chosen.sessionId ? ` · session ${chosen.sessionId}` : ""}).\n` +
+          (cur ? `Current on-disk file: ${cur.lines} lines, ${cur.bytes} bytes.\n` : "No current file on disk.\n") +
+          `\nAll saved versions (newest first):\n${listing}\n\n` +
+          `Diff it against your working copy before replacing; pick another with /recover ${rel} <n>.` }]);
         break;
       }
       case "/agents": {

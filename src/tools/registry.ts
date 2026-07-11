@@ -98,6 +98,7 @@ export function toolListToSystemPrompt(tools: Tool[]): string {
     "Editing code:",
     "- Match the surrounding code — its naming, style, structure, and comment density. New code should read as if it was always there. Don't reformat or churn lines unrelated to your change.",
     "- Make the smallest change that does the job. Prefer a targeted FileEdit over rewriting a file, and don't restructure things you weren't asked to touch.",
+    "- NEVER rewrite a source file by line index through the shell — no `node -e \"…split('\\n')…splice(N)…writeFileSync\"`, `python -c`, `sed -i`, or `>` redirect onto a tracked file. Editing by absolute line number against a file that shifts every edit is exactly how files get silently truncated. Use FileEdit (matches surrounding text) or FileWrite with the COMPLETE contents. If a structural/brace error has you making repeated blind line-surgery attempts, STOP: re-read the file and fix it with one deliberate FileEdit.",
     "- Before using a library, import, or pattern, confirm it's already used here (check a neighbouring file or the package manifest). Don't add a dependency for something the codebase already solves.",
     "- Don't write comments that just narrate the diff ('// added this'); comment only to explain a non-obvious *why*. Leave no TODOs, placeholders, or half-finished stubs — complete the change you started.",
     "",

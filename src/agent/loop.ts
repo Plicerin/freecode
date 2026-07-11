@@ -13,6 +13,7 @@ import { parseImageLimit, isImageUnsupported, capImagesTo, countImages } from ".
 import { parseContextLimit } from "./context-limit";
 import { isJunkResponse } from "./degeneration";
 import { resolveTool } from "../tools/resolve";
+import { snapshotBeforeToolRun } from "../tools/backup";
 import { getEnv } from "../utils/env";
 import { summarizeConversation } from "./summarize";
 import { runHooks } from "./hooks";
@@ -556,6 +557,10 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
         opts.onEvent({ type: "tool_result", result: { id: call.id, output: msg, ok: false, durationMs: 0 } });
         continue;
       }
+      // Shadow-copy anything this call is about to overwrite, BEFORE it runs —
+      // covers FileWrite/FileEdit and any file a Bash command writes (e.g. a raw
+      // `node -e "...writeFileSync..."`). Fail-soft; never blocks the tool.
+      snapshotBeforeToolRun(tool.name, parsed.data, process.cwd());
       const t0 = Date.now();
       const result = await tool.run(parsed.data, { cwd: process.cwd(), signal: opts.signal });
       const durationMs = Date.now() - t0;
