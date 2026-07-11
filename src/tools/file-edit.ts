@@ -4,6 +4,7 @@ import { createTwoFilesPatch, applyPatch } from "diff";
 import { z } from "zod";
 import type { Tool } from "./types";
 import { structuredWriteError } from "./structured-validate";
+import { suggestPath } from "./suggest-path";
 
 const ArgsSchema = z.object({
   // Optional: a unified diff carries its own +++/--- path, so we can derive it.
@@ -162,7 +163,8 @@ export const FileEditTool: Tool<z.infer<typeof ArgsSchema>> = {
     }
     const abs = isAbsolute(path) ? path : resolve(ctx.cwd, path);
     if (!existsSync(abs)) {
-      return { ok: false, output: "", error: `File not found: ${path}` };
+      const hint = suggestPath(abs);
+      return { ok: false, output: "", error: `File not found: ${path}${hint ? ` — did you mean "${hint}"?` : ""}` };
     }
     const original = readFileSync(abs, "utf8");
 

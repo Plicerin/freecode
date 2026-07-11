@@ -3,6 +3,7 @@ import { dirname, resolve, isAbsolute } from "node:path";
 import { z } from "zod";
 import type { Tool } from "./types";
 import { structuredWriteError } from "./structured-validate";
+import { suggestPath } from "./suggest-path";
 
 const ArgsSchema = z.object({
   path: z.string().min(1).describe("Path of the file to write (created if missing, OVERWRITTEN in full if it exists). Prefer FileEdit for changing part of an existing file."),
@@ -21,7 +22,8 @@ export const FileWriteTool: Tool<z.infer<typeof ArgsSchema>> = {
       mkdirSync(dirname(abs), { recursive: true });
     } else {
       if (!existsSync(dirname(abs))) {
-        return { ok: false, output: "", error: `Parent directory does not exist: ${dirname(abs)}` };
+        const hint = suggestPath(dirname(abs));
+        return { ok: false, output: "", error: `Parent directory does not exist: ${dirname(abs)}${hint ? ` — did you mean "${hint}"?` : ""}` };
       }
     }
     const jsonError = structuredWriteError(args.path, args.content);
