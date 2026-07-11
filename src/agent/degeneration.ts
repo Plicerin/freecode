@@ -74,3 +74,29 @@ export function isJunkResponse(text: string): boolean {
   const t = text.trim();
   return t.length > 0 && t.length <= 4 && !/[\p{L}\p{N}]/u.test(t);
 }
+
+/** Fraction of characters that signal binary bytes decoded as text: the U+FFFD
+ *  replacement char (an invalid-UTF-8 decode), NUL, and non-whitespace C0
+ *  control chars. ESC (0x1B) is excluded so ANSI-coloured terminal output is not
+ *  mistaken for binary. */
+export function nonTextRatio(s: string): number {
+  if (!s) return 0;
+  let bad = 0;
+  let total = 0;
+  for (const ch of s) {
+    total++;
+    const c = ch.codePointAt(0)!;
+    if (c === 0xfffd || c === 0 || (c < 32 && c !== 9 && c !== 10 && c !== 13 && c !== 27)) bad++;
+  }
+  return total ? bad / total : 0;
+}
+
+/** A model response that has collapsed into binary/replacement-char garbage
+ *  ("0�0��0") — the failure mode after raw binary (a PDF/ROM read
+ *  as text) poisons the context. Like isJunkResponse, these must never be stored
+ *  or re-sent; that only deepens the poisoning. */
+export function isBinaryGarbage(text: string): boolean {
+  const t = text.trim();
+  if (t.length < 3) return false;
+  return nonTextRatio(t) >= 0.3;
+}

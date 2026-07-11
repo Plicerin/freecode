@@ -11,7 +11,8 @@ import { overclaimWarning, editClaimWithoutChange } from "./overclaim";
 import { looksLikeTextToolCall, announcedNextActionWithoutCalling } from "./text-tool-call";
 import { parseImageLimit, isImageUnsupported, capImagesTo, countImages } from "./image-cap";
 import { parseContextLimit } from "./context-limit";
-import { isJunkResponse } from "./degeneration";
+import { isJunkResponse, isBinaryGarbage } from "./degeneration";
+import { guardBinaryToolOutput } from "./tool-output";
 import { resolveTool } from "../tools/resolve";
 import { snapshotBeforeToolRun } from "../tools/backup";
 import { getEnv } from "../utils/env";
@@ -101,7 +102,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
   // carry no tool calls, so removing them can't orphan a tool result. This also
   // auto-heals a session that was already stuck in the loop.
   const history = (opts.history ?? []).filter(
-    (m) => !(m.role === "assistant" && !(m.toolCalls && m.toolCalls.length) && isJunkResponse(m.content)),
+    (m) => !(m.role === "assistant" && !(m.toolCalls && m.toolCalls.length) && (isJunkResponse(m.content) || isBinaryGarbage(m.content))),
   );
   const messages: ChatMessage[] = [
     ...history,
@@ -410,14 +411,19 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
     // Make a silent stop legible: an empty reply, or a tool call leaked as text.
     else if (turnToolCalls.length === 0 && looksLikeTextToolCall(turnText)) {
       opts.onEvent({ type: "error", error: "⚠ The model wrote a tool call as TEXT (e.g. <function_calls>) instead of calling the tool — the provider isn't parsing this model's tool-call format into a structured call, so freecode can't run it. Use a model with provider-supported tool calling, or check the model's tool template/settings (common with some local models in LM Studio/Ollama)." });
-    } else if (turnToolCalls.length === 0 && isJunkResponse(turnText)) {
-      // A trivial junk scrap ("')") with no tool call — the model has degenerated
-      // (common when a local model is fed dense/repetitive content like a
-      // disassembly dump). It's filtered from FUTURE turns by the history filter
+    } else if (turnToolCalls.length === 0 && (isJunkResponse(turnText) || isBinaryGarbage(turnText))) {
+      // A junk scrap ("')") OR replacement-char garbage ("0�0�0") with no tool
+      // call — the model has degenerated (a trivial scrap after dense/repetitive
+      // input like a disassembly dump, or binary noise after raw bytes like a PDF
+      // entered the context). It's filtered from FUTURE turns by the history filter
       // above; pop it from THIS run's context too, surface it clearly, and STOP
-      // instead of looping "continue" and re-feeding the junk.
+      // instead of looping "continue" and re-feeding the garbage.
       messages.pop();
-      opts.onEvent({ type: "error", error: `⚠ The model returned only "${turnText.trim()}" — no usable answer. It has degenerated (common when a local model is fed dense/repetitive input, e.g. a disassembly dump). freecode won't feed that junk back into the context. Start fresh with /new, /compact to shrink the context, or switch models (/model).` });
+      const binary = isBinaryGarbage(turnText);
+      const shown = turnText.trim().replace(/[^\x20-\x7E]/g, "�").slice(0, 24);
+      opts.onEvent({ type: "error", error: binary
+        ? `⚠ The model returned only non-text garbage ("${shown}") — it has degenerated, typically after raw binary (a PDF/ROM/image read as text) poisoned the context. freecode won't feed that back in. Start fresh with /new, /compact to shrink the context, or switch models (/model).`
+        : `⚠ The model returned only "${turnText.trim()}" — no usable answer. It has degenerated (common when a local model is fed dense/repetitive input, e.g. a disassembly dump). freecode won't feed that junk back into the context. Start fresh with /new, /compact to shrink the context, or switch models (/model).` });
       aborted = true;
       break;
     } else if (turnToolCalls.length === 0 && !turnText.trim() && !sawError && !producedText) {
@@ -568,6 +574,13 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
       // or session log. A `Get-ChildItem Env:` or `cat .env` can spill live keys.
       const red = redactSecrets(result.output);
       result.output = red.text;
+      // Then swap out binary/non-text output (a PDF/ROM read via the shell) for a
+      // note — raw bytes decode to U+FFFD garbage that degenerates the model. This
+      // is FileRead's binary guard applied at the tool-output boundary, so it also
+      // covers Bash `cat`/`node -e readFileSync` that route around FileRead.
+      const binGuard = guardBinaryToolOutput(result.output);
+      result.output = binGuard.text;
+      if (binGuard.suppressed) logActivity(`TOOL ${tool.name} output was binary/non-text → suppressed to protect the context`);
       if (result.error) result.error = redactSecrets(result.error).text;
       const payload = (result.ok ? result.output : `Error: ${result.error ?? "unknown"}\n${result.output}`) +
         (red.count > 0 ? `\n[freecode redacted ${red.count} secret(s) from this output]` : "");
