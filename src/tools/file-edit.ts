@@ -93,29 +93,86 @@ function replaceOnce(haystack: string, needle: string, repl: string): string {
   return i < 0 ? haystack : haystack.slice(0, i) + repl + haystack.slice(i + needle.length);
 }
 
+const trimLine = (l: string): string => l.trim();
+
+/** oldText reduced to its content lines (LF, gutter stripped, leading/trailing
+ *  blank lines dropped) — the form both flexible matching and near-miss
+ *  diagnosis compare against. */
+function oldContentLines(oldText: string): string[] {
+  let oldLines = stripGutter(toLF(oldText)).split("\n");
+  while (oldLines.length && oldLines[oldLines.length - 1]!.trim() === "") oldLines.pop();
+  while (oldLines.length && oldLines[0]!.trim() === "") oldLines = oldLines.slice(1);
+  return oldLines;
+}
+
+/** Start indices of every window in the file whose lines all trim-match oldText's
+ *  (whitespace-insensitive). Stops after 2 — callers only need to know none / one
+ *  / many. */
+function flexHitStarts(fileLines: string[], oldLines: string[]): number[] {
+  if (oldLines.length === 0) return [];
+  const normOld = oldLines.map(trimLine);
+  const hits: number[] = [];
+  for (let i = 0; i + oldLines.length <= fileLines.length; i++) {
+    let ok = true;
+    for (let j = 0; j < oldLines.length; j++) {
+      if (trimLine(fileLines[i + j]!) !== normOld[j]) { ok = false; break; }
+    }
+    if (ok) { hits.push(i); if (hits.length > 1) break; }
+  }
+  return hits;
+}
+
 // Last-resort match: locate oldText ignoring each line's LEADING/TRAILING
 // whitespace (the #1 reason edits fail — the model reconstructs a block with
 // slightly different indentation). Returns the EXACT file substring to replace,
 // but ONLY when the normalized block matches in exactly one place — never guess.
 export function flexLocate(fileLF: string, oldText: string): string | null {
-  const norm = (l: string) => l.trim();
-  let oldLines = stripGutter(toLF(oldText)).split("\n");
-  while (oldLines.length && oldLines[oldLines.length - 1]!.trim() === "") oldLines.pop();
-  while (oldLines.length && oldLines[0]!.trim() === "") oldLines = oldLines.slice(1);
+  const oldLines = oldContentLines(oldText);
   if (oldLines.length === 0) return null;
   const fileLines = fileLF.split("\n");
-  const normOld = oldLines.map(norm);
-  const hits: number[] = [];
-  for (let i = 0; i + oldLines.length <= fileLines.length; i++) {
-    let ok = true;
-    for (let j = 0; j < oldLines.length; j++) {
-      if (norm(fileLines[i + j]!) !== normOld[j]) { ok = false; break; }
-    }
-    if (ok) hits.push(i);
-    if (hits.length > 1) return null; // ambiguous → refuse rather than edit the wrong block
-  }
+  const hits = flexHitStarts(fileLines, oldLines);
   if (hits.length !== 1) return null;
   return fileLines.slice(hits[0]!, hits[0]! + oldLines.length).join("\n");
+}
+
+/** How many whitespace-flexible places oldText matches (0, 1, or 2 = "many").
+ *  Lets the caller tell an AMBIGUOUS edit ("add context / replaceAll") apart from
+ *  a genuine NOT-FOUND, which need different guidance. */
+export function flexMatchCount(fileLF: string, oldText: string): number {
+  const oldLines = oldContentLines(oldText);
+  if (oldLines.length === 0) return 0;
+  return flexHitStarts(fileLF.split("\n"), oldLines).length;
+}
+
+/** When oldText matches nowhere, find the single most-similar same-length window
+ *  and the first line that diverges — so the error can point the model at the
+ *  exact drift (a stale token, a reworded comment) instead of a dead-end "not
+ *  found". Returns null when nothing in the file is even loosely similar. */
+export function closestRegion(
+  fileLF: string,
+  oldText: string,
+): { start: number; end: number; diffLine: number; oldLine: string; fileLine: string } | null {
+  const oldLines = oldContentLines(oldText);
+  if (oldLines.length === 0) return null;
+  const fileLines = fileLF.split("\n");
+  const normOld = oldLines.map(trimLine);
+  let best = { same: -1, i: 0 };
+  for (let i = 0; i + oldLines.length <= fileLines.length; i++) {
+    let same = 0;
+    for (let j = 0; j < oldLines.length; j++) if (trimLine(fileLines[i + j]!) === normOld[j]) same++;
+    if (same > best.same) best = { same, i };
+  }
+  if (best.same < 0 || best.same / oldLines.length < 0.5) return null; // not "the" region
+  let d = 0;
+  for (; d < oldLines.length; d++) if (trimLine(fileLines[best.i + d]!) !== normOld[d]) break;
+  if (d === oldLines.length) return null; // identical window (the ambiguous case) — not a divergence
+  return {
+    start: best.i + 1, // 1-based for display
+    end: best.i + oldLines.length,
+    diffLine: best.i + d + 1,
+    oldLine: (oldLines[d] ?? "").trim(),
+    fileLine: (fileLines[best.i + d] ?? "").trim(),
+  };
 }
 
 /**
@@ -176,7 +233,18 @@ export const FileEditTool: Tool<z.infer<typeof ArgsSchema>> = {
       const newLF = toLF(args.newText);
       const located = locateOldText(fileLF, args.oldText);
       if (located === null) {
-        return { ok: false, output: "", error: "oldText not found in file (no unique match — even ignoring indentation). Re-read the file to get its CURRENT exact text (it may have changed since your last read), copy the lines verbatim WITHOUT the line-number prefix, and try again. For a big change, the unifiedDiff mode is more forgiving." };
+        // Distinguish AMBIGUOUS (matches several places) from NOT-FOUND, and for
+        // not-found point at the exact line that diverges — so the model corrects
+        // its snippet and retries FileEdit in one shot, instead of giving up and
+        // rewriting the file with a raw `node -e` script (how files get truncated).
+        if (flexMatchCount(fileLF, args.oldText) > 1) {
+          return { ok: false, output: "", error: "oldText matches SEVERAL places in the file (ignoring indentation). Add a few surrounding lines to make it unique, or set replaceAll: true to change every occurrence." };
+        }
+        const near = closestRegion(fileLF, args.oldText);
+        const detail = near
+          ? ` The closest match is lines ${near.start}-${near.end}; line ${near.diffLine} is where they diverge:\n    your oldText: ${JSON.stringify(near.oldLine)}\n    file now has: ${JSON.stringify(near.fileLine)}`
+          : " No similar region exists — the file may have changed, or this is the wrong file.";
+        return { ok: false, output: "", error: `oldText not found in ${path}.${detail}\nRe-read the file for its CURRENT exact text, then retry FileEdit with the corrected oldText (or a unifiedDiff). Do NOT rewrite the file by hand or with a shell/node -e script — editing by line index truncates files.` };
       }
       const oldLF = located.match;
       const matches = countOccurrences(fileLF, oldLF);

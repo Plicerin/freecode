@@ -60,7 +60,7 @@ describe("FileEdit", () => {
   it("errors when oldText is absent", async () => {
     const r = await FileEditTool.run({ path: f, oldText: "nope", newText: "z" }, { cwd: dir });
     expect(r.ok).toBe(false);
-    expect(r.error).toMatch(/no unique match/i);
+    expect(r.error).toMatch(/not found/i);
   });
 });
 
@@ -92,7 +92,8 @@ describe("FileEdit flexible (indentation-tolerant) matching", () => {
     writeFileSync(f, "  x = 1\n  y = 2\n\n    x = 1\n    y = 2\n"); // same block at two indents
     const r = await FileEditTool.run({ path: f, oldText: "x = 1\ny = 2", newText: "z" }, { cwd: dir });
     expect(r.ok).toBe(false);
-    expect(r.error).toMatch(/no unique match/i);
+    expect(r.error).toMatch(/several places/i); // ambiguous, not a dead-end "not found"
+    expect(r.error).toMatch(/replaceAll/);
   });
 
   it("prefers an EXACT match (flexible flag off) when the text matches verbatim", async () => {
