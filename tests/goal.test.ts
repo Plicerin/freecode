@@ -1,8 +1,8 @@
 // /goal — the autonomous loop's pure pieces: reading the model's self-reported
 // status, framing each cycle's prompt, and deciding whether to iterate again.
 // (The REPL loop wiring + esc-abort is verified live; the harness can't drive keys.)
-import { test, expect, describe } from "bun:test";
-import { goalStatus, goalPrompt, goalDecision, goalVerifyFailedPrompt, GOAL_MAX_DEFAULT } from "../src/agent/goal";
+import { test, expect, describe, afterEach } from "bun:test";
+import { goalStatus, goalPrompt, goalDecision, goalVerifyFailedPrompt, goalMax, GOAL_MAX_DEFAULT } from "../src/agent/goal";
 
 describe("goalStatus", () => {
   test("reads DONE / CONTINUE from the last line, case-insensitive", () => {
@@ -56,9 +56,32 @@ describe("goalDecision", () => {
     expect(goalDecision({ ...base, status: "continue", completed: 5, max: 12 })).toBe("continue");
     expect(goalDecision({ ...base, status: "unknown", completed: 5, max: 12 })).toBe("continue"); // unknown keeps going
   });
-  test("stops at the cap without a DONE", () => {
+  test("stops at the cap without a DONE (when a positive cap is set)", () => {
     expect(goalDecision({ ...base, status: "continue", completed: 12, max: 12 })).toBe("stop-max");
     expect(goalDecision({ ...base, status: "unknown", completed: 13, max: 12 })).toBe("stop-max");
+  });
+  test("max <= 0 is UNCAPPED — never stops on cycle count (the default)", () => {
+    expect(GOAL_MAX_DEFAULT).toBe(0);
+    expect(goalDecision({ ...base, status: "continue", completed: 999, max: 0 })).toBe("continue");
+    expect(goalDecision({ ...base, status: "unknown", completed: 500, max: 0 })).toBe("continue");
+  });
+});
+
+describe("goalMax (FREECODE_GOAL_MAX override)", () => {
+  const saved = process.env.FREECODE_GOAL_MAX;
+  afterEach(() => { if (saved === undefined) delete process.env.FREECODE_GOAL_MAX; else process.env.FREECODE_GOAL_MAX = saved; });
+  test("defaults to 0 (uncapped)", () => {
+    delete process.env.FREECODE_GOAL_MAX;
+    expect(goalMax()).toBe(0);
+  });
+  test("a positive value re-imposes a cap", () => {
+    process.env.FREECODE_GOAL_MAX = "25";
+    expect(goalMax()).toBe(25);
+  });
+  test("a non-positive or junk value stays uncapped", () => {
+    process.env.FREECODE_GOAL_MAX = "0"; expect(goalMax()).toBe(0);
+    process.env.FREECODE_GOAL_MAX = "-4"; expect(goalMax()).toBe(0);
+    process.env.FREECODE_GOAL_MAX = "abc"; expect(goalMax()).toBe(0);
   });
 });
 

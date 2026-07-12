@@ -2,12 +2,24 @@
 // full agent turn). The model self-reports DONE/CONTINUE on its last line, but a
 // DONE is NOT taken on the model's word: the REPL orchestrator runs the project's
 // real verification commands and only accepts DONE if they pass — otherwise the
-// failure becomes the next cycle's task (goalVerifyFailedPrompt). The loop also
-// stops if cycles stop making progress (no tool calls), or at the cycle cap, or on
-// interrupt. The orchestration lives in the REPL; the parsing/prompting/decision
-// here are pure so they're unit-tested.
+// failure becomes the next cycle's task (goalVerifyFailedPrompt). The loop stops
+// on a verified DONE, when cycles stop making progress (no tool calls), when a
+// claimed DONE keeps failing verification, on interrupt — and, only if you opt in,
+// at a cycle cap. The orchestration lives in the REPL; the parsing/prompting/
+// decision here are pure so they're unit-tested.
 
-export const GOAL_MAX_DEFAULT = 12;
+// 0 = UNCAPPED (the default): /goal runs until it's genuinely done, stuck, or you
+// stop it — the same 0=off convention as the agent-loop max-turns cap. A cap was
+// never the only guard (no-progress + verify-fail + esc still stop a bad run), and
+// halting mid-work at cycle 12 was more annoying than useful. Set FREECODE_GOAL_MAX
+// to a positive number to re-impose a hard cycle cap.
+export const GOAL_MAX_DEFAULT = 0;
+
+/** The effective cycle cap: a positive FREECODE_GOAL_MAX, else 0 (uncapped). */
+export function goalMax(): number {
+  const n = Number.parseInt(process.env.FREECODE_GOAL_MAX ?? "", 10);
+  return Number.isFinite(n) && n > 0 ? n : GOAL_MAX_DEFAULT;
+}
 
 export type GoalStatus = "done" | "continue" | "unknown";
 
@@ -62,6 +74,6 @@ export type GoalDecision = "done" | "continue" | "stop-max" | "stop-aborted";
 export function goalDecision(opts: { status: GoalStatus; aborted: boolean; completed: number; max: number }): GoalDecision {
   if (opts.aborted) return "stop-aborted";
   if (opts.status === "done") return "done";
-  if (opts.completed >= opts.max) return "stop-max";
-  return "continue"; // "continue" or "unknown" → keep going (bounded by max)
+  if (opts.max > 0 && opts.completed >= opts.max) return "stop-max"; // max<=0 → uncapped
+  return "continue"; // "continue" or "unknown" → keep going
 }

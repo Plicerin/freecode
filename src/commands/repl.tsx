@@ -53,7 +53,7 @@ import { collectSnapshots, writeRecovered, currentFileInfo } from "../session/re
 import { isAbsolute as pathIsAbsolute, resolve as pathResolve } from "node:path";
 import { setTerminalTitle } from "../tui/terminal-title";
 import { writeLastSession } from "../config/last-session";
-import { goalPrompt, goalStatus, goalVerifyFailedPrompt, GOAL_MAX_DEFAULT } from "../agent/goal";
+import { goalPrompt, goalStatus, goalVerifyFailedPrompt, goalMax } from "../agent/goal";
 import { degenerationReason } from "../agent/degeneration";
 import { basename } from "node:path";
 import { historyFromEvents } from "../session/history";
@@ -1525,13 +1525,14 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
           break;
         }
         const objective = sub;
-        const max = GOAL_MAX_DEFAULT;
+        const max = goalMax();          // 0 = uncapped (default)
+        const uncapped = max <= 0;
         // A claimed DONE is GATED on the project's real checks — not the model's
         // word. Resolved once; if there are none, DONE stays unverified (and says so).
         const verifyPlan = resolveVerify(process.cwd(), config.verify);
         goalActiveRef.current = true;
         setMessages((prev) => [...prev, { id: `goal-${Date.now()}`, role: "system", text:
-          `◆ Goal: ${objective}\n  Working autonomously (up to ${max} cycles). ` +
+          `◆ Goal: ${objective}\n  ${uncapped ? "Working autonomously until done (no cycle cap). " : `Working autonomously (up to ${max} cycles). `}` +
           (verifyPlan.source === "none"
             ? "No verify command configured — DONE will be the model's word, unverified."
             : `DONE is verified with: ${verifyPlan.commands.join(" && ")}.`) +
@@ -1544,7 +1545,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
           const MAX_NO_PROGRESS = 2;
           let pendingFailure: { failedCommand: string; output: string } | null = null;
           while (goalActiveRef.current) {
-            setMessages((prev) => [...prev, { id: `gc-${Date.now()}`, role: "system", text: `◆ cycle ${completed + 1}/${max}` }]);
+            setMessages((prev) => [...prev, { id: `gc-${Date.now()}`, role: "system", text: uncapped ? `◆ cycle ${completed + 1}` : `◆ cycle ${completed + 1}/${max}` }]);
             const prompt = pendingFailure
               ? goalVerifyFailedPrompt(objective, pendingFailure.failedCommand, pendingFailure.output)
               : goalPrompt(objective, completed);
@@ -1571,7 +1572,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
                 break;
               }
               verifyFails += 1;
-              if (verifyFails > MAX_VERIFY_FAILS || completed >= max) {
+              if (verifyFails > MAX_VERIFY_FAILS || (!uncapped && completed >= max)) {
                 setMessages((prev) => [...prev, { id: `gd-${Date.now()}`, role: "warning", text:
                   `◆ Model reported DONE, but \`${v.failedCommand}\` kept failing after ${verifyFails} fix attempt${verifyFails === 1 ? "" : "s"} — stopping for you to review. Last error:\n${(v.output || "").slice(-600)}` }]);
                 break;
@@ -1588,7 +1589,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
                 `◆ Stopped: ${noProgress} cycles with no tool action — the model is describing steps, not doing them. Refine the goal, or try a stronger model.` }]);
               break;
             }
-            if (completed >= max) {
+            if (!uncapped && completed >= max) {
               setMessages((prev) => [...prev, { id: `gd-${Date.now()}`, role: "system", text:
                 `◆ Reached the ${max}-cycle cap without a verified DONE. Run /goal "${objective}" to keep going.` }]);
               break;
