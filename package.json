@@ -3,7 +3,26 @@
   "version": "0.1.0",
   "description": "A universal AI execution layer built for correctness. Runs any model from any provider and validates its own outputs by default — a consistent, trustworthy interface for AI development, without vendor lock-in or manual verification overhead.",
   "type": "module",
-  "private": true,
+  "license": "MIT",
+  "author": "Plicerin",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Plicerin/freecode.git"
+  },
+  "homepage": "https://github.com/Plicerin/freecode#readme",
+  "bugs": {
+    "url": "https://github.com/Plicerin/freecode/issues"
+  },
+  "keywords": [
+    "ai",
+    "cli",
+    "coding-agent",
+    "llm",
+    "agent",
+    "openai",
+    "anthropic",
+    "local-models"
+  ],
   "bin": {
     "freecode": "dist/cli.js"
   },
