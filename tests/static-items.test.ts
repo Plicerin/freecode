@@ -48,4 +48,20 @@ describe("buildStaticItems (append-only Static invariant)", () => {
     const items = buildStaticItems(true, m, 2); // settled=2 → a,b in Static; c is dynamic
     expect(items.filter((i) => i.kind === "msg").map((i) => i.key)).toEqual(["a:0", "b:1"]);
   });
+
+  // After a marathon-session reset, the <Static> mount is remounted with base>0:
+  // it renders ONLY the window [base, settled) and drops the intro (already in
+  // scrollback). Earlier messages are the previous mount's / terminal's problem.
+  test("with a base offset, the intro is gone and only the window [base, settled) renders", () => {
+    const m = [msg("a"), msg("b"), msg("c"), msg("d"), msg("e")];
+    const items = buildStaticItems(true, m, 5, 3); // base=3 → only d,e; no intro
+    expect(items.some((i) => i.kind === "intro")).toBe(false);
+    expect(items.map((i) => i.key)).toEqual(["d:3", "e:4"]); // keys stay globally unique
+  });
+
+  test("base defaults to 0 (unchanged behavior) — intro present, full settled range", () => {
+    const m = [msg("a"), msg("b")];
+    expect(buildStaticItems(true, m, 2)).toEqual(buildStaticItems(true, m, 2, 0));
+    expect(buildStaticItems(true, m, 2)[0]!.kind).toBe("intro");
+  });
 });

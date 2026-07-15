@@ -102,13 +102,23 @@ export type StaticItem =
  *  message duplicated and the terminal jumped to the top. Fix: gate everything on
  *  `introReady` — Static stays empty until the splash settles, then it's
  *  [intro, ...settled messages] and only ever grows at the end. */
-export function buildStaticItems(introReady: boolean, messages: UiMessage[], settled: number): StaticItem[] {
+export function buildStaticItems(introReady: boolean, messages: UiMessage[], settled: number, base = 0): StaticItem[] {
   if (!introReady) return [];
-  return [
-    { kind: "intro", key: "intro" },
-    ...messages.slice(0, settled).filter((m) => m.id).map((m, i): StaticItem => ({ kind: "msg", key: `${m.id}:${i}`, m })),
-  ];
+  // `base` is the first message the CURRENT <Static> mount is responsible for. On
+  // a marathon session the mount is periodically reset (see STATIC_WINDOW) so Ink
+  // can free the render trees of already-scrolled-off messages; everything before
+  // `base` is already in the terminal's native scrollback. The intro only belongs
+  // to the first mount (base 0).
+  const items: StaticItem[] = base <= 0 ? [{ kind: "intro", key: "intro" }] : [];
+  const slice = messages.slice(base, settled).filter((m) => m.id);
+  for (let i = 0; i < slice.length; i++) items.push({ kind: "msg", key: `${slice[i]!.id}:${base + i}`, m: slice[i]! });
+  return items;
 }
+
+// How many settled messages the live <Static> mount holds before it's reset to
+// free Ink's retained render trees. Large enough that a normal session never
+// resets — only a marathon autonomous run (hundreds of tool calls) does.
+export const STATIC_WINDOW = 1000;
 
 /** Rebuild the visible transcript from a session's stored events for /resume.
  *  Mirrors how the LIVE stream renders: a tool_call becomes "→ name(args)" and a
@@ -536,6 +546,13 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
   // re-rendered. Only the in-flight turn stays in the dynamic region, which
   // keeps the input box anchored instead of hopping as content grows.
   const [settled, setSettled] = useState(0);
+  // A marathon /goal keeps appending to <Static>, whose committed render trees Ink
+  // retains for the whole mount — memory grows ~O(n²) with tool-call volume and
+  // OOMs. Periodically remount Static past a large window so Ink frees scrolled-off
+  // trees (the lines stay in the terminal's own scrollback). `staticBase` is the
+  // first message the live mount owns; `staticEpoch` is its <Static> key.
+  const [staticEpoch, setStaticEpoch] = useState(0);
+  const [staticBase, setStaticBase] = useState(0);
   const [model, setModel] = useState(config.model);
   const [planMode, setPlanMode] = useState(false);
   const [menuIdx, setMenuIdx] = useState(0);
@@ -769,6 +786,18 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
     if (!busy && !pending) setSettled(messages.length);
     else setSettled((s) => Math.max(s, Math.max(0, messages.length - 1)));
   }, [busy, pending, messages.length]);
+
+  // Reset the <Static> mount once the live window exceeds STATIC_WINDOW: bump the
+  // epoch (remounts Static, so Ink releases the render trees of scrolled-off
+  // messages) and jump `staticBase` to the current settled count so the fresh
+  // mount starts empty and nothing re-prints — the earlier lines are already in
+  // the terminal's scrollback. This is what keeps a marathon session's heap flat.
+  useEffect(() => {
+    if (settled - staticBase > STATIC_WINDOW) {
+      setStaticBase(settled);
+      setStaticEpoch((e) => e + 1);
+    }
+  }, [settled, staticBase]);
 
   // Drain queued input once the turn finishes (and no approval is open). One at a
   // time: dispatching sets busy again, which re-runs this effect for the next.
@@ -2514,7 +2543,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
   // OOMing (measured: with a fixed 300-message transcript, pure re-renders leaked
   // ~2KB each and cost ~26ms each; memoizing drops both by ~7×). Recomputes only
   // when the transcript actually changes.
-  const staticItems = useMemo(() => buildStaticItems(introReady, messages, settled), [introReady, messages, settled]);
+  const staticItems = useMemo(() => buildStaticItems(introReady, messages, settled, staticBase), [introReady, messages, settled, staticBase]);
 
   return (
     <Box flexDirection="column">
@@ -2522,9 +2551,10 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
           message from finished turns. Static writes each item to scrollback
           exactly once, so this whole region never re-renders. */}
       <Static
-        // Append-only (see buildStaticItems): gated on introReady so a startup
-        // message can't land in Static before the intro and then get duplicated
-        // when the intro prepends.
+        // Append-only within a mount (see buildStaticItems); `key` remounts it to
+        // free scrolled-off render trees on a marathon session. Gated on introReady
+        // so a startup message can't land before the intro and duplicate on prepend.
+        key={staticEpoch}
         items={staticItems}
       >
         {(item) =>
