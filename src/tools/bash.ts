@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { openSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
@@ -62,14 +62,43 @@ export function looksLikeLongRunningServer(command: string): boolean {
   return /\b(vite|next(\s+dev)?|nuxt|astro\s+dev|ng\s+serve|webpack(-dev)?-server|live-server|http\.server|uvicorn|gunicorn|flask\s+run|rails\s+s(erver)?|php\s+-S|(npm|pnpm|yarn|bun)\s+(run\s+)?(dev|start|serve|watch))\b/i.test(command);
 }
 
+/** Rewrite the bash-isms weak models emit into PowerShell equivalents so they don't
+ *  fail. The big one: `2>/dev/null` — PowerShell treats `/dev/null` as a FILE path
+ *  (`C:\dev\null`) and errors, so a model suppressing stderr the way it learned from
+ *  bash breaks every time. Only unambiguous Unix-isms are touched; valid PowerShell
+ *  (`2>&1`, `2>$null`) is left alone. */
+export function normalizeForPowerShell(command: string): string {
+  return command
+    .replace(/&>\s*\/dev\/null/g, () => "*>$null")            // bash "&>" both streams
+    .replace(/(\d*)>\s*\/dev\/null/g, (_m, fd) => `${fd}>$null`) // 2>/dev/null, >/dev/null, 1>/dev/null
+    .replace(/\/dev\/null/g, () => "$null");                  // any leftover literal (never a real Windows path)
+}
+
+// Prefer PowerShell 7 (pwsh) when it's installed: it supports `&&` and `||` (which
+// Windows PowerShell 5.1 rejects with "not a valid statement separator") and is far
+// more bash-compatible, so the model's shell commands fail much less. Detected once
+// and cached; always falls back to the ever-present powershell.exe.
+let _winShell: string | null = null;
+export function defaultWindowsShell(): string {
+  if (_winShell) return _winShell;
+  try {
+    const r = spawnSync("pwsh", ["-NoProfile", "-NoLogo", "-Command", "$null"], { stdio: "ignore", timeout: 5000, windowsHide: true });
+    _winShell = !r.error && r.status === 0 ? "pwsh" : "powershell.exe";
+  } catch {
+    _winShell = "powershell.exe";
+  }
+  return _winShell;
+}
+
 /**
  * Build the spawn invocation for a command. On Windows we run PowerShell
- * explicitly (shell:true would use cmd.exe, which rejects PowerShell syntax);
- * on Unix we let the default shell interpret the command string.
+ * explicitly (shell:true would use cmd.exe, which rejects PowerShell syntax) —
+ * preferring pwsh 7 and translating common bash-isms; on Unix we let the default
+ * shell interpret the command string.
  */
 export function spawnArgs(command: string, shellPath?: string): { file: string; args: string[]; useShell: boolean } {
   if (IS_WINDOWS) {
-    return { file: shellPath ?? "powershell.exe", args: ["-NoProfile", "-NonInteractive", "-Command", command], useShell: false };
+    return { file: shellPath ?? defaultWindowsShell(), args: ["-NoProfile", "-NonInteractive", "-Command", normalizeForPowerShell(command)], useShell: false };
   }
   return { file: command, args: [], useShell: true };
 }
