@@ -1,6 +1,48 @@
 import TurndownService from "turndown";
 import { z } from "zod";
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
 import type { Tool } from "./types";
+
+/** Is `ip` a loopback / private / link-local / unique-local address — i.e. an SSRF
+ *  target WebFetch must not reach by default (cloud metadata at 169.254.169.254,
+ *  localhost admin APIs, internal/Tailscale hosts). */
+export function isPrivateIp(ip: string): boolean {
+  const v = isIP(ip);
+  if (v === 4) {
+    const p = ip.split(".").map(Number);
+    const [a, b] = [p[0]!, p[1]!];
+    return a === 0 || a === 127 || a === 10 || a === 169 && b === 254 ||
+      a === 172 && b >= 16 && b <= 31 || a === 192 && b === 168 || a >= 224;
+  }
+  if (v === 6) {
+    const a = ip.toLowerCase().replace(/^\[|\]$/g, "");
+    if (a === "::1" || a === "::") return true;
+    if (a.startsWith("::ffff:") && isIP(a.slice(7)) === 4) return isPrivateIp(a.slice(7)); // IPv4-mapped
+    return a.startsWith("fe80") || a.startsWith("fc") || a.startsWith("fd");
+  }
+  return false;
+}
+
+/** Reason WebFetch must refuse `rawUrl` (SSRF guard), or null if it's allowed. Blocks
+ *  non-http(s) schemes and hosts that RESOLVE to a private address (catches DNS names
+ *  pointing inward). Set FREECODE_WEBFETCH_ALLOW_LOCAL=1 to reach your own dev servers. */
+export async function ssrfGuard(rawUrl: string): Promise<string | null> {
+  let u: URL;
+  try { u = new URL(rawUrl); } catch { return "not a valid URL"; }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return `scheme "${u.protocol}" is not allowed (only http/https)`;
+  if (process.env.FREECODE_WEBFETCH_ALLOW_LOCAL === "1") return null;
+  const host = u.hostname.replace(/^\[|\]$/g, "");
+  if (/^(localhost|.*\.local)$/i.test(host)) return `"${host}" is a local host`;
+  let ips: string[];
+  if (isIP(host)) ips = [host];
+  else {
+    try { ips = (await lookup(host, { all: true })).map((a) => a.address); }
+    catch { return null; } // resolution failure → let fetch surface the real error
+  }
+  const bad = ips.find(isPrivateIp);
+  return bad ? `"${host}" resolves to a private/internal address (${bad})` : null;
+}
 
 const ArgsSchema = z.object({
   url: z.string().url().describe("Absolute URL including the scheme, e.g. https://example.com/page. A bare host or search phrase is rejected."),
@@ -35,6 +77,22 @@ export function looksBinary(s: string): boolean {
   return suspicious / sample.length > 0.1;
 }
 
+/** Fetch `url`, following redirects MANUALLY so EACH hop is SSRF-checked — a public
+ *  URL that 302-redirects to 169.254.169.254 or localhost can't smuggle past the
+ *  guard. Bounded hop count. Returns the final Response, or a `blocked` reason. */
+async function guardedFetch(url: string): Promise<Response | { blocked: string }> {
+  let current = url;
+  for (let hop = 0; hop < 6; hop++) {
+    const reason = await ssrfGuard(current);
+    if (reason) return { blocked: `Refusing to fetch ${current}: ${reason}. WebFetch is restricted to public http(s) URLs. To reach a local/internal host, set FREECODE_WEBFETCH_ALLOW_LOCAL=1.` };
+    const resp = await fetch(current, { headers: { "user-agent": "freecode/0.1" }, redirect: "manual" });
+    const loc = resp.headers.get("location");
+    if (resp.status >= 300 && resp.status < 400 && loc) { current = new URL(loc, current).toString(); continue; }
+    return resp;
+  }
+  return { blocked: `Too many redirects fetching ${url}` };
+}
+
 export const WebFetchTool: Tool<z.infer<typeof ArgsSchema>> = {
   name: "WebFetch",
   description: "Fetch a URL and return its content as markdown. Reads TEXT/HTML pages only — it refuses binary files (wasm, images, archives, pdf, fonts); download those with Bash instead. Use only when the user provides or references a specific URL, or explicitly asks you to fetch a page. Do not fabricate URLs or fetch pages speculatively.",
@@ -42,9 +100,14 @@ export const WebFetchTool: Tool<z.infer<typeof ArgsSchema>> = {
   permission: "confirm",
   async run(args) {
     const cap = args.maxBytes ?? 1_000_000;
+    // SSRF guard: don't let a model-supplied (or injection-supplied) URL reach cloud
+    // metadata, localhost, or internal/Tailscale hosts and return their response into
+    // the context. Every redirect hop is re-checked, so nothing internal is contacted.
     let resp: Response;
     try {
-      resp = await fetch(args.url, { headers: { "user-agent": "freecode/0.1" } });
+      const r = await guardedFetch(args.url);
+      if ("blocked" in r) return { ok: false, output: "", error: r.blocked };
+      resp = r;
     } catch (err) {
       return { ok: false, output: "", error: `Fetch failed: ${String(err)}` };
     }
