@@ -627,7 +627,11 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
   // Self-improvement: proposals from the last /learn, awaiting /learn save <n|all>.
   const learnProposalsRef = useRef<Proposal[]>([]);
   // /goal: true while an autonomous goal loop is running (esc or /goal stop ends it).
+  // The ref is read synchronously in the input handler; the state mirror lets the
+  // input-drain effect RE-RUN when a goal ends (a ref change doesn't re-render), so
+  // input queued during a goal drains the moment it finishes. Keep them in lockstep.
   const goalActiveRef = useRef(false);
+  const [goalActive, setGoalActive] = useState(false);
   // Approval prompts are QUEUED, not held in a single slot. Parallel sub-agents
   // (a workflow fan-out) can each need approval at the same instant; a lone
   // resolver let the second prompt clobber the first, orphaning its promise so
@@ -802,7 +806,13 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
   // Drain queued input once the turn finishes (and no approval is open). One at a
   // time: dispatching sets busy again, which re-runs this effect for the next.
   useEffect(() => {
-    if (busy || pending) return;
+    // Never drain while a turn OR a /goal loop is active — draining mid-goal (e.g.
+    // during the verify window, when `busy` briefly renders false) would start a
+    // second runAgentLoop concurrently, and the two would clobber conversationRef/
+    // streamIdRef/abortRef. `queuedCount` in the deps re-fires the drain after a
+    // synchronous slash command (which doesn't toggle busy), and `goalActive` (state)
+    // re-fires it the moment a goal ends — so queued input never strands.
+    if (busy || pending || goalActive) return;
     if (queuedInputRef.current.length === 0) return;
     const next = queuedInputRef.current.shift()!;
     setQueuedCount(queuedInputRef.current.length);
@@ -811,7 +821,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
     else if (next.startsWith("!")) void runBang(next, { skipEcho: true });
     else void submit(next, { skipEcho: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [busy, pending]);
+  }, [busy, pending, goalActive, queuedCount]);
 
   // Honor reduced-motion: FREECODE_NO_ANIMATION / NO_ANIMATION → static indicators
   // instead of the spinner/eye animation (the CLI analog of prefersReducedMotion).
@@ -1537,7 +1547,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
         const sub = arg.trim();
         if (sub === "stop") {
           if (goalActiveRef.current) {
-            goalActiveRef.current = false;
+            goalActiveRef.current = false; setGoalActive(false);
             abortRef.current?.abort(); // interrupt the in-flight cycle too
             setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "◆ Goal stopped." }]);
           } else {
@@ -1559,7 +1569,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
         // A claimed DONE is GATED on the project's real checks — not the model's
         // word. Resolved once; if there are none, DONE stays unverified (and says so).
         const verifyPlan = resolveVerify(process.cwd(), config.verify);
-        goalActiveRef.current = true;
+        goalActiveRef.current = true; setGoalActive(true);
         setMessages((prev) => [...prev, { id: `goal-${Date.now()}`, role: "system", text:
           `◆ Goal: ${objective}\n  ${uncapped ? "Working autonomously until done (no cycle cap). " : `Working autonomously (up to ${max} cycles). `}` +
           (verifyPlan.source === "none"
@@ -1626,7 +1636,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
             // else → next cycle
           }
         } finally {
-          goalActiveRef.current = false;
+          goalActiveRef.current = false; setGoalActive(false);
         }
         break;
       }
@@ -2370,9 +2380,11 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
       if (decision) approvalQueue.resolveHead(decision);
       return;
     }
-    // esc interrupts a running turn.
-    if (key.escape && busy) {
+    // esc interrupts a running turn — and a running /goal (even during its verify
+    // window, when `busy` is briefly false), stopping the loop like `/goal stop`.
+    if (key.escape && (busy || goalActiveRef.current)) {
       abortRef.current?.abort();
+      if (goalActiveRef.current) { goalActiveRef.current = false; setGoalActive(false); }
       return;
     }
     // Bracketed paste, assembled across chunks. Ink strips the ESC and splits a
@@ -2482,7 +2494,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
       // overlap a live turn) — so the user's steering isn't silently dropped.
       // Show it in the history right away (as the user's own message, persisted),
       // so what you typed is visible in order; it's sent when the turn finishes.
-      if (busy || pending) {
+      if (busy || pending || goalActiveRef.current) {
         queuedInputRef.current.push(value);
         setQueuedCount(queuedInputRef.current.length);
         if (!value.startsWith("/")) {
