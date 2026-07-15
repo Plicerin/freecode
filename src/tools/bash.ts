@@ -226,6 +226,12 @@ export function createBashTool(opts: BashToolOptions = {}): Tool<z.infer<typeof 
           settled = true;
           clearTimeout(timeout);
           if (forceTimer) clearTimeout(forceTimer);
+          // Remove the abort listener we added below. `{ once: true }` only fires
+          // (and self-removes) on an actual abort; on the normal success path the
+          // signal never aborts, so without this the listener — and the ~400KB of
+          // stdout/stderr + child it closes over — stays attached to the run-long
+          // signal for every Bash call, a real leak across a long agent session.
+          ctx.signal?.removeEventListener("abort", onAbort);
           resolve(r);
         };
 
@@ -243,11 +249,12 @@ export function createBashTool(opts: BashToolOptions = {}): Tool<z.infer<typeof 
         // On interrupt/exit, kill the whole tree (not just the direct child that
         // the spawn `signal` handles) so a running test suite doesn't outlive us,
         // and force-resolve if its pipes linger so the loop is never stuck.
-        ctx.signal?.addEventListener("abort", () => {
+        const onAbort = (): void => {
           killed = true;
           killTree();
           if (!forceTimer) forceTimer = setTimeout(() => settle({ ok: false, output: stdout, error: "Interrupted." + (stderr ? `\n${stderr}` : "") }), 3000);
-        }, { once: true });
+        };
+        ctx.signal?.addEventListener("abort", onAbort, { once: true });
 
         const timeoutMsg = looksLikeLongRunningServer(args.command)
           ? `Command timed out after ${timeoutMs}ms. This looks like a long-running server — it never exits, so a bigger timeoutMs won't help. Re-run the SAME command with runInBackground:true: it launches detached, returns immediately with a pid + log path, and keeps serving. Then read the log to confirm it came up. (Do NOT tell the user the server can't start — it can.)`
