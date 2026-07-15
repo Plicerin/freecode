@@ -2506,6 +2506,16 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
     ? formatSpeed(tokensPerSecond(estTokens(burstCharsRef.current), Date.now() - burstStartRef.current))
     : "";
 
+  // Memoize the <Static> scrollback items. The ~90ms spinner tick (and every other
+  // state change) re-renders this component; without memoization each re-render
+  // rebuilt the whole items array and made Ink re-commit EVERY settled message.
+  // Over a long autonomous turn that re-processes the entire growing transcript
+  // ~10×/message — the dominant driver of the heap climbing into the GBs and
+  // OOMing (measured: with a fixed 300-message transcript, pure re-renders leaked
+  // ~2KB each and cost ~26ms each; memoizing drops both by ~7×). Recomputes only
+  // when the transcript actually changes.
+  const staticItems = useMemo(() => buildStaticItems(introReady, messages, settled), [introReady, messages, settled]);
+
   return (
     <Box flexDirection="column">
       {/* Settled history lives in Static: the intro banner first, then every
@@ -2515,7 +2525,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
         // Append-only (see buildStaticItems): gated on introReady so a startup
         // message can't land in Static before the intro and then get duplicated
         // when the intro prepends.
-        items={buildStaticItems(introReady, messages, settled)}
+        items={staticItems}
       >
         {(item) =>
           item.kind === "intro" ? (
