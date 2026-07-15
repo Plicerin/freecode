@@ -151,6 +151,7 @@ export class GeminiProvider implements Provider {
     let buffer = "";
     let totalInput = 0;
     let totalOutput = 0;
+    let finishReason: string | undefined; // "MAX_TOKENS" = truncated → the loop's auto-continue heal needs it
     try {
     while (true) {
       let value: Uint8Array | undefined;
@@ -181,6 +182,7 @@ export class GeminiProvider implements Provider {
               yield { type: "tool_call", call: { id: fc.name, name: fc.name, arguments: fc.args ?? {} } };
             }
           }
+          if (cand?.finishReason) finishReason = cand.finishReason;
           if (obj.usageMetadata) {
             totalInput = obj.usageMetadata.promptTokenCount ?? totalInput;
             totalOutput = obj.usageMetadata.candidatesTokenCount ?? totalOutput;
@@ -195,6 +197,6 @@ export class GeminiProvider implements Provider {
     }
     const usage: TokenUsage = { input: totalInput, output: totalOutput, cacheRead: 0, cacheWrite: 0, thinking: 0 };
     yield { type: "usage", usage };
-    yield { type: "end", reason: "end_turn" };
+    yield { type: "end", reason: finishReason === "MAX_TOKENS" ? "max_tokens" : "end_turn" };
   }
 }

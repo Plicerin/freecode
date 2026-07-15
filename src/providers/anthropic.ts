@@ -123,6 +123,10 @@ interface ApiEvent {
     usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
     stop_reason?: string;
   };
+  // `message_delta` carries the FINAL output token count and stop_reason at the TOP
+  // level (usage here, stop_reason in `delta`) — NOT under `message`. Missing this
+  // field is why output tokens went uncounted and truncation went undetected.
+  usage?: { output_tokens?: number; input_tokens?: number };
 }
 
 export class AnthropicProvider implements Provider {
@@ -213,6 +217,7 @@ export class AnthropicProvider implements Provider {
     const decoder = new TextDecoder();
     let buffer = "";
     const toolCalls = new Map<number, { id?: string; name?: string; inputJson: string }>();
+    let stopReason: string | undefined; // captured from message_delta, used at message_stop
 
     try {
     while (true) {
@@ -271,17 +276,13 @@ export class AnthropicProvider implements Provider {
             };
             toolCalls.delete(evt.index);
           }
-        } else if (evt.type === "message_delta" && evt.message) {
-          const u = evt.message.usage;
-          if (u) {
-            const usage: TokenUsage = {
-              input: 0,
-              output: u.output_tokens,
-              cacheRead: 0,
-              cacheWrite: 0,
-              thinking: 0,
-            };
-            yield { type: "usage", usage };
+        } else if (evt.type === "message_delta") {
+          // Top-level usage carries the FINAL output token count; delta.stop_reason
+          // says WHY we stopped ("max_tokens" = truncated → the loop's auto-continue
+          // heal needs this). Both live here, not under `message`.
+          if (evt.delta?.stop_reason) stopReason = evt.delta.stop_reason;
+          if (evt.usage?.output_tokens != null) {
+            yield { type: "usage", usage: { input: 0, output: evt.usage.output_tokens, cacheRead: 0, cacheWrite: 0, thinking: 0 } };
           }
         } else if (evt.type === "message_start" && evt.message?.usage) {
           const u = evt.message.usage;
@@ -294,7 +295,7 @@ export class AnthropicProvider implements Provider {
           };
           yield { type: "usage", usage };
         } else if (evt.type === "message_stop") {
-          yield { type: "end", reason: "end_turn" };
+          yield { type: "end", reason: stopReason === "max_tokens" ? "max_tokens" : "end_turn" };
           return;
         }
       }
@@ -302,6 +303,6 @@ export class AnthropicProvider implements Provider {
     } finally {
       watchdog.clear();
     }
-    yield { type: "end", reason: "end_turn" };
+    yield { type: "end", reason: stopReason === "max_tokens" ? "max_tokens" : "end_turn" };
   }
 }
