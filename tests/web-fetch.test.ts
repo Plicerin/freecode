@@ -64,10 +64,11 @@ describe("WebFetchTool", () => {
     expect(r.output).toMatch(/Para/);
   });
 
-  test("returns plain text as-is for a text content-type", async () => {
+  test("returns plain text (behind the untrusted-data boundary) for a text content-type", async () => {
     stub("just some plain text", "text/plain");
     const r = await WebFetchTool.run({ url: "https://example.com/readme.txt" } as never, { cwd: ".", signal: undefined as never });
     expect(r.ok).toBe(true);
-    expect(r.output).toBe("just some plain text");
+    expect(r.output).toMatch(/UNTRUSTED web content fetched from https:\/\/example\.com\/readme\.txt/); // injection-boundary prefix
+    expect(r.output).toMatch(/just some plain text$/); // …with the body preserved verbatim beneath it
   });
 });
