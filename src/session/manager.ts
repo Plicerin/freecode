@@ -3,7 +3,26 @@ import { dirname } from "node:path";
 import { projectDir, sessionPath, PROJECTS_DIR } from "../utils/paths";
 import { newId, nowIso } from "../utils/ids";
 import { debug } from "../utils/debug";
+import { redactSecrets } from "../utils/redact";
 import type { ChatMessage } from "../providers/types";
+
+// Scrub known secret formats from EVERYTHING we persist to disk. `redactSecrets`
+// was only applied to tool OUTPUT before — so a FileWrite of a `.env`, a pasted key
+// in a prompt, or a secret the model echoes landed in cleartext in the session log
+// (`.jsonl`) and `.state.json`, both under ~/.freecode (commonly cloud-synced). This
+// walks every string in the event/messages and redacts it. Only actual secret
+// patterns change, so normal content — and /recover, /resume, /expand — are
+// unaffected except for the rare turn that genuinely contained a secret.
+function redactDeep<T>(v: T): T {
+  if (typeof v === "string") return redactSecrets(v).text as unknown as T;
+  if (Array.isArray(v)) return v.map((x) => redactDeep(x)) as unknown as T;
+  if (v && typeof v === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) out[k] = redactDeep(val);
+    return out as unknown as T;
+  }
+  return v;
+}
 
 export type SessionEvent =
   | { kind: "user"; text: string; ts: string }
@@ -47,7 +66,7 @@ export function newSession(cwd: string): Session {
 
 export function appendEvent(session: Session, event: SessionEvent): void {
   ensureDir(projectDir(session.cwd));
-  appendFileSync(session.path, JSON.stringify(event) + "\n");
+  appendFileSync(session.path, JSON.stringify(redactDeep(event)) + "\n");
 }
 
 export function listSessions(cwd: string): Session[] {
@@ -122,7 +141,7 @@ export function writeConversationState(session: Session, messages: ChatMessage[]
   try {
     const p = statePath(session);
     ensureDir(dirname(p));
-    writeFileSync(p, JSON.stringify({ v: 1, messages }));
+    writeFileSync(p, JSON.stringify({ v: 1, messages: redactDeep(messages) }));
   } catch (err) {
     debug.warn(`could not persist conversation state for ${session.id}`, String(err));
   }

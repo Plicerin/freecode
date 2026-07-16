@@ -13,6 +13,7 @@
 import { HonchoClient, type HonchoMessage } from "./honcho";
 import { readMemoryCache, writeMemoryCache } from "./cache";
 import { debug } from "../utils/debug";
+import { redactSecrets } from "../utils/redact";
 
 export const ASSISTANT_PEER = "assistant";
 
@@ -143,7 +144,11 @@ class HonchoMemoryStore implements MemoryStore {
   }
 
   record(role: "user" | "assistant", text: string): void {
-    const content = text.trim();
+    // Redact secrets BEFORE they leave the machine: memory is sent over the network
+    // to Honcho, stored durably, and summarized by its deriver LLM into a
+    // representation recalled into every future session — the wrong place for a
+    // pasted key or one the model echoes.
+    const content = redactSecrets(text.trim()).text;
     if (!content) return;
     this.pending.push({ content, peer_id: role === "user" ? this.cfg.peer : ASSISTANT_PEER });
     if (this.pending.length >= FLUSH_AT_PENDING) {

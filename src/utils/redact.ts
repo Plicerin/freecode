@@ -15,7 +15,13 @@ const PATTERNS: Array<{ re: RegExp; label: string }> = [
   { re: /hf_[A-Za-z0-9]{20,}/g, label: "hf-token" },
   { re: /nvapi-[A-Za-z0-9_-]{20,}/g, label: "nvidia-key" },
   { re: /xox[baprs]-[A-Za-z0-9-]{10,}/g, label: "slack-token" },
+  { re: /-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*?-----END[A-Z ]*PRIVATE KEY-----/g, label: "private-key" },
+  { re: /eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, label: "jwt" },
 ];
+
+// Password embedded in a connection string: postgres://user:PASS@host, redis://…, etc.
+// Redact only the password segment (keep scheme+user so the string stays legible).
+const CONN_URL = /((?:[a-z][a-z0-9+.-]*):\/\/[^\s:/@]+:)([^\s/@]{2,})(@)/gi;
 
 export function redactSecrets(text: string): { text: string; count: number } {
   if (!text) return { text, count: 0 };
@@ -27,5 +33,9 @@ export function redactSecrets(text: string): { text: string; count: number } {
       return `[REDACTED:${label}]`;
     });
   }
+  out = out.replace(CONN_URL, (_m, pre: string, _pw: string, at: string) => {
+    count++;
+    return `${pre}[REDACTED:password]${at}`;
+  });
   return { text: out, count };
 }
