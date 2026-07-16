@@ -174,6 +174,14 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
   const MAX_TOOL_FAILURES = 8;
   let consecutiveFailures = 0;
   let lastFailureMsg = "";
+  // Loop guard for the uncapped default: the failure breaker only catches FAILING
+  // tools. A model can also wedge on a SUCCEEDING one — re-reading the same file or
+  // re-running the same passing command forever, burning tokens with no cap. Trip
+  // when the identical (tool, args) call repeats back-to-back. Intervening different
+  // calls reset it, so legit read→edit→read cycles never trip.
+  const MAX_IDENTICAL_CALLS = 10;
+  let identicalCallKey = "";
+  let identicalCallCount = 0;
 
   // Provenance ledger — machine-derived facts about what the agent really did.
   const led = { wrote: [] as string[], edited: [] as string[], read: 0, ran: [] as string[], searched: 0, viewed: 0, other: [] as string[] };
@@ -586,6 +594,10 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
         (red.count > 0 ? `\n[freecode redacted ${red.count} secret(s) from this output]` : "");
       if (result.ok) consecutiveFailures = 0;
       else { consecutiveFailures += 1; lastFailureMsg = `${tool.name}: ${result.error ?? result.output.slice(0, 160)}`; }
+      // Track back-to-back identical calls (succeeding or not) for the loop guard.
+      const callKey = `${call.name} ${JSON.stringify(call.arguments)}`;
+      if (callKey === identicalCallKey) identicalCallCount += 1;
+      else { identicalCallKey = callKey; identicalCallCount = 1; }
       if (result.ok && (tool.name === "FileWrite" || tool.name === "FileEdit")) {
         changed = true;
         // A new edit invalidates any earlier check outcome — the state it
@@ -629,6 +641,13 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
     // retrying the identical failing call forever.
     if (consecutiveFailures >= MAX_TOOL_FAILURES) {
       const note = `Stopped after ${consecutiveFailures} consecutive tool failures with no progress. Last error — ${lastFailureMsg}`;
+      logActivity(`STOP ${note}`);
+      opts.onEvent({ type: "error", error: note });
+      aborted = true;
+    }
+    // Loop guard: the same call repeated back-to-back with no change → stuck.
+    if (identicalCallCount >= MAX_IDENTICAL_CALLS) {
+      const note = `Stopped: the same tool call repeated ${identicalCallCount}× in a row with no change — the model is looping, not making progress. Try a different approach or /new.`;
       logActivity(`STOP ${note}`);
       opts.onEvent({ type: "error", error: note });
       aborted = true;

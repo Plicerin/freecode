@@ -107,13 +107,25 @@ describe("turn-end surfacing", () => {
     // 12 tool-call turns (far more than a cap of 3 would allow) then a clean finish.
     // With maxTurns 0 the loop must keep going and stop only on the model's own
     // no-tool-calls 'done' — never the cap.
-    const noop: Tool = { name: "Noop", description: "no-op", schema: z.object({}), permission: "safe", async run() { return { ok: true, output: "ok" }; } };
+    const noop: Tool = { name: "Noop", description: "no-op", schema: z.object({ i: z.number().optional() }), permission: "safe", async run() { return { ok: true, output: "ok" }; } };
     let n = 0;
+    // DISTINCT args each turn — real productive work varies its calls; only the
+    // stuck-loop guard cares about identical repeats (tested separately below).
     const p = new ScriptedProvider(() => (n++ < 12
-      ? [{ type: "tool_call", call: { id: `c${n}`, name: "Noop", arguments: {} } }, { type: "end", reason: "tool_use" }]
+      ? [{ type: "tool_call", call: { id: `c${n}`, name: "Noop", arguments: { i: n } } }, { type: "end", reason: "tool_use" }]
       : [{ type: "text_delta", delta: "done." }, { type: "end", reason: "end_turn" }]));
     const ev = await run(p, [noop], 0); // 0 = uncapped
     expect(errors(ev).some((m) => /max-turns cap/i.test(m))).toBe(false);          // never warns
     expect(ev.some((e) => e.type === "done" && (e as { reason?: string }).reason === "end_turn")).toBe(true); // finished cleanly
+  });
+
+  test("loop guard: the identical tool call repeated forever is stopped (uncapped ≠ infinite)", async () => {
+    const noop: Tool = { name: "Noop", description: "no-op", schema: z.object({}), permission: "safe", async run() { return { ok: true, output: "ok" }; } };
+    // A model wedged on a SUCCEEDING tool — same call, same args, forever. Without a
+    // guard, maxTurns=0 would run it unbounded; the guard must stop it.
+    const p = new ScriptedProvider(() => [{ type: "tool_call", call: { id: "c", name: "Noop", arguments: {} } }, { type: "end", reason: "tool_use" }]);
+    const ev = await run(p, [noop], 0); // uncapped
+    expect(errors(ev).some((m) => /looping|repeated/i.test(m))).toBe(true); // guard tripped
+    expect(ev.some((e) => e.type === "done")).toBe(true);                   // and it terminated
   });
 });
