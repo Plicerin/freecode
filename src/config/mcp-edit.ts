@@ -1,7 +1,8 @@
 // Add/remove MCP servers from settings.json WITHOUT hand-editing JSON (and
 // creating the file if it doesn't exist). Edits are surgical (jsonc modify) so a
 // user's existing comments/formatting in settings.json survive.
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync } from "node:fs";
+import { writeFileAtomic } from "../utils/atomic";
 import { dirname } from "node:path";
 import { modify, applyEdits } from "jsonc-parser";
 import { SETTINGS_PATH } from "../utils/paths";
@@ -51,7 +52,7 @@ export function addMcpServer(name: string, server: McpServerConfig, path: string
   const edits = modify(raw, ["mcpServers", name], server, { formattingOptions: { insertSpaces: true, tabSize: 2 } });
   const next = applyEdits(raw, edits);
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, next, "utf8");
+  writeFileAtomic(path, next);
 }
 
 /** Remove mcpServers.<name>. Returns true if something was removed. */
@@ -61,7 +62,7 @@ export function removeMcpServer(name: string, path: string = SETTINGS_PATH): boo
   const edits = modify(raw, ["mcpServers", name], undefined, {});
   const next = applyEdits(raw, edits);
   if (next === raw) return false;
-  writeFileSync(path, next, "utf8");
+  writeFileAtomic(path, next);
   return true;
 }
 

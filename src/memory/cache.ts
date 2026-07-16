@@ -4,7 +4,8 @@
 // keeps the last non-empty recall per workspace, so a transient failure degrades
 // to "slightly stale" instead of "gone". Kept separate from settings, like the
 // other machine-managed files.
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync } from "node:fs";
+import { writeFileAtomic } from "../utils/atomic";
 import { join, dirname } from "node:path";
 import { APP_DIR } from "../utils/paths";
 import { debug } from "../utils/debug";
@@ -48,7 +49,7 @@ export function writeMemoryCache(workspace: string, block: string, path?: string
     const f = readFileSafe(p);
     const byWorkspace = { ...(f.byWorkspace ?? {}) };
     byWorkspace[workspace] = { block, ts: new Date().toISOString() };
-    writeFileSync(p, JSON.stringify({ ...f, byWorkspace }, null, 2));
+    writeFileAtomic(p, JSON.stringify({ ...f, byWorkspace }, null, 2));
   } catch (e) {
     debug.warn("memory cache write failed", String(e));
   }

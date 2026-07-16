@@ -4,7 +4,8 @@
 // settings.json so it never clobbers a hand-edited (possibly commented) config.
 // It's the LOWEST-priority default: an explicit --provider/--model, a project
 // profile, env vars, or settings.json all still win.
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync } from "node:fs";
+import { writeFileAtomic } from "../utils/atomic";
 import { join, dirname } from "node:path";
 import { APP_DIR } from "../utils/paths";
 import type { ProviderId } from "./schema";
@@ -81,7 +82,7 @@ export function writeLastSession(s: LastSession, path?: string, cwd?: string): v
     const byCwd = { ...(file.byCwd ?? {}) };
     if (cwd) byCwd[cwd] = mergeEntry(file.byCwd?.[cwd], s);
     next.byCwd = byCwd;
-    writeFileSync(p, JSON.stringify(next, null, 2));
+    writeFileAtomic(p, JSON.stringify(next, null, 2));
   } catch {
     /* remembering must never break a run */
   }

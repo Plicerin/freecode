@@ -8,7 +8,8 @@
 // commands on every future launch of a folder is too powerful, so Bash always
 // re-confirms each session even if you pressed "always". The exclusion is applied
 // on BOTH write and read, so a hand-edited file can't smuggle Bash back in.
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync } from "node:fs";
+import { writeFileAtomic } from "../utils/atomic";
 import { join, dirname } from "node:path";
 import { APP_DIR } from "../utils/paths";
 import type { GrantStore } from "../permissions/modes";
@@ -66,7 +67,7 @@ export function persistGrant(cwd: string, tool: string, path?: string): void {
     if (cur.has(tool)) return; // already saved
     cur.add(tool);
     byCwd[cwd] = [...cur].sort();
-    writeFileSync(p, JSON.stringify({ ...file, byCwd }, null, 2));
+    writeFileAtomic(p, JSON.stringify({ ...file, byCwd }, null, 2));
   } catch (e) {
     debug.warn("could not persist permission grant", String(e));
   }
