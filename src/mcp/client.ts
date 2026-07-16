@@ -63,6 +63,10 @@ export class McpClient {
     );
     proc.on("exit", (code) => this.failAll(new Error(`MCP server '${this.name}' exited (code ${code})`)));
     proc.on("error", (err) => this.failAll(err instanceof Error ? err : new Error(String(err))));
+    // A write racing server death emits EPIPE on stdin; without a listener that's an
+    // unhandled stream error → the whole TUI crashes. Swallow it (exit/error handle
+    // the real failure).
+    proc.stdin?.on("error", (err) => debug.warn(`[mcp:${this.name}] stdin error`, String(err)));
 
     await this.request(
       "initialize",
