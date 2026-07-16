@@ -2,9 +2,19 @@
 // loop self-healing on it (shrink → compact/trim → retry) instead of dead-ending.
 import { test, expect, describe } from "bun:test";
 import { parseContextLimit, isContextOverflow } from "../src/agent/context-limit";
+import { friendlyError } from "../src/providers/friendly-errors";
 import { runAgentLoop, type AgentEvent } from "../src/agent/loop";
 import { createPermissionEngine, type ApprovalCallback } from "../src/permissions/modes";
 import type { Provider, ChatRequest, StreamEvent, ChatMessage } from "../src/providers/types";
+
+describe("friendlyError keeps the token count parseable (M5)", () => {
+  test("the OpenAI-style overflow message survives friendlyError so the heal can size it", () => {
+    const raw = new Error("This model's maximum context length is 8192 tokens, however you requested 9000");
+    const friendly = friendlyError(raw, "openai");
+    expect(friendly.message).toMatch(/auto-compacting/i); // still the friendly framing
+    expect(parseContextLimit(friendly)).toBe(8192);        // …but the number is no longer stripped
+  });
+});
 
 describe("parseContextLimit", () => {
   test("llama.cpp: 'exceeds the available context size (64000 tokens)'", () => {

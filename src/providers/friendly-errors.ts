@@ -47,7 +47,10 @@ export function friendlyError(err: unknown, provider: string): Error {
     return e;
   }
   if (msg.includes("context length") || msg.includes("context window") || msg.includes("maximum context")) {
-    return new Error("Context window exceeded — auto-compacting");
+    // Keep the ORIGINAL message: it carries the token count the loop's
+    // parseContextLimit() needs to size the shrink-and-retry. Dropping it (as the
+    // old numberless string did) left parseContextLimit null → the heal never ran.
+    return new Error(`Context window exceeded — auto-compacting. ${err.message}`);
   }
   if (msg.includes("invalid base url") || msg.includes("invalid url")) {
     return new Error(`Invalid baseUrl for ${provider} — check configuration`);
