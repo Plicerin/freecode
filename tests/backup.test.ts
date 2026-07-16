@@ -58,6 +58,15 @@ describe("snapshotFile", () => {
     const bin = join(root, "bin"); writeFileSync(bin, Buffer.from([0x00, 0x01, 0x02]));
     expect(snapshotFile(bin)).toBeNull();
   });
+
+  test("never shadow-copies a secret file (no plaintext keys in the backup store)", () => {
+    for (const name of [".env", ".env.local", "id_rsa", "server.pem", "app.key", "credentials.json", "secrets.yml"]) {
+      const f = join(root, name);
+      writeFileSync(f, "OPENAI_API_KEY=xxxxxxxxxxxxxxxxxxxx\n");
+      expect(snapshotFile(f)).toBeNull();
+      expect(listBackups(f).length).toBe(0);
+    }
+  });
 });
 
 describe("extractBashWriteTargets", () => {
@@ -103,5 +112,14 @@ describe("snapshotBeforeToolRun", () => {
 
   test("does nothing for a read-only Bash command", () => {
     expect(snapshotBeforeToolRun("Bash", { command: "npx tsc --noEmit", cwd: root }, root)).toEqual([]);
+  });
+
+  test("backs up a FileEdit whose path lives only in the unified-diff header", () => {
+    const f = join(root, "app.ts");
+    writeFileSync(f, "const x = 1;\n");
+    const diff = `--- a/app.ts\n+++ b/app.ts\n@@ -1 +1 @@\n-const x = 1;\n+const x = 2;\n`;
+    const done = snapshotBeforeToolRun("FileEdit", { unifiedDiff: diff }, root); // no `path` arg
+    expect(done).toEqual([f]);
+    expect(readFileSync(listBackups(f)[0]!.path, "utf8")).toBe("const x = 1;\n");
   });
 });

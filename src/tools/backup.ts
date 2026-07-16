@@ -3,6 +3,7 @@ import { join, isAbsolute, resolve, dirname, basename } from "node:path";
 import { createHash } from "node:crypto";
 import { APP_DIR } from "../utils/paths";
 import { debug } from "../utils/debug";
+import { pathFromDiffHeader } from "./file-edit";
 
 // A local shadow copy of every file a tool is about to mutate, taken JUST BEFORE
 // the mutation runs. This is the safety net that turns "the model truncated my
@@ -69,9 +70,15 @@ function prune(dir: string, keep: number): void {
 /** Shadow-copy `absPath`'s CURRENT bytes before it is overwritten. Returns the
  *  backup path, or null when there's nothing worth backing up (file absent, a
  *  new file, binary, empty, too big, or identical to the last snapshot). */
+// Files whose CONTENT is a secret — never drop a verbatim plaintext copy of these
+// into ~/.freecode/backups. The tradeoff: if the model truncates a .env, /recover
+// can't restore it (regenerate/rotate instead of keeping plaintext keys around).
+const SECRET_FILE = /(^|[\\/])(\.env(\.[\w-]+)?|\.?netrc|credentials?(\.[\w-]+)?|secrets?(\.[\w-]+)?|id_[a-z0-9]+|.*\.(pem|key|pfx|p12|keystore|jks|ppk|asc))$/i;
+
 export function snapshotFile(absPath: string): string | null {
   try {
     if (!absPath || !isAbsolute(absPath) || !existsSync(absPath)) return null;
+    if (SECRET_FILE.test(absPath)) return null; // don't shadow-copy secret files in cleartext
     const st = statSync(absPath);
     if (!st.isFile() || st.size === 0 || st.size > MAX_BACKUP_BYTES) return null;
     const buf = readFileSync(absPath);
@@ -130,10 +137,17 @@ export function extractBashWriteTargets(command: string, cwd: string): string[] 
 export function snapshotBeforeToolRun(toolName: string, args: unknown, cwd: string): string[] {
   const done: string[] = [];
   try {
-    const a = (args ?? {}) as { path?: unknown; command?: unknown; cwd?: unknown };
+    const a = (args ?? {}) as { path?: unknown; command?: unknown; cwd?: unknown; unifiedDiff?: unknown; diff?: unknown };
     if (toolName === "FileWrite" || toolName === "FileEdit") {
-      if (typeof a.path === "string") {
-        const abs = isAbsolute(a.path) ? a.path : resolve(cwd, a.path);
+      // FileEdit may omit `path` when a unifiedDiff header names the file — derive it
+      // the same way FileEdit.run does, so that edit shape is also shadow-backed.
+      let rel = typeof a.path === "string" ? a.path : undefined;
+      if (!rel && toolName === "FileEdit") {
+        const diff = typeof a.unifiedDiff === "string" ? a.unifiedDiff : typeof a.diff === "string" ? a.diff : undefined;
+        if (diff) rel = pathFromDiffHeader(diff) ?? undefined;
+      }
+      if (rel) {
+        const abs = isAbsolute(rel) ? rel : resolve(cwd, rel);
         if (snapshotFile(abs)) done.push(abs);
       }
     } else if (toolName === "Bash" && typeof a.command === "string") {
