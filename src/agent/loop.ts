@@ -595,7 +595,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
       if (result.ok) consecutiveFailures = 0;
       else { consecutiveFailures += 1; lastFailureMsg = `${tool.name}: ${result.error ?? result.output.slice(0, 160)}`; }
       // Track back-to-back identical calls (succeeding or not) for the loop guard.
-      const callKey = `${call.name} ${JSON.stringify(call.arguments)}`;
+      const callKey = JSON.stringify([call.name, call.arguments]);
       if (callKey === identicalCallKey) identicalCallCount += 1;
       else { identicalCallKey = callKey; identicalCallCount = 1; }
       if (result.ok && (tool.name === "FileWrite" || tool.name === "FileEdit")) {
