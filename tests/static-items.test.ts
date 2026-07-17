@@ -6,7 +6,7 @@
 // jumped to the top. This pins the fix: Static is gated on introReady, so the
 // intro is always index 0 from the first render and the array only grows.
 import { test, expect, describe } from "bun:test";
-import { buildStaticItems, type UiMessage } from "../src/commands/repl";
+import { buildStaticItems, clampToViewport, type UiMessage } from "../src/commands/repl";
 
 const msg = (id: string, text = "x"): UiMessage => ({ id, role: "system", text });
 
@@ -63,5 +63,50 @@ describe("buildStaticItems (append-only Static invariant)", () => {
     const m = [msg("a"), msg("b")];
     expect(buildStaticItems(true, m, 2)).toEqual(buildStaticItems(true, m, 2, 0));
     expect(buildStaticItems(true, m, 2)[0]!.kind).toBe("intro");
+  });
+});
+
+// The in-flight assistant bubble lives in Ink's DYNAMIC (repainted) region. Ink
+// erases that region by moving up `lastOutputHeight` rows — once it's taller than
+// the terminal, the scrolled-off lines can't be erased and the repaint corrupts, so
+// a long streamed reply garbles or VANISHES mid-stream (worst with verbose local
+// models like a 1-bit quant listing its capabilities). clampToViewport bounds the
+// live region to the TAIL that fits; the full text still lands in <Static> on settle.
+describe("clampToViewport (bounds the streamed live region to the viewport)", () => {
+  test("short text under the budget is returned whole, unclipped", () => {
+    const r = clampToViewport("line1\nline2\nline3", 10, 80);
+    expect(r.clipped).toBe(false);
+    expect(r.text).toBe("line1\nline2\nline3");
+    expect(r.rows).toBe(3);
+  });
+
+  test("text taller than the budget keeps the TAIL (the newest lines) and marks clipped", () => {
+    const text = Array.from({ length: 20 }, (_, i) => `line${i}`).join("\n");
+    const r = clampToViewport(text, 5, 80);
+    expect(r.clipped).toBe(true);
+    const kept = r.text.split("\n");
+    expect(kept.length).toBeLessThanOrEqual(5);
+    expect(kept.at(-1)).toBe("line19");          // newest line is always kept
+    expect(r.text).not.toMatch(/line0\b/);        // oldest lines dropped
+  });
+
+  test("wrapped long lines count for their full wrapped height", () => {
+    // one 200-char line at 50 cols wraps to 4 rows.
+    const r = clampToViewport("x".repeat(200), 10, 50);
+    expect(r.rows).toBe(4);
+    expect(r.clipped).toBe(false);
+  });
+
+  test("always keeps at least one (tail) line even when it alone exceeds the budget", () => {
+    // a single line that wraps to 8 rows, budget only 3 — can't drop everything.
+    const r = clampToViewport("y".repeat(400), 3, 50);
+    expect(r.text).toBe("y".repeat(400));         // the one line survives
+    expect(r.clipped).toBe(false);                // nothing left to drop → not marked clipped
+  });
+
+  test("a zero/undefined width falls back to a sane column count (no divide-by-zero)", () => {
+    const r = clampToViewport("hello", 10, 0);
+    expect(r.rows).toBe(1);
+    expect(r.clipped).toBe(false);
   });
 });

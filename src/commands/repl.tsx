@@ -120,6 +120,30 @@ export function buildStaticItems(introReady: boolean, messages: UiMessage[], set
 // resets — only a marathon autonomous run (hundreds of tool calls) does.
 export const STATIC_WINDOW = 1000;
 
+// The in-flight turn renders in Ink's DYNAMIC region, which Ink repaints every
+// frame by moving the cursor up and erasing `lastOutputHeight` lines. Once that
+// region grows TALLER than the terminal viewport, the lines that scrolled off the
+// top can't be erased, so the repaint corrupts — a long streamed reply visibly
+// garbles or VANISHES halfway through (worst with verbose local models). Bound the
+// live region to the viewport: show only the TAIL that fits. Nothing is lost — the
+// FULL message prints into <Static> (which is written once and scrolls natively,
+// never repainted) the instant the turn settles. Returns the clamped text and
+// whether anything was dropped, plus the wrapped-row count it occupies.
+export function clampToViewport(text: string, maxRows: number, width: number): { text: string; clipped: boolean; rows: number } {
+  const cols = Math.max(20, width || 80);
+  const wrapped = (line: string) => Math.max(1, Math.ceil(line.length / cols));
+  const lines = text.split("\n");
+  let used = 0;
+  const kept: string[] = [];
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const r = wrapped(lines[i]!);
+    if (kept.length > 0 && used + r > maxRows) return { text: kept.join("\n"), clipped: true, rows: used };
+    used += r;
+    kept.unshift(lines[i]!);
+  }
+  return { text, clipped: false, rows: used };
+}
+
 /** Rebuild the visible transcript from a session's stored events for /resume.
  *  Mirrors how the LIVE stream renders: a tool_call becomes "→ name(args)" and a
  *  tool_result becomes its output preview — NOT a bare ⚙. The old restore read
@@ -803,6 +827,18 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
     }
   }, [settled, staticBase]);
 
+  // Wholesale-replacing the transcript (/new clears it, /resume swaps in a restored
+  // one) makes messages.length JUMP DOWN. Ink's <Static> only advances its internal
+  // write-index when items.length GROWS, so without a remount its stale high index
+  // swallows every message of the new/restored transcript until the count climbs
+  // back past the old length — the screen looks frozen. Remounting (fresh epoch) with
+  // base 0 gives Static a clean index that renders the new transcript from the top.
+  function resetStaticWindow(): void {
+    setStaticBase(0);
+    setStaticEpoch((e) => e + 1);
+    setSettled(0);
+  }
+
   // Drain queued input once the turn finishes (and no approval is open). One at a
   // time: dispatching sets busy again, which re-runs this effect for the next.
   useEffect(() => {
@@ -904,6 +940,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
     historyRef.current = inputHistoryFromEvents(events);
     historyIdxRef.current = null; setHistoryIdx(null);
     draftRef.current = "";
+    resetStaticWindow(); // swap in the restored transcript → remount Static so it renders from the top
     setMessages([...restoredMessagesFromEvents(events, s.id), { id: `s-${Date.now()}`, role: "system", text: `Resumed (${conversationRef.current.length} messages of context)` }]);
   }
 
@@ -1376,6 +1413,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
         conversationRef.current = [];
         applyTabTitle(); // fresh session → back to the project-folder title
         setMessages([]);
+        resetStaticWindow(); // clear the transcript → remount Static so new lines aren't swallowed
         setCostUsd(0);
         setCtxFill(0);
         setCtxTokens(0);
@@ -2591,12 +2629,34 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
         </Box>
       )}
 
-      {/* The in-flight turn (and transient status) — the only part that reflows. */}
+      {/* The in-flight turn (and transient status) — the only part that reflows.
+          Bounded to the viewport while streaming so a reply taller than the screen
+          can't overflow Ink's repaint and vanish; the full text lands in <Static>
+          the moment it settles (see clampToViewport). */}
       <Box flexDirection="row">
         <Box flexDirection="column" flexGrow={1} paddingX={1}>
-          {messages.slice(settled).filter((m) => m.id).map((m, i) => (
-            <MessageLine key={`${m.id}:${settled + i}`} m={m} theme={theme} />
-          ))}
+          {(() => {
+            const live = messages.slice(settled).filter((m) => m.id);
+            if (!busy) return live.map((m, i) => <MessageLine key={`${m.id}:${settled + i}`} m={m} theme={theme} />);
+            // Fill a viewport-sized row budget from the BOTTOM (newest content),
+            // clamping/dropping older live messages first. Reserve rows for the
+            // spinner, owl, any approval box, and the input frame below.
+            const budget = Math.max(6, (process.stdout.rows ?? 24) - 12);
+            const width = process.stdout.columns ?? 80;
+            let remaining = budget;
+            let clippedAny = false;
+            const out: JSX.Element[] = [];
+            for (let i = live.length - 1; i >= 0; i--) {
+              const m = live[i]!;
+              if (remaining <= 0) { clippedAny = true; break; }
+              const c = clampToViewport(m.text ?? "", remaining, width);
+              if (c.clipped) clippedAny = true;
+              remaining -= c.rows;
+              out.unshift(<MessageLine key={`${m.id}:${settled + i}`} m={c.clipped ? { ...m, text: c.text } : m} theme={theme} />);
+            }
+            if (clippedAny) out.unshift(<Text key="live-clip" color={theme.dim}>⋯ streaming — the full reply lands in the transcript when it finishes</Text>);
+            return out;
+          })()}
           {busy && (
             <Text color={workingHealthColor()}>
               {reducedMotion ? "•" : SPINNER_FRAMES[tick % SPINNER_FRAMES.length]} Working… <Text dimColor>({Math.max(0, Math.floor((Date.now() - busyStartRef.current) / 1000))}s · esc to interrupt{queuedCount > 0 ? ` · ${queuedCount} queued` : ""}{speedText ? ` · ⚡ ${speedText}` : ""})</Text>
