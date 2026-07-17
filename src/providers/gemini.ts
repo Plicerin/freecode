@@ -137,14 +137,14 @@ export class GeminiProvider implements Provider {
       });
     } catch (err) {
       watchdog.clear();
-      throw watchdog.timedOut() ? timeoutError() : friendlyError(err, "gemini");
+      throw watchdog.timedOut() ? timeoutError() : friendlyError(err, "gemini", req.model);
     }
     if (!resp.ok || !resp.body) {
       watchdog.clear();
       const text = await resp.text().catch(() => "");
       const err = new Error(`${resp.status} ${text}`) as Error & { status?: number };
       err.status = resp.status;
-      throw friendlyError(err, "gemini");
+      throw friendlyError(err, "gemini", req.model);
     }
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
@@ -159,7 +159,7 @@ export class GeminiProvider implements Provider {
       try {
         ({ value, done } = await reader.read());
       } catch (err) {
-        throw watchdog.timedOut() ? timeoutError() : friendlyError(err, "gemini");
+        throw watchdog.timedOut() ? timeoutError() : friendlyError(err, "gemini", req.model);
       }
       watchdog.reset();
       if (done) break;

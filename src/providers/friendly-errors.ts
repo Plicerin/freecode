@@ -9,7 +9,7 @@ export function makeError(provider: string, message: string, code?: string, retr
   return err;
 }
 
-export function friendlyError(err: unknown, provider: string): Error {
+export function friendlyError(err: unknown, provider: string, model?: string): Error {
   if (!(err instanceof Error)) return new Error(String(err));
   const code = (err as { code?: string }).code ?? "";
   const status = (err as { status?: number }).status ?? 0;
@@ -33,8 +33,16 @@ export function friendlyError(err: unknown, provider: string): Error {
   if (status === 403 || msg.includes("forbidden")) {
     return new Error(`Forbidden — your ${provider} key may lack the required scope`);
   }
-  if (status === 404 || code === "model_not_found" || msg.includes("model not found")) {
-    return new Error("Model not found — use /model to switch");
+  if (code === "model_not_found" || msg.includes("model not found") || msg.includes("does not exist") || msg.includes("unknown model")) {
+    return new Error(`Model ${model ? `"${model}" ` : ""}not found on ${provider} — it may be deprecated or unavailable. Pick another with /model. (${err.message})`);
+  }
+  if (status === 404) {
+    // A bare 404 is NOT necessarily a bad model. For local servers it's usually a
+    // wrong endpoint/baseUrl PATH, and a server that crashed or restarted (common
+    // with heavy local models) 404s every request until it's back. Telling the user
+    // "Model not found — use /model" sends them switching models in circles when the
+    // endpoint/server is the real problem. Surface the raw error and BOTH causes.
+    return new Error(`${provider} returned 404 for ${model ? `model "${model}"` : "the request"} — the model may be unavailable, OR the endpoint/baseUrl is wrong or the server is down. Check the endpoint/server, then try /model. (${err.message})`);
   }
   if (status === 429 || code === "rate_limit_exceeded" || msg.includes("rate limit") || code === "RESOURCE_EXHAUSTED") {
     const e = new Error(`Rate limited by ${provider} — retrying with backoff`) as Error & { retryable: boolean };

@@ -222,14 +222,14 @@ export class OpenAICompatProvider implements Provider {
       resp = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal: watchdog.signal });
     } catch (err) {
       watchdog.clear();
-      throw watchdog.timedOut() ? timeoutError() : friendlyError(err, this.id);
+      throw watchdog.timedOut() ? timeoutError() : friendlyError(err, this.id, req.model);
     }
     if (!resp.ok || !resp.body) {
       watchdog.clear();
       const text = await resp.text().catch(() => "");
       const err = new Error(`${resp.status} ${text}`) as Error & { status?: number };
       err.status = resp.status;
-      throw friendlyError(err, this.id);
+      throw friendlyError(err, this.id, req.model);
     }
 
     const reader = resp.body.getReader();
@@ -326,7 +326,7 @@ export class OpenAICompatProvider implements Provider {
       try {
         ({ value, done } = await reader.read());
       } catch (err) {
-        throw watchdog.timedOut() ? timeoutError() : friendlyError(err, this.id);
+        throw watchdog.timedOut() ? timeoutError() : friendlyError(err, this.id, req.model);
       }
       watchdog.reset(); // got bytes (or clean EOF) — restart the idle clock
       if (done) break;

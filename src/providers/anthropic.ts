@@ -203,14 +203,14 @@ export class AnthropicProvider implements Provider {
       });
     } catch (err) {
       watchdog.clear();
-      throw watchdog.timedOut() ? timeoutError() : friendlyError(err, "anthropic");
+      throw watchdog.timedOut() ? timeoutError() : friendlyError(err, "anthropic", req.model);
     }
     if (!resp.ok || !resp.body) {
       watchdog.clear();
       const text = await resp.text().catch(() => "");
       const err = new Error(`${resp.status} ${text}`) as Error & { status?: number };
       err.status = resp.status;
-      throw friendlyError(err, "anthropic");
+      throw friendlyError(err, "anthropic", req.model);
     }
 
     const reader = resp.body.getReader();
@@ -226,7 +226,7 @@ export class AnthropicProvider implements Provider {
       try {
         ({ value, done } = await reader.read());
       } catch (err) {
-        throw watchdog.timedOut() ? timeoutError() : friendlyError(err, "anthropic");
+        throw watchdog.timedOut() ? timeoutError() : friendlyError(err, "anthropic", req.model);
       }
       watchdog.reset();
       if (done) break;
