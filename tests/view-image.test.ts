@@ -48,7 +48,7 @@ describe("agent loop feeds tool images back to the model", () => {
       name: "FakeView", description: "x", schema: z.object({}), permission: "safe",
       async run() { return { ok: true, output: "loaded", images: [{ data: "QUJD", mediaType: "image/png" }] }; },
     };
-    const perm = createPermissionEngine("bypass", (async () => "allow") as ApprovalCallback);
+    const perm = createPermissionEngine("bypass");
     await runAgentLoop({ provider, tools: [fakeView], model: "m", maxTurns: 3, prompt: "look", permission: perm, promptUser: (async () => "allow") as ApprovalCallback, onEvent: () => {} });
 
     const req = seen[1]!;

@@ -1,0 +1,119 @@
+// Pure paste logic: detect a multi-line paste, collapse it to a chip, expand the
+// chip back to the real content at submit. (The keystroke wiring is verified live
+// — the harness can't drive a terminal paste.)
+import { test, expect, describe } from "bun:test";
+import { stripPasteMarkers, isMultilinePaste, pastePlaceholder, expandPastes, countLines, assembleChunks, hasPasteStart, hasPasteEnd, shouldCollapse, normalizeNewlines } from "../src/tui/paste";
+
+const ESC = String.fromCharCode(27);
+const wrap = (s: string) => `${ESC}[200~${s}${ESC}[201~`;
+
+describe("stripPasteMarkers", () => {
+  test("removes bracketed markers and flags their presence", () => {
+    const r = stripPasteMarkers(wrap("hello\nworld"));
+    expect(r.content).toBe("hello\nworld");
+    expect(r.marked).toBe(true);
+  });
+  test("plain text is unchanged and unmarked", () => {
+    expect(stripPasteMarkers("abc")).toEqual({ content: "abc", marked: false });
+  });
+});
+
+describe("isMultilinePaste", () => {
+  test("bracketed multi-line content is a paste", () => {
+    expect(isMultilinePaste(wrap("a\nb\nc"))).toBe(true);
+  });
+  test("an unmarked multi-char chunk with a newline is a paste", () => {
+    expect(isMultilinePaste("line1\nline2")).toBe(true);
+  });
+  test("a single keystroke or a lone Enter is NOT a paste", () => {
+    expect(isMultilinePaste("a")).toBe(false);
+    expect(isMultilinePaste("\r")).toBe(false);
+    expect(isMultilinePaste("\n")).toBe(false); // lone newline = Enter, length 1
+  });
+  test("a single-line paste is not collapsed (no newline)", () => {
+    expect(isMultilinePaste(wrap("just one long line of pasted text"))).toBe(false);
+  });
+});
+
+describe("assembleChunks (cross-chunk reassembly, the real Ink case)", () => {
+  test("single chunk with markers + inner newline", () => {
+    expect(assembleChunks([wrap("alpha\nbeta")])).toBe("alpha\nbeta");
+  });
+  test("ESC-STRIPPED markers, split one-chunk-per-line (the observed bug)", () => {
+    // Ink dropped the ESC and split on the newline → two chunks, no newline byte.
+    expect(assembleChunks(["[200~the text South America's", "Soul of Exploration[201~"]))
+      .toBe("the text South America's\nSoul of Exploration");
+  });
+  test("three lines across chunks", () => {
+    expect(assembleChunks(["[200~one", "two", "three[201~"])).toBe("one\ntwo\nthree");
+  });
+  test("a single chunk with CR/CRLF line endings is normalised to \\n (no last-line collapse)", () => {
+    expect(assembleChunks(["[200~one\r\ntwo\rthree[201~"])).toBe("one\ntwo\nthree");
+  });
+  test("markers stripped, never leak into the content", () => {
+    const r = assembleChunks(["[200~hello[201~"]);
+    expect(r).toBe("hello");
+    expect(r.includes("200~")).toBe(false);
+    expect(r.includes("201~")).toBe(false);
+  });
+  test("hasPasteStart/End detect markers with or without ESC", () => {
+    expect(hasPasteStart("[200~x")).toBe(true);
+    expect(hasPasteStart(`${ESC}[200~x`)).toBe(true);
+    expect(hasPasteEnd("x[201~")).toBe(true);
+    expect(hasPasteStart("plain")).toBe(false);
+  });
+});
+
+describe("normalizeNewlines (the 'only last line shows' fix)", () => {
+  test("CRLF and lone CR both become \\n", () => {
+    expect(normalizeNewlines("a\r\nb\r\nc")).toBe("a\nb\nc"); // Windows clipboard
+    expect(normalizeNewlines("a\rb\rc")).toBe("a\nb\nc");     // lone CR separators
+    expect(normalizeNewlines("a\nb")).toBe("a\nb");           // already clean → unchanged
+  });
+  test("leaves no CR behind (a stray \\r is what collapses the render to one line)", () => {
+    expect(normalizeNewlines("first\r\nsecond\rthird").includes("\r")).toBe(false);
+  });
+});
+
+describe("shouldCollapse", () => {
+  test("multi-line always collapses", () => {
+    expect(shouldCollapse("a\nb")).toBe(true);
+  });
+  test("a CR-only multi-line paste is ALSO recognised (Windows / some terminals)", () => {
+    expect(shouldCollapse("a\rb")).toBe(true);       // was missed before: no "\n" present
+    expect(shouldCollapse("a\r\nb")).toBe(true);
+  });
+  test("a long single line collapses; a short one does not", () => {
+    expect(shouldCollapse("x".repeat(250))).toBe(true);
+    expect(shouldCollapse("short single line")).toBe(false);
+  });
+});
+
+describe("placeholder + expand round-trip", () => {
+  test("a long single-line paste gets a char chip that round-trips", () => {
+    const content = "y".repeat(300);
+    const chip = pastePlaceholder(7, content);
+    expect(chip).toBe("[#7 +300 chars]");
+    expect(expandPastes(chip, new Map([[7, content]]))).toBe(content);
+  });
+
+  test("chip shows the line count, expand restores the exact content", () => {
+    const content = "first\nsecond\nthird";
+    expect(countLines(content)).toBe(3);
+    const chip = pastePlaceholder(1, content);
+    expect(chip).toBe("[#1 +3 lines]");
+
+    const map = new Map([[1, content]]);
+    // The user typed around the chip; expand only touches the chip.
+    expect(expandPastes(`look at this: ${chip} please`, map)).toBe(`look at this: ${content} please`);
+  });
+
+  test("multiple chips expand independently", () => {
+    const map = new Map([[1, "a\nb"], [2, "x\ny\nz"]]);
+    expect(expandPastes("[#1 +2 lines] and [#2 +3 lines]", map)).toBe("a\nb and x\ny\nz");
+  });
+
+  test("an unknown / deleted chip is left as literal text", () => {
+    expect(expandPastes("[#9 +4 lines]", new Map())).toBe("[#9 +4 lines]");
+  });
+});

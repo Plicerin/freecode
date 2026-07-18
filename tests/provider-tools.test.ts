@@ -27,6 +27,71 @@ describe("zodToJsonSchema", () => {
     expect(s.required).toEqual(["command", "level"]); // cwd is optional
     expect(s.additionalProperties).toBe(false);
   });
+
+  it("carries string min/max as minLength/maxLength (so an empty required string is invalid up front)", () => {
+    const s = zodToJsonSchema(z.object({ pattern: z.string().min(1).max(200).describe("the regex") }));
+    const p = (s.properties as Record<string, Record<string, unknown>>).pattern!;
+    expect(p.type).toBe("string");
+    expect(p.minLength).toBe(1);
+    expect(p.maxLength).toBe(200);
+    expect(p.description).toBe("the regex");
+  });
+
+  it("carries number int/positive/range as integer + (exclusive)minimum/maximum", () => {
+    const s = zodToJsonSchema(z.object({
+      count: z.number().int().positive().max(5000).optional(),
+      offset: z.number().int().min(0).max(50).optional(),
+    }));
+    const props = s.properties as Record<string, Record<string, unknown>>;
+    expect(props.count).toEqual({ type: "integer", exclusiveMinimum: 0, maximum: 5000 });
+    expect(props.offset).toEqual({ type: "integer", minimum: 0, maximum: 50 });
+  });
+
+  it("unwraps a .refine()-wrapped object so its fields are advertised (the FileEdit bug)", () => {
+    const refined = z.object({ path: z.string().min(1), body: z.string() })
+      .refine((a) => !!a.path, { message: "need path" })
+      .refine((a) => !!a.body, { message: "need body" });
+    const s = zodToJsonSchema(refined);
+    expect(Object.keys(s.properties as object)).toEqual(["path", "body"]); // not {}
+    expect((s.properties as Record<string, Record<string, unknown>>).path!.minLength).toBe(1);
+    expect(s.required).toEqual(["path", "body"]);
+  });
+
+  it("preserves a description attached AFTER .optional()/.default(); .default() is not required", () => {
+    const s = zodToJsonSchema(z.object({
+      a: z.string().optional().describe("desc after optional"),
+      n: z.number().int().default(50).describe("cap"),
+    }));
+    const props = s.properties as Record<string, Record<string, unknown>>;
+    expect(props.a!.description).toBe("desc after optional");
+    expect(props.n).toEqual({ type: "integer", description: "cap" }); // unwrapped, not {type:"string"}
+    expect(s.required).toBeUndefined(); // both optional/defaulted → nothing required
+  });
+
+  it("emits required + additionalProperties for nested objects, minItems for arrays, format for strings", () => {
+    const s = zodToJsonSchema(z.object({
+      loc: z.object({ path: z.string().min(1), line: z.number() }),
+      tasks: z.array(z.string().min(1)).min(1),
+      url: z.string().url(),
+    }));
+    const props = s.properties as Record<string, Record<string, unknown>>;
+    expect(props.loc).toEqual({
+      type: "object",
+      properties: { path: { type: "string", minLength: 1 }, line: { type: "number" } },
+      required: ["path", "line"],
+      additionalProperties: false,
+    });
+    expect(props.tasks).toEqual({ type: "array", items: { type: "string", minLength: 1 }, minItems: 1 });
+    expect(props.url).toEqual({ type: "string", format: "uri" });
+  });
+
+  it("keeps a .nullable() field required and represents a literal as an enum", () => {
+    const s = zodToJsonSchema(z.object({ x: z.number().nullable(), mode: z.literal("strict") }));
+    const props = s.properties as Record<string, Record<string, unknown>>;
+    expect(props.x).toEqual({ type: "number", nullable: true });
+    expect(props.mode).toEqual({ type: "string", enum: ["strict"] });
+    expect(s.required).toEqual(["x", "mode"]); // nullable ≠ optional
+  });
 });
 
 describe("Anthropic serialization", () => {
@@ -59,6 +124,16 @@ describe("Gemini serialization", () => {
     expect(decl.name).toBe("Bash");
     expect(decl.parameters.type).toBe("object");
     expect(decl.parameters.additionalProperties).toBeUndefined();
+  });
+
+  it("remaps exclusiveMinimum/Maximum (unsupported by Gemini) to inclusive bounds", () => {
+    const s: ToolDefinition[] = [{ name: "X", description: "x", schema: z.object({ n: z.number().int().positive().max(20) }) }];
+    const t = toGeminiTools(s) as Array<{ functionDeclarations: Array<{ parameters: Record<string, unknown> }> }>;
+    const n = (t[0]!.functionDeclarations[0]!.parameters.properties as Record<string, Record<string, unknown>>).n!;
+    expect(n.exclusiveMinimum).toBeUndefined(); // Gemini would 400 on this keyword
+    expect(n.exclusiveMaximum).toBeUndefined();
+    expect(n.minimum).toBe(0);   // approximated from exclusiveMinimum
+    expect(n.maximum).toBe(20);
   });
 
   it("serializes functionCall + functionResponse parts and coalesces", () => {

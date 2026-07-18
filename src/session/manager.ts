@@ -1,7 +1,28 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, appendFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, appendFileSync, writeFileSync, statSync } from "node:fs";
+import { dirname } from "node:path";
 import { projectDir, sessionPath, PROJECTS_DIR } from "../utils/paths";
 import { newId, nowIso } from "../utils/ids";
 import { debug } from "../utils/debug";
+import { redactSecrets } from "../utils/redact";
+import type { ChatMessage } from "../providers/types";
+
+// Scrub known secret formats from EVERYTHING we persist to disk. `redactSecrets`
+// was only applied to tool OUTPUT before — so a FileWrite of a `.env`, a pasted key
+// in a prompt, or a secret the model echoes landed in cleartext in the session log
+// (`.jsonl`) and `.state.json`, both under ~/.freecode (commonly cloud-synced). This
+// walks every string in the event/messages and redacts it. Only actual secret
+// patterns change, so normal content — and /recover, /resume, /expand — are
+// unaffected except for the rare turn that genuinely contained a secret.
+function redactDeep<T>(v: T): T {
+  if (typeof v === "string") return redactSecrets(v).text as unknown as T;
+  if (Array.isArray(v)) return v.map((x) => redactDeep(x)) as unknown as T;
+  if (v && typeof v === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) out[k] = redactDeep(val);
+    return out as unknown as T;
+  }
+  return v;
+}
 
 export type SessionEvent =
   | { kind: "user"; text: string; ts: string }
@@ -45,7 +66,7 @@ export function newSession(cwd: string): Session {
 
 export function appendEvent(session: Session, event: SessionEvent): void {
   ensureDir(projectDir(session.cwd));
-  appendFileSync(session.path, JSON.stringify(event) + "\n");
+  appendFileSync(session.path, JSON.stringify(redactDeep(event)) + "\n");
 }
 
 export function listSessions(cwd: string): Session[] {
@@ -96,6 +117,50 @@ export function titleOf(events: SessionEvent[]): string | undefined {
   return t;
 }
 
+/** Every tool_result's FULL output from a session log, oldest→newest. The
+ *  durable source for /expand: context compaction/trimming evicts tool output
+ *  from the live model context, but the session log keeps all of it. */
+export function toolOutputs(events: SessionEvent[]): string[] {
+  return events
+    .filter((e): e is Extract<SessionEvent, { kind: "tool_result" }> => e.kind === "tool_result" && e.output.length > 0)
+    .map((e) => e.output);
+}
+
+// The provider-format conversation (the model's actual working context, incl.
+// tool_use/tool_result pairs and any compaction summary) is persisted alongside
+// the event log so /resume restores the REAL context — not the text-only,
+// tool-stripped rebuild. Overwritten each turn (latest-wins), sized to whatever
+// the live session held (bounded by compaction), so it never grows unbounded.
+function statePath(session: Session): string {
+  return session.path.replace(/\.jsonl$/, ".state.json");
+}
+
+/** Persist the live provider-format conversation so a resume continues with the
+ *  full context (tool calls + results), not just user/assistant text. Never throws. */
+export function writeConversationState(session: Session, messages: ChatMessage[]): void {
+  try {
+    const p = statePath(session);
+    ensureDir(dirname(p));
+    writeFileSync(p, JSON.stringify({ v: 1, messages: redactDeep(messages) }));
+  } catch (err) {
+    debug.warn(`could not persist conversation state for ${session.id}`, String(err));
+  }
+}
+
+/** The persisted provider-format conversation, if any. undefined for sessions
+ *  saved before this existed (the caller falls back to historyFromEvents). */
+export function readConversationState(session: Session): ChatMessage[] | undefined {
+  const p = statePath(session);
+  if (!existsSync(p)) return undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(p, "utf8")) as { v?: number; messages?: ChatMessage[] };
+    return Array.isArray(parsed.messages) ? parsed.messages : undefined;
+  } catch (err) {
+    debug.warn(`corrupt conversation state for ${session.id}`, String(err));
+    return undefined;
+  }
+}
+
 /** Sessions with display metadata, newest first — for the resume picker. */
 export function listSessionMetas(cwd: string): SessionMeta[] {
   const dir = projectDir(cwd);
@@ -112,5 +177,11 @@ export function listSessionMetas(cwd: string): SessionMeta[] {
       const count = events.filter((e) => e.kind === "user" || e.kind === "assistant").length;
       return { id, cwd, path, title: titleOf(events), preview, count, mtime };
     })
+    // Every launch creates a fresh session (a lone `system` start event). Those
+    // have no conversation to resume, yet sort newest-first — so the empty
+    // just-created session would top the picker and be the default pick, and
+    // resuming it gives the model ZERO context ("no idea what it's resuming").
+    // Show only sessions that actually hold a turn.
+    .filter((m) => m.count > 0)
     .sort((a, b) => b.mtime - a.mtime);
 }

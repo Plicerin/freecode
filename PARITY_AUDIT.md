@@ -59,6 +59,15 @@ freecode's verification-first identity is genuinely net-new: the **verify gate +
 
 ---
 
+## Staged parity — progress
+
+Parity pursued in stages; "done" is per-stage and checkable, never a single blanket gate.
+
+- **✅ Stage 1 — Git/PR workflow** (`src/commands/git-workflow.ts`, tested): `/branch`, `/commit-push-pr`, `/issue`, `/pr-comments` (shell over git/gh, degrade honestly when gh is absent) + `/security-review`, `/autofix-pr` (agent-delegated). Slash surface 22 → 28.
+- ⬜ Stage 2 — Observability & config: `/usage` `/stats` `/insights` `/env` `/permissions` `/effort` `/statusline`
+- ⬜ Stage 3 — Memory/knowledge: `/memory` `/session` `/export` `/share` `/summary` `/rewind`
+- ⬜ Stage 4 — Sub-agents/automation · ⬜ Stage 5 — Plugins/skills/theming · ⬜ Stage 6 — Editor/LSP/IDE · ⬜ Stage 7 — Integrations/remote/SDK/gRPC
+
 ## Honest recommendation
 
 **"Ensure feature parity" with OpenClaude = rebuild a 2,485-file platform.** That is not a task I can or should complete autonomously, and I won't claim it done when it isn't. The realistic path is to **decide whether parity is even the goal**:

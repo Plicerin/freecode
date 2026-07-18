@@ -19,7 +19,7 @@ class SlowProvider implements Provider {
 describe("agent loop interrupt", () => {
   it("aborts a running turn when the signal fires", async () => {
     const controller = new AbortController();
-    const perm = createPermissionEngine("bypass", (async () => "allow") as ApprovalCallback);
+    const perm = createPermissionEngine("bypass");
     setTimeout(() => controller.abort(), 60);
     const run = runAgentLoop({
       provider: new SlowProvider(), tools: [], model: "m", maxTurns: 3,

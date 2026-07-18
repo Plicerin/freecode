@@ -2,11 +2,13 @@ import { writeFileSync, mkdirSync, existsSync, statSync, renameSync } from "node
 import { dirname, resolve, isAbsolute } from "node:path";
 import { z } from "zod";
 import type { Tool } from "./types";
+import { structuredWriteError } from "./structured-validate";
+import { suggestPath } from "./suggest-path";
 
 const ArgsSchema = z.object({
-  path: z.string().min(1),
-  content: z.string(),
-  createDirs: z.boolean().optional(),
+  path: z.string().min(1).describe("Path of the file to write (created if missing, OVERWRITTEN in full if it exists). Prefer FileEdit for changing part of an existing file."),
+  content: z.string().describe("The COMPLETE new file contents. This replaces the whole file — include everything, not just the changed lines."),
+  createDirs: z.boolean().describe("Create any missing parent directories for `path`.").optional(),
 });
 
 export const FileWriteTool: Tool<z.infer<typeof ArgsSchema>> = {
@@ -20,8 +22,13 @@ export const FileWriteTool: Tool<z.infer<typeof ArgsSchema>> = {
       mkdirSync(dirname(abs), { recursive: true });
     } else {
       if (!existsSync(dirname(abs))) {
-        return { ok: false, output: "", error: `Parent directory does not exist: ${dirname(abs)}` };
+        const hint = suggestPath(dirname(abs));
+        return { ok: false, output: "", error: `Parent directory does not exist: ${dirname(abs)}${hint ? ` — did you mean "${hint}"?` : ""}` };
       }
+    }
+    const jsonError = structuredWriteError(args.path, args.content);
+    if (jsonError) {
+      return { ok: false, output: "", error: jsonError };
     }
     const existed = existsSync(abs);
     const tmp = `${abs}.freecode-tmp`;

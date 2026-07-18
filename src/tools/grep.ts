@@ -3,16 +3,26 @@ import { readFile, stat } from "node:fs/promises";
 import { relative } from "node:path";
 import fg from "fast-glob";
 import { z } from "zod";
+import { getEnv } from "../utils/env";
 import type { Tool, ToolContext, ToolResult } from "./types";
 
+// A content search must never hang the agent. Pointed at a huge tree (a home dir,
+// vendored source, a ROM dump folder) ripgrep can run for many MINUTES on
+// Windows — the agent sits frozen on "Working…" the whole time. Bound it: kill
+// the search and return whatever it found with a note to narrow the scope.
+export function grepTimeoutMs(): number {
+  const n = Number(getEnv("FREECODE_GREP_TIMEOUT_MS"));
+  return Number.isFinite(n) && n > 0 ? n : 60_000;
+}
+
 const ArgsSchema = z.object({
-  pattern: z.string().min(1),
-  path: z.string().optional(),
-  glob: z.string().optional(),
-  ignoreCase: z.boolean().optional(),
-  showLineNumbers: z.boolean().optional(),
-  maxResults: z.number().int().positive().max(5000).optional(),
-  contextLines: z.number().int().min(0).max(50).optional(),
+  pattern: z.string().min(1).describe("Regex to search for INSIDE files (required, non-empty). This is a content search — to list/find files by name or extension, use Glob instead, not an empty pattern here."),
+  path: z.string().describe("WHERE to search — a directory or single file (defaults to the working directory). Not a filename filter; use `glob` for that.").optional(),
+  glob: z.string().describe("Filter WHICH files to search by name, e.g. `**/*.ts` or `src/**`. The content match is `pattern`; this only narrows the file set.").optional(),
+  ignoreCase: z.boolean().describe("Case-insensitive match.").optional(),
+  showLineNumbers: z.boolean().describe("Prefix each match with its line number.").optional(),
+  maxResults: z.number().int().positive().max(5000).describe("Cap on matching lines returned.").optional(),
+  contextLines: z.number().int().min(0).max(50).describe("Lines of surrounding context to include around each match.").optional(),
 });
 
 type Args = z.infer<typeof ArgsSchema>;
@@ -50,7 +60,7 @@ export function createGrepTool(opts: GrepOptions = {}): Tool<Args> {
 
 /** Run ripgrep; resolves null if rg is unavailable (so the caller can fall back). */
 function tryRipgrep(rg: string, args: Args, ctx: ToolContext): Promise<ToolResult | null> {
-  const flags: string[] = ["--no-heading", "--line-number", "--no-config"];
+  const flags: string[] = ["--no-heading", "--line-number", "--no-config", "--max-filesize", "2M"];
   if (args.ignoreCase) flags.push("-i");
   for (const ig of [".git/", "node_modules/", "dist/"]) flags.push("-g", `!${ig}`);
   if (args.glob) flags.push("-g", args.glob);
@@ -67,18 +77,32 @@ function tryRipgrep(rg: string, args: Args, ctx: ToolContext): Promise<ToolResul
     let out = "";
     let outBytes = 0;
     let err = "";
+    let timedOut = false;
     const cap = 500_000;
+    // Kill the search if it runs too long, rather than freezing the agent.
+    const timer = setTimeout(() => { timedOut = true; try { child.kill(); } catch { /* gone */ } }, grepTimeoutMs());
     child.stdout?.on("data", (b: Buffer) => {
       outBytes += b.length;
       if (outBytes <= cap) out += b.toString("utf8");
     });
     child.stderr?.on("data", (b: Buffer) => { err += b.toString("utf8"); });
     child.on("error", (e: NodeJS.ErrnoException) => {
+      clearTimeout(timer);
       // ENOENT => ripgrep isn't installed; signal fallback. Other errors surface.
       if (e.code === "ENOENT") return resolve(null);
       resolve({ ok: false, output: "", error: `rg failed: ${e.message}` });
     });
     child.on("close", (code) => {
+      clearTimeout(timer);
+      if (timedOut) {
+        const partial = args.maxResults ? out.split("\n").slice(0, args.maxResults).join("\n") : out;
+        const note = `[search stopped after ${Math.round(grepTimeoutMs() / 1000)}s — the scope is too broad. Narrow it: pass a more specific \`path\`, a \`glob\` filter, or a tighter \`pattern\`.]`;
+        return resolve({
+          ok: true,
+          output: partial ? `${partial}\n${note}` : note,
+          metadata: { engine: "ripgrep", timedOut: true, matches: out.split("\n").filter(Boolean).length, truncated: true },
+        });
+      }
       if (code === 0 || code === 1) {
         const lines = args.maxResults ? out.split("\n").slice(0, args.maxResults).join("\n") : out;
         return resolve({
@@ -131,9 +155,12 @@ async function jsGrep(args: Args, ctx: ToolContext): Promise<ToolResult> {
   const results: string[] = [];
   let matchCount = 0;
   let scanned = 0;
+  let timedOut = false;
+  const deadline = Date.now() + grepTimeoutMs();
 
   for (const file of files) {
     if (matchCount >= limit || scanned >= 5000) break;
+    if (Date.now() > deadline) { timedOut = true; break; }
     scanned += 1;
     let content: string;
     try {
@@ -159,9 +186,10 @@ async function jsGrep(args: Args, ctx: ToolContext): Promise<ToolResult> {
     }
   }
 
+  const note = timedOut ? `\n[search stopped after ${Math.round(grepTimeoutMs() / 1000)}s — narrow the \`path\`, \`glob\`, or \`pattern\`.]` : "";
   return {
     ok: true,
-    output: results.length ? results.join("\n") : "(no matches)",
-    metadata: { engine: "builtin", matches: matchCount, filesScanned: scanned, truncated: matchCount >= limit },
+    output: (results.length ? results.join("\n") : "(no matches)") + note,
+    metadata: { engine: "builtin", matches: matchCount, filesScanned: scanned, truncated: matchCount >= limit || timedOut, timedOut },
   };
 }

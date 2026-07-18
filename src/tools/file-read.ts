@@ -2,6 +2,7 @@ import { readFileSync, statSync, existsSync, openSync, readSync, closeSync } fro
 import { resolve, isAbsolute } from "node:path";
 import { z } from "zod";
 import type { Tool } from "./types";
+import { suggestPath } from "./suggest-path";
 
 const ArgsSchema = z.object({
   path: z.string().min(1),
@@ -39,7 +40,8 @@ export const FileReadTool: Tool<z.infer<typeof ArgsSchema>> = {
   async run(args, ctx) {
     const abs = isAbsolute(args.path) ? args.path : resolve(ctx.cwd, args.path);
     if (!existsSync(abs)) {
-      return { ok: false, output: "", error: `File not found: ${args.path}` };
+      const hint = suggestPath(abs);
+      return { ok: false, output: "", error: `File not found: ${args.path}${hint ? ` — did you mean "${hint}"?` : ""}` };
     }
     const stat = statSync(abs);
     if (stat.isDirectory()) {

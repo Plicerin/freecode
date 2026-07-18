@@ -1,5 +1,8 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { openSync, mkdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { z } from "zod";
+import { APP_DIR } from "../utils/paths";
 import type { Tool } from "./types";
 
 const ArgsSchema = z.object({
@@ -7,6 +10,9 @@ const ArgsSchema = z.object({
   cwd: z.string().optional(),
   timeoutMs: z.number().int().positive().max(600_000).optional(),
   env: z.record(z.string()).optional(),
+  // Start a long-lived process (dev server, watcher, tunnel) DETACHED: returns
+  // immediately with the pid + a log path instead of blocking until it exits.
+  runInBackground: z.boolean().optional(),
 });
 
 const DEFAULT_ALLOW = [/.*/];
@@ -38,21 +44,159 @@ const IS_WINDOWS = process.platform === "win32";
 // forever without this backstop. The model can override per-call up to the cap.
 const DEFAULT_TIMEOUT_MS = 120_000;
 
+// How long a backgrounded process must stay alive before we call it "started".
+// It must comfortably exceed shell COLD-START: on Windows, launching PowerShell
+// itself takes ~600ms, so a command that exits "immediately" still does so near
+// 600ms — too close to a 600ms window to tell apart from a server that's up.
+const STARTUP_GRACE_MS = IS_WINDOWS ? 1500 : 700;
+
 /** The shell the Bash tool executes in, for the system prompt and UX. */
 export function bashShellName(): string {
   return IS_WINDOWS ? "PowerShell" : "bash/sh";
 }
 
+/** Does a command look like a long-running server/watcher (one that never exits)?
+ *  Used to give the RIGHT advice when a foreground run times out — a bigger
+ *  timeout won't help; runInBackground:true is the fix. */
+export function looksLikeLongRunningServer(command: string): boolean {
+  return /\b(vite|next(\s+dev)?|nuxt|astro\s+dev|ng\s+serve|webpack(-dev)?-server|live-server|http\.server|uvicorn|gunicorn|flask\s+run|rails\s+s(erver)?|php\s+-S|(npm|pnpm|yarn|bun)\s+(run\s+)?(dev|start|serve|watch))\b/i.test(command);
+}
+
+/** Rewrite the bash-isms weak models emit into PowerShell equivalents so they don't
+ *  fail. The big one: `2>/dev/null` — PowerShell treats `/dev/null` as a FILE path
+ *  (`C:\dev\null`) and errors, so a model suppressing stderr the way it learned from
+ *  bash breaks every time. Only unambiguous Unix-isms are touched; valid PowerShell
+ *  (`2>&1`, `2>$null`) is left alone. */
+export function normalizeForPowerShell(command: string): string {
+  return command
+    .replace(/&>\s*\/dev\/null/g, () => "*>$null")            // bash "&>" both streams
+    .replace(/(\d*)>\s*\/dev\/null/g, (_m, fd) => `${fd}>$null`) // 2>/dev/null, >/dev/null, 1>/dev/null
+    .replace(/\/dev\/null/g, () => "$null");                  // any leftover literal (never a real Windows path)
+}
+
+// Prefer PowerShell 7 (pwsh) when it's installed: it supports `&&` and `||` (which
+// Windows PowerShell 5.1 rejects with "not a valid statement separator") and is far
+// more bash-compatible, so the model's shell commands fail much less. Detected once
+// and cached; always falls back to the ever-present powershell.exe.
+let _winShell: string | null = null;
+export function defaultWindowsShell(): string {
+  if (_winShell) return _winShell;
+  try {
+    const r = spawnSync("pwsh", ["-NoProfile", "-NoLogo", "-Command", "$null"], { stdio: "ignore", timeout: 5000, windowsHide: true });
+    _winShell = !r.error && r.status === 0 ? "pwsh" : "powershell.exe";
+  } catch {
+    _winShell = "powershell.exe";
+  }
+  return _winShell;
+}
+
 /**
  * Build the spawn invocation for a command. On Windows we run PowerShell
- * explicitly (shell:true would use cmd.exe, which rejects PowerShell syntax);
- * on Unix we let the default shell interpret the command string.
+ * explicitly (shell:true would use cmd.exe, which rejects PowerShell syntax) —
+ * preferring pwsh 7 and translating common bash-isms; on Unix we let the default
+ * shell interpret the command string.
  */
 export function spawnArgs(command: string, shellPath?: string): { file: string; args: string[]; useShell: boolean } {
   if (IS_WINDOWS) {
-    return { file: shellPath ?? "powershell.exe", args: ["-NoProfile", "-NonInteractive", "-Command", command], useShell: false };
+    return { file: shellPath ?? defaultWindowsShell(), args: ["-NoProfile", "-NonInteractive", "-Command", normalizeForPowerShell(command)], useShell: false };
   }
   return { file: command, args: [], useShell: true };
+}
+
+interface RunCtx {
+  cwd: string;
+  signal?: AbortSignal;
+}
+
+/** Read the tail of a background log (the captured stdout/stderr), trimmed. */
+function readLogTail(path: string, maxChars = 1500): string {
+  try {
+    const t = readFileSync(path, "utf8").trim();
+    return t.length > maxChars ? "…" + t.slice(-maxChars) : t;
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Launch a long-lived command in the background and return at once. stdout+stderr
+ * are captured to a log file the model can read back; the child is unref'd and
+ * NOT tied to ctx.signal, so it outlives the turn (the whole point — a dev server
+ * must keep running) and runs for the rest of the session.
+ *
+ * NOT `detached: true`: on Windows a detached child does not inherit our file
+ * descriptors, so the log captures nothing (and a crash looks like a clean exit).
+ * We wait briefly to catch an immediate failure — and surface the captured output
+ * (e.g. a Python traceback, "address already in use") right in the error, since a
+ * shell wrapper often exits 0 even when the real command crashed.
+ */
+function runDetached(
+  args: z.infer<typeof ArgsSchema>,
+  ctx: RunCtx,
+  shellPath?: string,
+): Promise<{ ok: boolean; output: string; error?: string; metadata?: Record<string, unknown> }> {
+  const dir = join(APP_DIR, "bg-bash");
+  mkdirSync(dir, { recursive: true });
+  const logPath = join(dir, `${Date.now()}-${Math.random().toString(36).slice(2, 6)}.log`);
+  let fd: number;
+  try {
+    fd = openSync(logPath, "a");
+  } catch (err) {
+    return Promise.resolve({ ok: false, output: "", error: `Could not open background log: ${(err as Error).message}` });
+  }
+  const inv = spawnArgs(args.command, shellPath);
+  const child = spawn(inv.file, inv.args, {
+    shell: inv.useShell,
+    cwd: args.cwd ?? ctx.cwd,
+    env: { ...process.env, ...(args.env ?? {}) },
+    stdio: ["ignore", fd, fd], // no stdin; stdout+stderr → log file
+  });
+  const pid = child.pid;
+  const stopHint = IS_WINDOWS ? `taskkill /PID ${pid} /F` : `kill ${pid}`;
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (r: { ok: boolean; output: string; error?: string; metadata?: Record<string, unknown> }): void => {
+      if (settled) return;
+      settled = true;
+      resolve(r);
+    };
+    child.on("error", (err) => finish({ ok: false, output: "", error: `Failed to start background process: ${err.message}` }));
+    const onEarlyExit = (code: number | null): void => {
+      // The child's final writes may not be flushed to the log the instant it
+      // exits, so poll briefly for output before giving up (otherwise a real
+      // crash can be reported as "no output" — both a UX miss and a test flake).
+      let tries = 0;
+      const attempt = (): void => {
+        const tail = readLogTail(logPath);
+        if (!tail && tries < 4) { tries++; setTimeout(attempt, 90); return; }
+        const why = tail ? `\n--- captured output ---\n${tail}` : " (no output was captured)";
+        finish({
+          ok: false,
+          output: "",
+          error: `The background command exited right away (exit code ${code}) instead of staying up.${why}`,
+          metadata: { pid, logPath, background: true },
+        });
+      };
+      setTimeout(attempt, 60);
+    };
+    child.on("exit", onEarlyExit);
+    // Survived the startup window → treat it as running.
+    setTimeout(() => {
+      child.removeListener("exit", onEarlyExit);
+      child.unref();
+      const tail = readLogTail(logPath, 600);
+      finish({
+        ok: true,
+        output:
+          `Started in background (pid ${pid}). Runs until you stop it or this freecode session ends.\n` +
+          `Output → ${logPath}` +
+          (tail ? `\n--- so far ---\n${tail}` : "  (nothing logged yet — read it with FileRead to check progress)") +
+          `\nStop it with: ${stopHint}`,
+        metadata: { pid, logPath, background: true },
+      });
+    }, STARTUP_GRACE_MS);
+  });
 }
 
 export function createBashTool(opts: BashToolOptions = {}): Tool<z.infer<typeof ArgsSchema>> {
@@ -62,7 +206,7 @@ export function createBashTool(opts: BashToolOptions = {}): Tool<z.infer<typeof 
 
   return {
     name: "Bash",
-    description: `Execute a shell command in ${bashShellName()}. Use for git, npm, scripts, system inspection. Runs NON-INTERACTIVELY (no stdin) with a ${DEFAULT_TIMEOUT_MS / 1000}s default timeout — for scaffolders/installers pass non-interactive flags (e.g. --yes), and set timeoutMs for long jobs. Output is truncated if large.`,
+    description: `Execute a shell command in ${bashShellName()}. Use for git, npm, scripts, system inspection. Runs NON-INTERACTIVELY (no stdin) with a ${DEFAULT_TIMEOUT_MS / 1000}s default timeout — for scaffolders/installers pass non-interactive flags (e.g. --yes), and set timeoutMs for long jobs. For a process that should KEEP RUNNING (a dev server, watcher, http.server, tunnel) set runInBackground:true — it launches detached and returns immediately with a pid + log path (do NOT run servers in the foreground; they'll just hit the timeout). Output is truncated if large.`,
     schema: ArgsSchema,
     permission: "confirm",
     async run(args, ctx) {
@@ -78,6 +222,9 @@ export function createBashTool(opts: BashToolOptions = {}): Tool<z.infer<typeof 
       const allowMatch = allow.some((re) => re.test(args.command));
       if (!allowMatch) {
         return { ok: false, output: "", error: "Command not in allowlist" };
+      }
+      if (args.runInBackground) {
+        return runDetached(args, ctx, opts.shellPath);
       }
       return new Promise((resolve) => {
         const inv = spawnArgs(args.command, opts.shellPath);
@@ -108,6 +255,12 @@ export function createBashTool(opts: BashToolOptions = {}): Tool<z.infer<typeof 
           settled = true;
           clearTimeout(timeout);
           if (forceTimer) clearTimeout(forceTimer);
+          // Remove the abort listener we added below. `{ once: true }` only fires
+          // (and self-removes) on an actual abort; on the normal success path the
+          // signal never aborts, so without this the listener — and the ~400KB of
+          // stdout/stderr + child it closes over — stays attached to the run-long
+          // signal for every Bash call, a real leak across a long agent session.
+          ctx.signal?.removeEventListener("abort", onAbort);
           resolve(r);
         };
 
@@ -125,13 +278,16 @@ export function createBashTool(opts: BashToolOptions = {}): Tool<z.infer<typeof 
         // On interrupt/exit, kill the whole tree (not just the direct child that
         // the spawn `signal` handles) so a running test suite doesn't outlive us,
         // and force-resolve if its pipes linger so the loop is never stuck.
-        ctx.signal?.addEventListener("abort", () => {
+        const onAbort = (): void => {
           killed = true;
           killTree();
           if (!forceTimer) forceTimer = setTimeout(() => settle({ ok: false, output: stdout, error: "Interrupted." + (stderr ? `\n${stderr}` : "") }), 3000);
-        }, { once: true });
+        };
+        ctx.signal?.addEventListener("abort", onAbort, { once: true });
 
-        const timeoutMsg = `Command timed out after ${timeoutMs}ms — it may be interactive or long-running. Re-run with non-interactive flags (e.g. --yes / -y) or pass a larger timeoutMs.`;
+        const timeoutMsg = looksLikeLongRunningServer(args.command)
+          ? `Command timed out after ${timeoutMs}ms. This looks like a long-running server — it never exits, so a bigger timeoutMs won't help. Re-run the SAME command with runInBackground:true: it launches detached, returns immediately with a pid + log path, and keeps serving. Then read the log to confirm it came up. (Do NOT tell the user the server can't start — it can.)`
+          : `Command timed out after ${timeoutMs}ms — it may be interactive or long-running. Re-run with non-interactive flags (e.g. --yes / -y), pass a larger timeoutMs, or use runInBackground:true for a server/watcher.`;
         timeout = setTimeout(() => {
           killed = true;
           killTree();

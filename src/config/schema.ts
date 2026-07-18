@@ -5,11 +5,14 @@ export const ProviderIdSchema = z.enum([
   "openai",
   "gemini",
   "github-models",
+  "openrouter",
   "bedrock",
   "vertex",
   "ollama",
   "lmstudio",
+  "llama-server",
   "nim",
+  "deepseek",
   "mock",
 ]);
 export type ProviderId = z.infer<typeof ProviderIdSchema>;
@@ -46,6 +49,18 @@ export const McpServerSchema = z.object({
 });
 export type McpServerConfig = z.infer<typeof McpServerSchema>;
 
+/** Cross-session memory backend (Honcho). All optional in settings; the loader
+ *  fills defaults and reads the base URL from settings or FREECODE_HONCHO_URL. */
+export const MemorySettingsSchema = z.object({
+  enabled: z.boolean().optional(),
+  provider: z.literal("honcho").optional(),
+  baseUrl: z.string().url().optional(),
+  workspace: z.string().min(1).optional(),
+  peer: z.string().min(1).optional(),
+  apiKey: z.string().optional(),
+});
+export type MemorySettings = z.infer<typeof MemorySettingsSchema>;
+
 /** A lifecycle hook: a shell command, optionally filtered by tool name. */
 export const HookSchema = z.object({
   matcher: z.string().optional(), // regex tested against the tool name (default: all)
@@ -60,8 +75,10 @@ export const SettingsSchema = z.object({
   permissionMode: PermissionModeSchema.optional(),
   webSearchProvider: WebSearchProviderSchema.optional(),
   theme: ThemeNameSchema.optional(),
-  maxTurns: z.number().int().positive().optional(),
+  maxTurns: z.number().int().nonnegative().optional(), // 0 = uncapped
   contextThreshold: z.number().min(0.1).max(1).optional(),
+  /** MRM: throttle to at most N provider requests per minute (0/unset = off). */
+  maxRequestsPerMinute: z.number().int().nonnegative().optional(),
   enablePromptCache: z.boolean().optional(),
   enableExtendedThinking: z.boolean().optional(),
   extraEnv: z.record(z.string()).optional(),
@@ -69,6 +86,7 @@ export const SettingsSchema = z.object({
   hooks: HooksSchema.optional(),
   verify: z.union([z.string(), z.array(z.string())]).optional(),
   verifyMode: z.enum(["off", "on", "strict"]).optional(),
+  memory: MemorySettingsSchema.optional(),
 });
 export type Settings = z.infer<typeof SettingsSchema>;
 
@@ -80,14 +98,23 @@ export const ResolvedConfigSchema = z.object({
   permissionMode: PermissionModeSchema.default("manual"),
   webSearchProvider: WebSearchProviderSchema.default("duckduckgo"),
   theme: ThemeNameSchema.default("dark"),
-  maxTurns: z.number().int().positive().default(50),
+  maxTurns: z.number().int().nonnegative().default(0), // 0 = uncapped (loop runs until the model finishes or the failure circuit-breaker trips)
   contextThreshold: z.number().min(0.1).max(1).default(0.8),
+  maxRequestsPerMinute: z.number().int().nonnegative().default(0), // 0 = unthrottled
   enablePromptCache: z.boolean().default(true),
   enableExtendedThinking: z.boolean().default(false),
   mcpServers: z.record(McpServerSchema).optional(),
   hooks: HooksSchema.optional(),
   verify: z.union([z.string(), z.array(z.string())]).optional(),
   verifyMode: z.enum(["off", "on", "strict"]).default("on"),
+  memory: z.object({
+    enabled: z.boolean(),
+    provider: z.literal("honcho"),
+    baseUrl: z.string().url().optional(),
+    workspace: z.string(),
+    peer: z.string(),
+    apiKey: z.string().optional(),
+  }).optional(),
   source: z.object({
     provider: z.enum(["cli", "profile", "env", "settings", "default"]),
     model: z.enum(["cli", "profile", "env", "settings", "default"]),

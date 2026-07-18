@@ -47,3 +47,26 @@ test("placeholder text (not a real key) is left alone", () => {
   const out = redactSecrets("ANTHROPIC_API_KEY  <your-anthropic-api-key>");
   expect(out.count).toBe(0);
 });
+
+test("redacts a PEM private key block", () => {
+  const pem = "-----BEGIN RSA PRIVATE KEY-----\n" + body(64) + "\n-----END RSA PRIVATE KEY-----";
+  const out = redactSecrets(`id_rsa:\n${pem}`);
+  expect(out.count).toBe(1);
+  expect(out.text).not.toContain(body(64));
+  expect(out.text).toMatch(/\[REDACTED:private-key\]/);
+});
+
+test("redacts a JWT", () => {
+  const jwt = "ey" + "J" + body(12) + "." + "ey" + "J" + body(12) + "." + body(20);
+  const out = redactSecrets(`Authorization: Bearer ${jwt}`);
+  expect(out.count).toBe(1);
+  expect(out.text).not.toContain(jwt);
+  expect(out.text).toMatch(/\[REDACTED:jwt\]/);
+});
+
+test("redacts only the password in a connection string", () => {
+  const out = redactSecrets("DATABASE_URL=postgres://admin:" + "s3cr3tpw" + "@db.host:5432/app");
+  expect(out.count).toBe(1);
+  expect(out.text).not.toContain("s3cr3tpw");
+  expect(out.text).toContain("postgres://admin:[REDACTED:password]@db.host"); // scheme+user+host kept
+});

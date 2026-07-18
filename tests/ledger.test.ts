@@ -12,7 +12,7 @@ function provider(toolName: string) {
     else { yield { type: "text_delta", delta: "done" }; yield { type: "end", reason: "end_turn" }; }
   } } as Provider;
 }
-const perm = () => createPermissionEngine("bypass", (async () => "allow") as ApprovalCallback);
+const perm = () => createPermissionEngine("bypass");
 const allow = (async () => "allow") as ApprovalCallback;
 
 async function ledgerFor(toolName: string, run: Tool["run"]): Promise<TurnLedger | undefined> {

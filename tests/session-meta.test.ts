@@ -38,6 +38,22 @@ test("session metadata exposes title, preview, and count for the picker", () => 
   }
 });
 
+test("an empty just-created session is excluded from the resume picker", () => {
+  // Every launch spawns a fresh session (lone `system` event). It must NOT top
+  // the picker as the default pick — resuming it gives zero context.
+  const cwd = `/freecode-empty-test-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+  const empty = newSession(cwd);           // no conversation, just the start marker
+  const real = newSession(cwd);
+  appendEvent(real, { kind: "user", text: "do the thing", ts: iso() });
+  try {
+    const metas = listSessionMetas(cwd);
+    expect(metas.map((m) => m.id)).toEqual([real.id]); // empty one filtered out
+    expect(metas.every((m) => m.count > 0)).toBe(true);
+  } finally {
+    rmSync(dirname(empty.path), { recursive: true, force: true });
+  }
+});
+
 test("listSessionMetas sorts newest-first", () => {
   const base = `/freecode-sort-test-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
   const a = newSession(base);

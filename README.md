@@ -2,6 +2,8 @@
 
 **Total freedom. No guesswork.**
 
+> **Project status (2026-06-13): paused / handover.** The harness works end-to-end with a capable model — verified live: Opus 4.1 drove a full Tauri build to shippable installers. The open problem is whether a *local* model can drive it on complex agentic tasks; that's unproven, and the most promising local setups (a coder model via `llama-server --jinja`, or devstral) were never fairly tested. See **[HANDOVER.md](HANDOVER.md)** for the honest state, known issues, and the experiment that would settle it.
+
 freecode is a universal AI execution layer built for correctness. It runs any model from any provider and validates its own outputs by default — a consistent, trustworthy interface for AI development, without vendor lock-in or manual verification overhead.
 
 REPL + headless. Multi-LLM, multi-tool. Drop-in Claude Code with the Anthropic lock-in removed. Bun runtime.
@@ -17,6 +19,27 @@ bun run src/cli.tsx       # launch REPL (mock provider — no API key needed)
 ```
 
 First run uses the **Mock provider** so the app works with zero config. Wire a real provider by setting env vars or `.freecode-profile.json` (see below).
+
+## Install (another machine)
+
+One command, runs on **Node** (no clone, no Bun on the target). The repo is private, so the machine needs GitHub access once — an SSH key, `gh auth login`, or a PAT in your git credential helper.
+
+```bash
+npm install -g "github:Plicerin/freecode#feat/tier-a-parity"
+freecode
+```
+
+That clones, installs deps, bundles a Node-runnable CLI (via esbuild — no Bun needed), and puts `freecode` on your PATH. **Upgrade** by re-running the same command. (The `#feat/tier-a-parity` picks the working branch; once it merges to `main`, plain `github:Plicerin/freecode` will do.) Requires Node ≥ 18.
+
+Enable shared cross-session memory by writing `~/.freecode/settings.json` (Honcho is Tailscale-only, so the machine must be on your tailnet):
+
+```json
+{ "memory": { "provider": "honcho", "enabled": true, "baseUrl": "http://<honcho-host>:8100", "workspace": "freecode", "peer": "user" } }
+```
+
+Memory keys off one `user` peer, so pointing two machines at the same Honcho gives them the **same** accumulated memory; it's fail-soft, so freecode runs fine without it. Other config (vault keys, session logs) lives in `~/.freecode/` — copy `vault.json` + `vault.key` to carry provider keys over.
+
+**Alternative — auto-updating source install.** If you'd rather run from source with an `freecode` launcher that self-updates on launch, clone and run `./install.sh --honcho <url>` (macOS/Linux) or `./install.ps1 -HonchoUrl <url>` (Windows); details in [`install.sh`](install.sh). A standalone binary (no runtime at all) is `bun run build:exe` → `dist/freecode`.
 
 ## Providers
 

@@ -2,6 +2,7 @@ import type { ChatMessage, ChatRequest, Provider, StreamEvent, TokenUsage, ToolD
 import { friendlyError, makeError } from "./friendly-errors";
 import { zodToJsonSchema } from "./schema-util";
 import { debug } from "../utils/debug";
+import { createStallTimeout, streamIdleMs } from "./stall-timeout";
 
 interface AnthropicBlock { type: string; [k: string]: unknown }
 
@@ -99,9 +100,19 @@ export function toAnthropicMessages(messages: ChatMessage[]): Array<{ role: "use
 interface AnthropicOptions {
   apiKey?: string;
   baseUrl?: string;
+  /** OAuth (Pro/Max subscription) access token. When set, the provider uses
+   *  `Authorization: Bearer` + `anthropic-beta` and omits x-api-key. */
+  oauthToken?: string;
+  /** Comma-separated anthropic-beta flags to send in OAuth mode. */
+  betaHeader?: string;
 }
 
 const DEFAULT_BASE = "https://api.anthropic.com";
+
+// OAuth (subscription) tokens are rejected unless the request identifies itself
+// as Claude Code — the system prompt must lead with this exact line. Harmless if
+// the requirement ever relaxes; fatal (401/403) if it's needed and absent.
+const CLAUDE_CODE_SYSTEM = "You are Claude Code, Anthropic's official CLI for Claude.";
 
 interface ApiEvent {
   type: string;
@@ -112,6 +123,10 @@ interface ApiEvent {
     usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
     stop_reason?: string;
   };
+  // `message_delta` carries the FINAL output token count and stop_reason at the TOP
+  // level (usage here, stop_reason in `delta`) — NOT under `message`. Missing this
+  // field is why output tokens went uncounted and truncation went undetected.
+  usage?: { output_tokens?: number; input_tokens?: number };
 }
 
 export class AnthropicProvider implements Provider {
@@ -119,18 +134,32 @@ export class AnthropicProvider implements Provider {
   readonly name = "Anthropic";
   private readonly apiKey?: string;
   private readonly baseUrl: string;
+  private readonly oauthToken?: string;
+  private readonly betaHeader?: string;
 
   constructor(opts: AnthropicOptions = {}) {
     this.apiKey = opts.apiKey;
     this.baseUrl = (opts.baseUrl ?? DEFAULT_BASE).replace(/\/+$/, "");
+    this.oauthToken = opts.oauthToken;
+    this.betaHeader = opts.betaHeader;
+  }
+
+  /** Auth headers: Bearer + anthropic-beta in OAuth mode, else x-api-key. */
+  private authHeaders(): Record<string, string> {
+    if (this.oauthToken) {
+      const h: Record<string, string> = { authorization: `Bearer ${this.oauthToken}` };
+      if (this.betaHeader) h["anthropic-beta"] = this.betaHeader;
+      return h;
+    }
+    return this.apiKey ? { "x-api-key": this.apiKey } : {};
   }
 
   async models(): Promise<string[]> {
     const fallback = ["claude-sonnet-4-5", "claude-opus-4-1", "claude-haiku-4-5"];
-    if (!this.apiKey) return fallback;
+    if (!this.apiKey && !this.oauthToken) return fallback;
     try {
       const resp = await fetch(`${this.baseUrl}/v1/models?limit=1000`, {
-        headers: { "x-api-key": this.apiKey, "anthropic-version": "2023-06-01" },
+        headers: { ...this.authHeaders(), "anthropic-version": "2023-06-01" },
         signal: AbortSignal.timeout(8000),
       });
       if (!resp.ok) return fallback;
@@ -143,42 +172,63 @@ export class AnthropicProvider implements Provider {
   }
 
   async *stream(req: ChatRequest): AsyncIterable<StreamEvent> {
-    if (!this.apiKey) {
-      yield { type: "error", error: makeError("anthropic", "ANTHROPIC_API_KEY not set", "missing_api_key") };
+    if (!this.apiKey && !this.oauthToken) {
+      yield { type: "error", error: makeError("anthropic", "ANTHROPIC_API_KEY not set (or sign in: freecode auth login anthropic)", "missing_api_key") };
       return;
     }
     const url = `${this.baseUrl}/v1/messages`;
-    const body = buildAnthropicBody(req);
+    // OAuth (subscription) requires the Claude Code identity to lead the system
+    // prompt, or the token is rejected. Prepend it once, in OAuth mode only.
+    const effectiveReq = this.oauthToken
+      ? { ...req, system: req.system && req.system.startsWith(CLAUDE_CODE_SYSTEM) ? req.system : `${CLAUDE_CODE_SYSTEM}\n\n${req.system ?? ""}`.trimEnd() }
+      : req;
+    const body = buildAnthropicBody(effectiveReq);
     debug.log("anthropic request", { url, model: req.model });
+    // Idle watchdog — abort if the stream goes silent (see stall-timeout.ts).
+    const idleMs = streamIdleMs();
+    const watchdog = createStallTimeout(req.signal, idleMs);
+    const timeoutError = (): Error =>
+      makeError("anthropic", `Anthropic stream timed out (no data for ${Math.round(idleMs / 1000)}s)`, "timeout", true);
     let resp: Response;
     try {
       resp = await fetch(url, {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          "x-api-key": this.apiKey,
           "anthropic-version": "2023-06-01",
+          ...this.authHeaders(),
         },
         body: JSON.stringify(body),
-        signal: req.signal,
+        signal: watchdog.signal,
       });
     } catch (err) {
-      throw friendlyError(err, "anthropic");
+      watchdog.clear();
+      throw watchdog.timedOut() ? timeoutError() : friendlyError(err, "anthropic", req.model);
     }
     if (!resp.ok || !resp.body) {
+      watchdog.clear();
       const text = await resp.text().catch(() => "");
       const err = new Error(`${resp.status} ${text}`) as Error & { status?: number };
       err.status = resp.status;
-      throw friendlyError(err, "anthropic");
+      throw friendlyError(err, "anthropic", req.model);
     }
 
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
     const toolCalls = new Map<number, { id?: string; name?: string; inputJson: string }>();
+    let stopReason: string | undefined; // captured from message_delta, used at message_stop
 
+    try {
     while (true) {
-      const { value, done } = await reader.read();
+      let value: Uint8Array | undefined;
+      let done: boolean;
+      try {
+        ({ value, done } = await reader.read());
+      } catch (err) {
+        throw watchdog.timedOut() ? timeoutError() : friendlyError(err, "anthropic", req.model);
+      }
+      watchdog.reset();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
@@ -226,17 +276,13 @@ export class AnthropicProvider implements Provider {
             };
             toolCalls.delete(evt.index);
           }
-        } else if (evt.type === "message_delta" && evt.message) {
-          const u = evt.message.usage;
-          if (u) {
-            const usage: TokenUsage = {
-              input: 0,
-              output: u.output_tokens,
-              cacheRead: 0,
-              cacheWrite: 0,
-              thinking: 0,
-            };
-            yield { type: "usage", usage };
+        } else if (evt.type === "message_delta") {
+          // Top-level usage carries the FINAL output token count; delta.stop_reason
+          // says WHY we stopped ("max_tokens" = truncated → the loop's auto-continue
+          // heal needs this). Both live here, not under `message`.
+          if (evt.delta?.stop_reason) stopReason = evt.delta.stop_reason;
+          if (evt.usage?.output_tokens != null) {
+            yield { type: "usage", usage: { input: 0, output: evt.usage.output_tokens, cacheRead: 0, cacheWrite: 0, thinking: 0 } };
           }
         } else if (evt.type === "message_start" && evt.message?.usage) {
           const u = evt.message.usage;
@@ -249,11 +295,14 @@ export class AnthropicProvider implements Provider {
           };
           yield { type: "usage", usage };
         } else if (evt.type === "message_stop") {
-          yield { type: "end", reason: "end_turn" };
+          yield { type: "end", reason: stopReason === "max_tokens" ? "max_tokens" : "end_turn" };
           return;
         }
       }
     }
-    yield { type: "end", reason: "end_turn" };
+    } finally {
+      watchdog.clear();
+    }
+    yield { type: "end", reason: stopReason === "max_tokens" ? "max_tokens" : "end_turn" };
   }
 }

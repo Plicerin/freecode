@@ -16,6 +16,7 @@ const PROVIDERS: ProviderOption[] = [
   { id: "gemini", label: "Google Gemini", hint: "AIza…" },
   { id: "github-models", label: "GitHub Models", hint: "ghp_… / GITHUB_TOKEN" },
   { id: "nim", label: "NVIDIA NIM", hint: "nvapi-…" },
+  { id: "deepseek", label: "DeepSeek", hint: "sk-…" },
 ];
 
 const theme = makeTheme("dark");

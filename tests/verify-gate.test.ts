@@ -7,14 +7,14 @@ import type { Tool } from "../src/tools/types";
 
 // Provider: turn 1 calls FileEdit (a "change"), then finishes; after a verify
 // failure is injected, turn 2 calls FileEdit again then finishes (the "fix").
-function makeProvider() {
+function makeProvider(path = "app.ts") {
   let t = 0;
   return {
     id: "mock", name: "m", models: () => ["m"],
     async *stream(_r: ChatRequest): AsyncIterable<StreamEvent> {
       t++;
       if (t === 1 || t === 2) {
-        yield { type: "tool_call", call: { id: `c${t}`, name: "FileEdit", arguments: {} } };
+        yield { type: "tool_call", call: { id: `c${t}`, name: "FileEdit", arguments: { path } } };
         yield { type: "end", reason: "tool_use" };
       } else {
         yield { type: "text_delta", delta: "done" };
@@ -24,7 +24,9 @@ function makeProvider() {
   } as Provider;
 }
 
-const editTool: Tool = { name: "FileEdit", description: "x", schema: z.object({}), permission: "confirm", async run() { return { ok: true, output: "edited" }; } };
+// path is load-bearing now: the relevance gate only credits a check that covers
+// a changed file, so the schema must carry `path` through validation.
+const editTool: Tool = { name: "FileEdit", description: "x", schema: z.object({ path: z.string().optional() }), permission: "confirm", async run() { return { ok: true, output: "edited" }; } };
 
 describe("auto-verify gate", () => {
   it("runs after a file change; on failure self-corrects, then passes", async () => {
@@ -32,7 +34,7 @@ describe("auto-verify gate", () => {
     const events: AgentEvent[] = [];
     await runAgentLoop({
       provider: makeProvider(), tools: [editTool], model: "m", maxTurns: 8, prompt: "go",
-      permission: createPermissionEngine("bypass", (async () => "allow") as ApprovalCallback),
+      permission: createPermissionEngine("bypass"),
       promptUser: (async () => "allow") as ApprovalCallback,
       verifyMode: "on",
       // first verify run fails, second passes — modeled via a command that
@@ -49,12 +51,28 @@ describe("auto-verify gate", () => {
     expect(verifyCalls).toBeGreaterThanOrEqual(3); // bounded retries
   }, 30000);
 
+  it("does NOT credit a check that covers no changed file (standalone .html) — the tic-tac-toe trap", async () => {
+    const texts: string[] = [];
+    await runAgentLoop({
+      provider: makeProvider("tic-tac-toe.html"), tools: [editTool], model: "m", maxTurns: 8, prompt: "make a game",
+      permission: createPermissionEngine("bypass"),
+      promptUser: (async () => "allow") as ApprovalCallback,
+      verifyMode: "on",
+      // exit 0 WOULD trivially pass — but it must never run, because it doesn't
+      // compile/load the .html. A pass here would be the false "verified".
+      verifyPlan: { commands: ["exit 0"], source: "config" },
+      onEvent: (e) => { if (e.type === "verify") texts.push(e.text!); },
+    });
+    expect(texts.some((t) => /Verifying/.test(t))).toBe(false);      // the check never ran
+    expect(texts.some((t) => /doesn't cover|not verified/i.test(t))).toBe(true); // and said so
+  }, 30000);
+
   it("does not verify when no files changed", async () => {
     let verifyCalls = 0;
     const provider = { id: "m", name: "m", models: () => ["m"], async *stream(): AsyncIterable<StreamEvent> { yield { type: "text_delta", delta: "hi" }; yield { type: "end", reason: "end_turn" }; } } as Provider;
     await runAgentLoop({
       provider, tools: [], model: "m", maxTurns: 3, prompt: "hi",
-      permission: createPermissionEngine("bypass", (async () => "allow") as ApprovalCallback),
+      permission: createPermissionEngine("bypass"),
       promptUser: (async () => "allow") as ApprovalCallback,
       verifyMode: "on", verifyPlan: { commands: ["exit 1"], source: "config" },
       onEvent: (e) => { if (e.type === "verify") verifyCalls++; },

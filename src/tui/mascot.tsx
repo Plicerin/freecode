@@ -90,10 +90,47 @@ function colorRow(line: string, theme: Theme): React.ReactElement[] {
   return segs;
 }
 
-export function Mascot({ theme }: { theme: Theme }): React.ReactElement {
+/** Half-size owl for the startup banner — every other row AND every other column,
+ *  so it shrinks ~50% in BOTH dimensions and keeps its proportions (not squashed). */
+export function owlHalf(): string[] {
+  return OWL
+    .filter((_, i) => i % 2 === 0)
+    .map((row) => [...row].filter((_, j) => j % 2 === 0).join(""));
+}
+
+// Eye-dart: the pupils (the only `█` glyphs) live in white sockets bounded by the
+// facial disc. Shifting each `█` run one cell toward `dir` — but only INTO a space,
+// never over the disc — moves Bubo's gaze while preserving every row's width.
+function shiftEyesOnce(rows: string[], dir: 1 | -1): string[] {
+  return rows.map((row) => {
+    const a = [...row];
+    const runs: Array<[number, number]> = [];
+    for (let i = 0; i < a.length; ) {
+      if (a[i] === "█") { let j = i; while (j < a.length && a[j] === "█") j++; runs.push([i, j]); i = j; }
+      else i++;
+    }
+    // Move outermost run first so a shift never collides with an un-moved run.
+    for (const [s, e] of dir > 0 ? runs.slice().reverse() : runs) {
+      if (dir > 0) { if (e < a.length && a[e] === " ") { a[e] = "█"; a[s] = " "; } }
+      else { if (s > 0 && a[s - 1] === " ") { a[s - 1] = "█"; a[e - 1] = " "; } }
+    }
+    return a.join("");
+  });
+}
+
+/** Dart the gaze by `offset` cells (negative = left); the socket clamps it. */
+export function dartEyes(rows: string[], offset: number): string[] {
+  let out = rows;
+  const dir = offset >= 0 ? 1 : -1;
+  for (let k = 0; k < Math.abs(offset); k++) out = shiftEyesOnce(out, dir);
+  return out;
+}
+
+export function Mascot({ theme, eyeOffset = 0 }: { theme: Theme; eyeOffset?: number }): React.ReactElement {
+  const rows = eyeOffset ? dartEyes(owlHalf(), eyeOffset) : owlHalf();
   return (
     <Box flexDirection="column">
-      {OWL.map((row, i) => (
+      {rows.map((row, i) => (
         <Text key={i}>{colorRow(row, theme)}</Text>
       ))}
     </Box>

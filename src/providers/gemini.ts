@@ -2,6 +2,7 @@ import type { ChatMessage, ChatRequest, Provider, StreamEvent, TokenUsage, ToolD
 import { friendlyError, makeError } from "./friendly-errors";
 import { zodToJsonSchema } from "./schema-util";
 import { debug } from "../utils/debug";
+import { createStallTimeout, streamIdleMs } from "./stall-timeout";
 
 interface GeminiPart { text?: string; functionCall?: { name: string; args?: Record<string, unknown> }; functionResponse?: unknown; inlineData?: { mimeType: string; data: string } }
 interface GeminiContent { role: "user" | "model"; parts: GeminiPart[] }
@@ -14,6 +15,14 @@ function stripUnsupported(schema: Record<string, unknown>): Record<string, unkno
       const rec = o as Record<string, unknown>;
       delete rec.additionalProperties;
       delete rec.$schema;
+      // Gemini's schema dialect (an OpenAPI subset) has no exclusive* keywords —
+      // approximate them with the inclusive bound it DOES support so a constraint
+      // from .positive()/.gt()/.lt() still guides the model instead of 400-ing the
+      // request on an unknown keyword.
+      if ("exclusiveMinimum" in rec && !("minimum" in rec)) rec.minimum = rec.exclusiveMinimum;
+      if ("exclusiveMaximum" in rec && !("maximum" in rec)) rec.maximum = rec.exclusiveMaximum;
+      delete rec.exclusiveMinimum;
+      delete rec.exclusiveMaximum;
       for (const k of Object.keys(rec)) walk(rec[k]);
     }
   };
@@ -113,30 +122,46 @@ export class GeminiProvider implements Provider {
     if (req.system) body.systemInstruction = { parts: [{ text: req.system }] };
     if (req.tools && req.tools.length > 0) body.tools = toGeminiTools(req.tools);
     debug.log("gemini request", { url, model: req.model });
+    // Idle watchdog — abort if the stream goes silent (see stall-timeout.ts).
+    const idleMs = streamIdleMs();
+    const watchdog = createStallTimeout(req.signal, idleMs);
+    const timeoutError = (): Error =>
+      makeError("gemini", `Gemini stream timed out (no data for ${Math.round(idleMs / 1000)}s)`, "timeout", true);
     let resp: Response;
     try {
       resp = await fetch(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
-        signal: req.signal,
+        signal: watchdog.signal,
       });
     } catch (err) {
-      throw friendlyError(err, "gemini");
+      watchdog.clear();
+      throw watchdog.timedOut() ? timeoutError() : friendlyError(err, "gemini", req.model);
     }
     if (!resp.ok || !resp.body) {
+      watchdog.clear();
       const text = await resp.text().catch(() => "");
       const err = new Error(`${resp.status} ${text}`) as Error & { status?: number };
       err.status = resp.status;
-      throw friendlyError(err, "gemini");
+      throw friendlyError(err, "gemini", req.model);
     }
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
     let totalInput = 0;
     let totalOutput = 0;
+    let finishReason: string | undefined; // "MAX_TOKENS" = truncated → the loop's auto-continue heal needs it
+    try {
     while (true) {
-      const { value, done } = await reader.read();
+      let value: Uint8Array | undefined;
+      let done: boolean;
+      try {
+        ({ value, done } = await reader.read());
+      } catch (err) {
+        throw watchdog.timedOut() ? timeoutError() : friendlyError(err, "gemini", req.model);
+      }
+      watchdog.reset();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
@@ -157,6 +182,7 @@ export class GeminiProvider implements Provider {
               yield { type: "tool_call", call: { id: fc.name, name: fc.name, arguments: fc.args ?? {} } };
             }
           }
+          if (cand?.finishReason) finishReason = cand.finishReason;
           if (obj.usageMetadata) {
             totalInput = obj.usageMetadata.promptTokenCount ?? totalInput;
             totalOutput = obj.usageMetadata.candidatesTokenCount ?? totalOutput;
@@ -166,8 +192,11 @@ export class GeminiProvider implements Provider {
         }
       }
     }
+    } finally {
+      watchdog.clear();
+    }
     const usage: TokenUsage = { input: totalInput, output: totalOutput, cacheRead: 0, cacheWrite: 0, thinking: 0 };
     yield { type: "usage", usage };
-    yield { type: "end", reason: "end_turn" };
+    yield { type: "end", reason: finishReason === "MAX_TOKENS" ? "max_tokens" : "end_turn" };
   }
 }
