@@ -32,7 +32,16 @@ await build({
   packages: "external", // ink/react/etc. resolve from node_modules at runtime
   outfile: join(root, "dist/cli.js"),
   banner: { js: "#!/usr/bin/env node" },
-  define: { __FREECODE_VERSION__: JSON.stringify(version) },
+  // Ship the PRODUCTION React build. React's DEV build (NODE_ENV !== "production")
+  // emits performance-track measures (`performance.measure`) on EVERY commit that
+  // Node's performance timeline never frees — a long TUI session leaks to GBs and
+  // OOMs. Compiling production here dead-code-eliminates that path (and it's the
+  // norm for a shipped app). Also flips the app's own `=== "test"` checks to
+  // false, which is correct for the shipped binary.
+  define: {
+    __FREECODE_VERSION__: JSON.stringify(version),
+    "process.env.NODE_ENV": JSON.stringify("production"),
+  },
   logLevel: "warning",
 });
 
