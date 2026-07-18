@@ -1,11 +1,19 @@
-// Build a Node-runnable dist/cli.js so freecode installs from GitHub with npm and
-// runs on plain Node — no Bun on the target machine. Uses esbuild (a Node-native
-// bundler) so this same build runs as the npm `prepare` step on install. Our own
-// source is bundled into one file; node_modules deps stay external (npm installs
-// them). The version (package.json + git short SHA when a .git is present) is
-// baked in via __FREECODE_VERSION__, matching the bun --compile path.
+// Build a Node-runnable dist/ so freecode installs from npm/GitHub and runs on
+// plain Node — no Bun on the target. esbuild bundles our source into dist/main.js
+// (node_modules deps stay external — npm installs them). The version (package.json
+// + git short SHA when a .git is present) is baked in via __FREECODE_VERSION__.
+//
+// dist/cli.js is a tiny bin SHIM that sets NODE_ENV=production and THEN imports
+// main.js. This is load-bearing: React is external (resolved at runtime), so it
+// picks dev vs production from process.env.NODE_ENV when it evaluates — and its
+// DEV build leaks (a `performance.measure` per commit that Node never frees → GBs
+// over a long TUI session). The shim is the only place guaranteed to run before
+// React evaluates, because it imports nothing of its own; it hands off to main.js
+// (whose React import then sees NODE_ENV=production) via a dynamic import. Setting
+// NODE_ENV inside main.js instead would be too late — its static React import is
+// hoisted and evaluates first.
 import { build } from "esbuild";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, writeFileSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -30,19 +38,19 @@ await build({
   format: "esm",
   target: "node18",
   packages: "external", // ink/react/etc. resolve from node_modules at runtime
-  outfile: join(root, "dist/cli.js"),
-  banner: { js: "#!/usr/bin/env node" },
-  // Ship the PRODUCTION React build. React's DEV build (NODE_ENV !== "production")
-  // emits performance-track measures (`performance.measure`) on EVERY commit that
-  // Node's performance timeline never frees — a long TUI session leaks to GBs and
-  // OOMs. Compiling production here dead-code-eliminates that path (and it's the
-  // norm for a shipped app). Also flips the app's own `=== "test"` checks to
-  // false, which is correct for the shipped binary.
-  define: {
-    __FREECODE_VERSION__: JSON.stringify(version),
-    "process.env.NODE_ENV": JSON.stringify("production"),
-  },
+  outfile: join(root, "dist/main.js"),
+  // Only the version is a compile-time constant. NODE_ENV is NOT defined here —
+  // it must stay a real runtime value so the shim can set it and external React
+  // reads it. (Defining it would dead-code-eliminate the shim's assignment.)
+  define: { __FREECODE_VERSION__: JSON.stringify(version) },
   logLevel: "warning",
 });
 
-console.log(`built dist/cli.js  (version ${version})`);
+const shim = `#!/usr/bin/env node
+// Force React's production build before anything imports React (see build.mjs).
+if (!process.env.NODE_ENV) process.env.NODE_ENV = "production";
+import("./main.js");
+`;
+writeFileSync(join(root, "dist/cli.js"), shim);
+
+console.log(`built dist/cli.js + dist/main.js  (version ${version})`);
