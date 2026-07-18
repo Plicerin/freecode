@@ -31,6 +31,9 @@ function renderInline(text: string, theme: Theme): React.ReactNode[] {
 // styled marker and indent), or plain text — all with inline formatting applied.
 function ProseLine({ line, theme, lead }: { line: string; theme: Theme; lead?: React.ReactNode }): React.ReactElement {
   const p = classifyLine(line);
+  // A blank source line is a paragraph break — render it as a real blank line
+  // (an empty <Text> can collapse to zero height) so prose keeps its rhythm.
+  if (p.kind === "plain" && p.content.trim() === "") return <Text>{lead}{" "}</Text>;
   const pad = "  ".repeat(p.indent);
   if (p.kind === "heading") {
     return <Text>{lead}<Text bold color={theme.hex.assistant}>{renderInline(p.content, theme)}</Text></Text>;
@@ -54,8 +57,10 @@ export function MarkdownBody({ text, theme, marker }: { text: string; theme: The
         const lead = bi === 0 ? marker : null;
         if (b.type === "code") {
           const toks = tokenize(b.content);
+          // A blank line above and below sets the code apart from the prose it's
+          // embedded in (it was flush against the paragraph before).
           return (
-            <Box key={bi} flexDirection="column">
+            <Box key={bi} flexDirection="column" marginTop={1} marginBottom={1}>
               {lead && <Text>{lead}</Text>}
               <Box marginLeft={2}>
                 <Text>{toks.map((t, ti) => <Text key={ti} color={codeColor(t.kind, theme)}>{t.text}</Text>)}</Text>
@@ -63,7 +68,12 @@ export function MarkdownBody({ text, theme, marker }: { text: string; theme: The
             </Box>
           );
         }
+        // Trim blank lines at the block edges so they don't compound with the
+        // code blocks' own margins into double gaps; interior blank lines (real
+        // paragraph breaks) are kept.
         const lines = b.content.split("\n");
+        while (lines.length && lines[0]!.trim() === "") lines.shift();
+        while (lines.length && lines[lines.length - 1]!.trim() === "") lines.pop();
         return (
           <Box key={bi} flexDirection="column">
             {lines.map((ln, li) => (

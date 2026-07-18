@@ -144,6 +144,48 @@ export function clampToViewport(text: string, maxRows: number, width: number): {
   return { text, clipped: false, rows: used };
 }
 
+/**
+ * Fold a batch of COALESCED streamed text (accumulated reasoning + answer deltas)
+ * into the transcript in ONE step — the pure core of the repl's flushStream.
+ *
+ * Streamed deltas are buffered and flushed at ~30fps instead of one setMessages
+ * per token (which drove one React/Ink commit per token and leaked heap until a
+ * long stream OOM'd). Bubble ids are decided UP FRONT and returned so the caller
+ * can commit them to refs SYNCHRONOUSLY — never inside a setState updater, which
+ * may run batched/later and would race the tool_call handler's ref reset. A
+ * truthy incoming id means the bubble already exists (append); a null id means
+ * create it. The first answer text closes the reasoning bubble (returns thinkId
+ * null), matching the live per-token behaviour exactly.
+ */
+export function planStreamFlush(
+  ids: { thinkId: string | null; answerId: string | null },
+  pending: { think: string; answer: string },
+  newId: (kind: "reasoning" | "assistant") => string,
+): { thinkId: string | null; answerId: string | null; apply: (msgs: UiMessage[]) => UiMessage[] } {
+  const { think, answer } = pending;
+  const thinkId0 = ids.thinkId;
+  const answerId0 = ids.answerId;
+  const thinkId = think && !thinkId0 ? newId("reasoning") : thinkId0;
+  const answerId = answer && !answerId0 ? newId("assistant") : answerId0;
+  const apply = (msgs: UiMessage[]): UiMessage[] => {
+    let next = msgs;
+    if (think) {
+      next = thinkId0
+        ? next.map((m) => (m.id === thinkId ? { ...m, text: m.text + think } : m))
+        : [...next, { id: thinkId!, role: "reasoning", text: think }];
+    }
+    if (answer) {
+      next = answerId0
+        ? next.map((m) => (m.id === answerId ? { ...m, text: m.text + answer } : m))
+        : [...next, { id: answerId!, role: "assistant", text: answer }];
+    }
+    return next;
+  };
+  // The answer, once it starts, closes the reasoning bubble so later reasoning
+  // (rare, interleaved) opens a fresh one.
+  return { thinkId: answer ? null : thinkId, answerId, apply };
+}
+
 /** Rebuild the visible transcript from a session's stored events for /resume.
  *  Mirrors how the LIVE stream renders: a tool_call becomes "→ name(args)" and a
  *  tool_result becomes its output preview — NOT a bare ⚙. The old restore read
@@ -403,45 +445,59 @@ function MessageLine({ m, theme }: { m: UiMessage; theme: ReturnType<typeof make
   // Assistant output gets markdown-aware rendering: fenced code blocks are
   // syntax-highlighted and inline `code` is coloured (instead of flat white).
   if (m.role === "assistant") {
-    // attachWarning (confidence.ts) plants a `m.warning` sidecar here when
-    // the contradiction-guard / overclaim-guard fired for this turn. Paint
-    // it as a round amber-bordered block IMMEDIATELY below the prose — same
-    // logical turn, NOT a post-script line dropped at the transcript end.
-    // marginTop={1} gives breathing room between the markdown and the block;
-    // round corners + warning-color border echo the approval-prompt surface
-    // (same visual language for "stop and look at this").
-    if (!m.warning) {
-      return <MarkdownBody text={m.text} theme={theme} marker={<Text color={theme.hex.assistant}>● </Text>} />;
-    }
+    // The reply renders in a 2-col gutter: the ● marker sits in the gutter and
+    // the markdown body is a wrapping column beside it, so continuation lines and
+    // code align UNDER the prose instead of falling back to the left edge — the
+    // turn reads as one block. A blank line above separates it from the prior
+    // step (spacing pass — the transcript was a flush wall of text before).
+    const body = (
+      <Box flexDirection="row">
+        <Text color={theme.hex.assistant}>● </Text>
+        <Box flexDirection="column" flexGrow={1} flexShrink={1}>
+          <MarkdownBody text={m.text} theme={theme} />
+        </Box>
+      </Box>
+    );
+    // attachWarning (confidence.ts) plants a `m.warning` sidecar here when the
+    // contradiction-guard / overclaim-guard fired for this turn. Paint it as a
+    // round amber-bordered block IMMEDIATELY below the prose — same logical turn,
+    // NOT a post-script line dropped at the transcript end. Round corners +
+    // warning-color border echo the approval-prompt surface ("stop and look").
+    if (!m.warning) return <Box marginTop={1}>{body}</Box>;
     return (
-      <Box flexDirection="column">
-        <MarkdownBody text={m.text} theme={theme} marker={<Text color={theme.hex.assistant}>● </Text>} />
-        <Box borderStyle="round" borderColor={theme.hex.warning} paddingX={1} marginTop={1}>
+      <Box flexDirection="column" marginTop={1}>
+        {body}
+        <Box borderStyle="round" borderColor={theme.hex.warning} paddingX={1} marginTop={1} marginLeft={2}>
           <Text color={theme.hex.warning} bold>{"⚠ "}{m.warning}</Text>
         </Box>
       </Box>
     );
   }
-  if (m.role === "warning") {
-    return <Text color={theme.hex.warning} bold>{"⚠ "}{m.text}</Text>;
-  }
-  if (m.role === "reasoning") {
-    return <Text color={theme.dim} italic>{"💭 "}{m.text}</Text>;
-  }
-  // YOUR messages stand out: emoji + bold + brand color, so they're easy to find
-  // when scanning back through the transcript.
+  // YOUR prompt stands out: a blank line above sets each exchange apart, and the
+  // emoji + bold + brand color make it easy to find when scanning back.
   if (m.role === "user") {
     // Normalise any stray CR (e.g. a paste persisted before the capture-time fix,
     // or a resumed older session) so a lone "\r" can't overwrite earlier lines and
     // leave only the last one visible.
-    return <Text color={theme.user} bold>{"🧑 "}{normalizeNewlines(m.text)}</Text>;
+    return <Box marginTop={1}><Text color={theme.user} bold>{"🧑 "}{normalizeNewlines(m.text)}</Text></Box>;
+  }
+  // Sub-steps of the current turn — tool calls/results, reasoning, ledger, system
+  // notes, inline warnings — sit indented under the reply with NO extra blank
+  // line, so a run of tool calls groups tightly beneath the answer it belongs to.
+  if (m.role === "warning") {
+    return <Box marginLeft={2}><Text color={theme.hex.warning} bold>{"⚠ "}{m.text}</Text></Box>;
+  }
+  if (m.role === "reasoning") {
+    return <Box marginLeft={2}><Text color={theme.dim} italic>{"💭 "}{m.text}</Text></Box>;
   }
   return (
-    <Text>
-      {m.role === "tool" && <Text color={theme.tool}>⚙ </Text>}
-      {m.role === "system" && <Text color={theme.dim}>· </Text>}
-      <Text color={m.role === "ledger" ? theme.dim : undefined} dimColor={m.role === "ledger"}>{m.text}</Text>
-    </Text>
+    <Box marginLeft={2}>
+      <Text>
+        {m.role === "tool" && <Text color={theme.tool}>⚙ </Text>}
+        {m.role === "system" && <Text color={theme.dim}>· </Text>}
+        <Text color={m.role === "ledger" ? theme.dim : undefined} dimColor={m.role === "ledger"}>{m.text}</Text>
+      </Text>
+    </Box>
   );
 }
 
@@ -628,6 +684,8 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
   const lastActivityRef = useRef(0);
   // Emit the "generating very slowly" warning at most once per turn.
   const crawlWarnedRef = useRef(false);
+  // Emit the high-memory warning at most once per process.
+  const heapWarnedRef = useRef(false);
   const [pending, setPending] = useState<ApprovalRequest | null>(null);
   // Interactive resume picker: when open, ↑/↓ choose and Enter resumes.
   const [picker, setPicker] = useState<{ items: SessionMeta[]; idx: number } | null>(null);
@@ -665,6 +723,14 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
   const abortRef = useRef<AbortController | null>(null);
   const streamIdRef = useRef<string | null>(null); // id of the assistant bubble currently streaming
   const thinkIdRef = useRef<string | null>(null); // id of the reasoning bubble currently streaming
+  // Streamed text is COALESCED: deltas accumulate in these buffers and flush to
+  // React state at ~30fps (see flushStream), NOT once per token. A setMessages
+  // per token drove one React commit per token — and Ink retains heap on every
+  // commit — so a long stream from a fast model climbed to Node's ~4GB heap cap
+  // and OOM'd. Coalescing decouples the render count from the token count.
+  const pendingAnswerRef = useRef(""); // streamed answer text not yet in state
+  const pendingThinkRef = useRef(""); // streamed reasoning text not yet in state
+  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Live tokens/sec speedometer: chars produced in the current generation burst
   // and when it started (reset on each tool call so it tracks the live stream,
   // not wall-clock that includes tool-execution pauses).
@@ -913,6 +979,29 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
     return () => clearInterval(id);
   }, [busy]);
 
+  // Heap-pressure watchdog. The terminal UI's renderer (Ink) retains a little
+  // heap on EVERY render, so a very long session — especially a marathon /goal
+  // run — can climb toward Node's ~4GB heap cap and hard-crash with no warning
+  // (observed: OOM at idle after ~24 min). Coalesced streaming slows this a lot
+  // but doesn't eliminate the underlying per-render retention. Surface ONE
+  // warning well before the wall: the session is on disk, so a restart + /resume
+  // loses nothing — and a restart is the only thing that actually reclaims the
+  // retained heap (/new does not). Cheap: one memoryUsage() read every 30s.
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (heapWarnedRef.current) return;
+      const used = process.memoryUsage().heapUsed;
+      if (used < 2_200_000_000) return; // ~2.2GB, comfortably below the ~4GB cap
+      heapWarnedRef.current = true;
+      const sid = sessionRef.current?.id;
+      setMessages((prev) => [...prev, { id: `heap-${Date.now()}`, role: "warning", text:
+        `⚠ Memory is high (${Math.round(used / 1048576)} MB). Very long sessions accumulate memory in the terminal UI and can eventually crash. ` +
+        `Your work is saved${sid ? ` — restart freecode and run \`/resume\` (or \`freecode resume ${sid}\`)` : ""} to reclaim it. ` +
+        `(This doesn't affect your files, and your context is preserved.)` }]);
+    }, 30_000);
+    return () => clearInterval(id);
+  }, []);
+
   // Record session context once (no-op unless the activity log is enabled).
   useEffect(() => {
     logActivity(`SESSION start cwd=${process.cwd()} provider=${config.provider} model=${config.model} verifyMode=${config.verifyMode}`);
@@ -1055,6 +1144,37 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
     burstStartRef.current = null;
     genCharsRef.current = 0;
     genMsRef.current = 0;
+    // Coalesced-streaming state (see pendingAnswerRef): flush accumulated deltas
+    // into the assistant/reasoning bubbles in ONE setMessages, at most ~30fps.
+    pendingAnswerRef.current = "";
+    pendingThinkRef.current = "";
+    if (flushTimerRef.current) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null; }
+    let bubbleSeq = 0;
+    const flushStream = (): void => {
+      if (flushTimerRef.current) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null; }
+      const think = pendingThinkRef.current;
+      const answer = pendingAnswerRef.current;
+      if (!think && !answer) return;
+      pendingThinkRef.current = "";
+      pendingAnswerRef.current = "";
+      const plan = planStreamFlush(
+        { thinkId: thinkIdRef.current, answerId: streamIdRef.current },
+        { think, answer },
+        (kind) => `${kind === "reasoning" ? "think" : "a"}-${t0}-${bubbleSeq++}`,
+      );
+      // Commit the chosen ids to refs SYNCHRONOUSLY, before setMessages, so the
+      // tool_call handler's `streamIdRef.current = null` can't be undone by a
+      // batched updater running later.
+      thinkIdRef.current = plan.thinkId;
+      streamIdRef.current = plan.answerId;
+      setMessages(plan.apply);
+    };
+    // ~30fps: comfortably below any terminal's useful refresh, far above the
+    // per-token rate that caused the leak. A trailing timer, so the last tokens
+    // of a burst always land even if no further delta arrives to reschedule.
+    const scheduleFlush = (): void => {
+      if (!flushTimerRef.current) flushTimerRef.current = setTimeout(flushStream, 33);
+    };
     try {
       // Plan mode: read-only tools (permission=safe) + a plan-only system prompt.
       // A consult is always a full agent — plan mode doesn't restrict the supervisor.
@@ -1112,6 +1232,10 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
         signal: controller.signal,
         onEvent: (e) => {
           lastActivityRef.current = Date.now(); // any event = the stream is alive (health colour)
+          // Before handling any DISCRETE event (tool call/result, usage, ledger,
+          // …), flush the buffered stream text so the assistant bubble is complete
+          // and ordered ahead of whatever the discrete event appends.
+          if (e.type !== "thinking_delta" && e.type !== "text_delta") flushStream();
           // Speedometer: count every produced char (reasoning + answer) and start
           // the clock on the first token of this generation burst.
           if ((e.type === "thinking_delta" || e.type === "text_delta") && e.text) {
@@ -1121,19 +1245,13 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
           }
           if (e.type === "thinking_delta" && e.text) {
             // Reasoning channel (gpt-oss et al.) — stream into a dim 💭 bubble so
-            // you can see the model actually working through the problem.
-            const delta = e.text;
-            setMessages((prev) => {
-              const tid = thinkIdRef.current;
-              if (tid) return prev.map((m) => (m.id === tid ? { ...m, text: m.text + delta } : m));
-              const id = `think-${t0}-${prev.length}`;
-              thinkIdRef.current = id;
-              return [...prev, { id, role: "reasoning", text: delta }];
-            });
+            // you can see the model actually working through the problem. Buffered;
+            // flushStream creates/appends the bubble at ~30fps.
+            pendingThinkRef.current += e.text;
+            scheduleFlush();
           } else if (e.type === "text_delta" && e.text) {
             buffer += e.text;
             streamedAny = true;
-            thinkIdRef.current = null; // answer started — close the reasoning bubble
             // Degeneration guard: if the model collapses into runaway repetition,
             // abort the turn instead of streaming garbage until the user hits esc.
             if (!degenerated && buffer.length - degenCheckedAt >= 400) {
@@ -1145,16 +1263,10 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
                 return;
               }
             }
-            const delta = e.text;
-            setMessages((prev) => {
-              const sid = streamIdRef.current;
-              if (sid) {
-                return prev.map((m) => (m.id === sid ? { ...m, text: m.text + delta } : m));
-              }
-              const id = `a-${t0}-${prev.length}`;
-              streamIdRef.current = id;
-              return [...prev, { id, role: "assistant", text: delta }];
-            });
+            // Buffered; flushStream closes the reasoning bubble and creates/appends
+            // the assistant bubble at ~30fps (decoupled from the token rate).
+            pendingAnswerRef.current += e.text;
+            scheduleFlush();
           } else if (e.type === "tool_call" && e.call) {
             toolCallsThisRun += 1;
             streamIdRef.current = null; // text after a tool call starts a fresh bubble
@@ -1216,6 +1328,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
           }
         },
       });
+      flushStream(); // drain any tail tokens the last event didn't trigger a flush for
       conversationRef.current = result.messages; // carry full context into the next turn
       writeConversationState(sessionRef.current, result.messages); // …and to disk, so /resume restores it in full
       // Show ctx for EVERY provider — some (local servers, certain gateways) don't
@@ -1242,6 +1355,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
       if (genSpeed) setMessages((prev) => [...prev, { id: `spd-${t0}`, role: "system", text: `⚡ ${genSpeed} (generation)` }]);
       debug.log("turn complete", { turns: result.turns, usage: result.usage });
     } catch (err) {
+      flushStream(); // preserve whatever streamed before the error/abort
       if (degenerated) {
         aborted = true; // mark aborted so any /goal loop also halts (re-running would re-collapse)
         setMessages((prev) => [...prev, { id: `deg-${Date.now()}`, role: "system", text:
@@ -1254,6 +1368,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
         setErrorLine(err instanceof Error ? err.message : String(err));
       }
     } finally {
+      if (flushTimerRef.current) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null; }
       abortRef.current = null;
       setBusy(false);
     }
