@@ -3,6 +3,8 @@
 // (bun run) it reads the git HEAD short SHA from .git.
 import { test, expect } from "bun:test";
 import { execSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { devGitSha, VERSION } from "../src/version";
 
 test("devGitSha returns a 7-hex short SHA read from .git", () => {
@@ -20,8 +22,10 @@ test("it matches git's own HEAD (so a stale checkout shows a different SHA)", ()
   expect(devGitSha()).toBe(head);
 });
 
-test("VERSION carries the SHA in dev mode (bun run), not a frozen 'v0.1.0'", () => {
-  // Either the baked build version (0.1.0+sha) or the dev fallback (0.1.0-dev+sha),
-  // but never a hardcoded constant with no commit info.
-  expect(VERSION).toMatch(/^0\.1\.0(-dev)?\+[0-9a-f]{7}/);
+test("VERSION carries the SHA in dev mode (bun run), not a frozen constant", () => {
+  // The base semver comes from package.json (so it never drifts — the whole point
+  // of the version.ts fix), followed by the -dev tag (source run) and the git
+  // short SHA. Never a hardcoded version with no commit info.
+  const pkg = (JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8")) as { version: string }).version;
+  expect(VERSION).toMatch(new RegExp(`^${pkg.replace(/\./g, "\\.")}(-dev)?\\+[0-9a-f]{7}`));
 });
