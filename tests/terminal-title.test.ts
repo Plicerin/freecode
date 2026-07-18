@@ -15,6 +15,13 @@ describe("titleSequence", () => {
     expect(titleSequence(`a${BEL}b${ESC}c\n`)).toBe(`${ESC}]0;abc${BEL}`);
   });
 
+  test("strips C1 controls (U+0080–U+009F) but keeps printable Unicode/emoji", () => {
+    const ST = String.fromCharCode(0x9c); // C1 String Terminator — could truncate the OSC
+    const C1 = String.fromCharCode(0x80); // a C1 control
+    // The accented letter and the emoji (both > U+009F) must survive untouched.
+    expect(titleSequence(`a${ST}b${C1}c é 🚀`)).toBe(`${ESC}]0;abc é 🚀${BEL}`);
+  });
+
   test("caps the title length", () => {
     const seq = titleSequence("x".repeat(200));
     expect(seq.length).toBeLessThanOrEqual(1 + 3 + 60 + 1); // ESC + ]0; + (<=60) + BEL
