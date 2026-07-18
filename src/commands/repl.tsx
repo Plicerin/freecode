@@ -10,6 +10,7 @@ import { buildToolRegistry, toolListToSystemPrompt } from "../tools/registry";
 import { createPermissionEngine, approvalDecisionForKey, type ApprovalCallback, type ApprovalDecision, type ApprovalRequest, type PermissionEngine } from "../permissions/modes";
 import { makeGrantStore } from "../config/permission-grants";
 import { VERSION } from "../version";
+import { checkForUpdate, baseVersion, UPDATE_HINT } from "../agent/update-check";
 import { runAgentLoop } from "../agent/loop";
 import { branch as gitBranch, commitPushPr, issue as ghIssue, prComments } from "./git-workflow";
 import { createAgentTool } from "../tools/agent";
@@ -1000,6 +1001,20 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
         `(This doesn't affect your files, and your context is preserved.)` }]);
     }, 30_000);
     return () => clearInterval(id);
+  }, []);
+
+  // Startup update check: npm installs only, throttled to ~daily, silent on any
+  // failure. A one-line nudge when a newer version is published — so a run-only
+  // machine can't unknowingly sit on stale code (which is exactly how the old
+  // auto-`git pull` clone model failed, silently, for days).
+  useEffect(() => {
+    void (async () => {
+      try {
+        const latest = await checkForUpdate();
+        if (latest) setMessages((prev) => [...prev, { id: "update-notice", role: "system",
+          text: `↑ freecode ${latest} is available (you have ${baseVersion(VERSION)}) — run: ${UPDATE_HINT}` }]);
+      } catch { /* never let the update check disrupt startup */ }
+    })();
   }, []);
 
   // Record session context once (no-op unless the activity log is enabled).

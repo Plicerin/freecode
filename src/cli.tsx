@@ -72,6 +72,11 @@ async function main(): Promise<void> {
     await startRepl({ resumeId: process.argv[3], flags: {} });
     return;
   }
+  // `freecode update` — self-update the global npm install (git pull for a clone).
+  if (process.argv[2] === "update") {
+    const { runUpdate } = await import("./commands/update");
+    process.exit(await runUpdate());
+  }
   // `freecode bg-exec <id>` — the hidden worker the detached background child re-enters.
   if (process.argv[2] === "bg-exec") {
     const { runBgExec } = await import("./commands/background-cli");
