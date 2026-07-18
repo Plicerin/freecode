@@ -7,11 +7,19 @@
 
 const ESC = String.fromCharCode(27); // \x1b
 const BEL = String.fromCharCode(7); // \x07
-const DEL = String.fromCharCode(127); // \x7f
 
-/** Clean a title: drop control chars (incl. an ESC/BEL that could break out), cap. */
+/** Clean a title: drop C0 controls (< U+0020), DEL (U+007F), and C1 controls
+ *  (U+0080–U+009F) — any of which (an ESC/BEL, or C1 ST/OSC/CSI) could break out
+ *  of or truncate the OSC string in terminals that decode C1 — then cap. Printable
+ *  code points above U+009F (Unicode text, emoji, CJK) are kept intact. */
 function clean(title: string): string {
-  return [...title].filter((c) => c >= " " && c !== DEL).join("").slice(0, 60);
+  return [...title]
+    .filter((c) => {
+      const cp = c.codePointAt(0)!;
+      return cp >= 0x20 && cp !== 0x7f && !(cp >= 0x80 && cp <= 0x9f);
+    })
+    .join("")
+    .slice(0, 60);
 }
 
 /** OSC 0 sets both the icon name and the window/tab title. */
