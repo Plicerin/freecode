@@ -3,6 +3,15 @@ import { type CliFlags } from "./config/loader";
 import { debug } from "./utils/debug";
 import { VERSION } from "./version";
 
+// Default to the PRODUCTION React build. React's DEV build emits performance-track
+// measures on every commit that Node's timeline never frees → a long TUI session
+// leaks to GBs (the OOM root cause). The bundle is compiled production via
+// build.mjs; this covers SOURCE runs (`bun run src/cli.tsx`), which load React
+// from node_modules at runtime — and it runs before the dynamic import of the
+// REPL (and thus React). A dev can opt back into dev React with NODE_ENV=development.
+// Bracket form so esbuild's `process.env.NODE_ENV` define doesn't rewrite the assignment.
+if (!process.env["NODE_ENV"]) process.env["NODE_ENV"] = "production";
+
 interface ParsedArgs {
   prompt?: string;
   print?: boolean;

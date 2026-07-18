@@ -685,8 +685,6 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
   const lastActivityRef = useRef(0);
   // Emit the "generating very slowly" warning at most once per turn.
   const crawlWarnedRef = useRef(false);
-  // Emit the high-memory warning at most once per process.
-  const heapWarnedRef = useRef(false);
   const [pending, setPending] = useState<ApprovalRequest | null>(null);
   // Interactive resume picker: when open, ↑/↓ choose and Enter resumes.
   const [picker, setPicker] = useState<{ items: SessionMeta[]; idx: number } | null>(null);
@@ -980,28 +978,6 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
     return () => clearInterval(id);
   }, [busy]);
 
-  // Heap-pressure watchdog. The terminal UI's renderer (Ink) retains a little
-  // heap on EVERY render, so a very long session — especially a marathon /goal
-  // run — can climb toward Node's ~4GB heap cap and hard-crash with no warning
-  // (observed: OOM at idle after ~24 min). Coalesced streaming slows this a lot
-  // but doesn't eliminate the underlying per-render retention. Surface ONE
-  // warning well before the wall: the session is on disk, so a restart + /resume
-  // loses nothing — and a restart is the only thing that actually reclaims the
-  // retained heap (/new does not). Cheap: one memoryUsage() read every 30s.
-  useEffect(() => {
-    const id = setInterval(() => {
-      if (heapWarnedRef.current) return;
-      const used = process.memoryUsage().heapUsed;
-      if (used < 2_200_000_000) return; // ~2.2GB, comfortably below the ~4GB cap
-      heapWarnedRef.current = true;
-      const sid = sessionRef.current?.id;
-      setMessages((prev) => [...prev, { id: `heap-${Date.now()}`, role: "warning", text:
-        `⚠ Memory is high (${Math.round(used / 1048576)} MB). Very long sessions accumulate memory in the terminal UI and can eventually crash. ` +
-        `Your work is saved${sid ? ` — restart freecode and run \`/resume\` (or \`freecode resume ${sid}\`)` : ""} to reclaim it. ` +
-        `(This doesn't affect your files, and your context is preserved.)` }]);
-    }, 30_000);
-    return () => clearInterval(id);
-  }, []);
 
   // Startup update check: npm installs only, throttled to ~daily, silent on any
   // failure. A one-line nudge when a newer version is published — so a run-only
