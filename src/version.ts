@@ -56,10 +56,23 @@ export function devGitSha(): string | null {
   }
 }
 
+/** The base version from package.json (next to this file's dir), so the dev-mode
+ *  string never drifts from the real version the way a hardcoded literal did. */
+function pkgVersion(): string {
+  try {
+    const raw = readFileSync(join(moduleDir(), "..", "package.json"), "utf8");
+    const v = (JSON.parse(raw) as { version?: unknown }).version;
+    return typeof v === "string" && v ? v : "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
+
 export const VERSION: string =
   typeof __FREECODE_VERSION__ !== "undefined" && __FREECODE_VERSION__
     ? __FREECODE_VERSION__
     : (() => {
         const sha = devGitSha();
-        return sha ? `0.1.0-dev+${sha}` : "0.1.0-dev";
+        const base = pkgVersion();
+        return sha ? `${base}-dev+${sha}` : `${base}-dev`;
       })();

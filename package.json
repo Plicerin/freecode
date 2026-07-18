@@ -1,6 +1,6 @@
 {
   "name": "@vrocket/freecode",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "A universal AI execution layer built for correctness. Runs any model from any provider and validates its own outputs by default — a consistent, trustworthy interface for AI development, without vendor lock-in or manual verification overhead.",
   "type": "module",
   "license": "MIT",
