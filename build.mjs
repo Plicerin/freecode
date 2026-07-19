@@ -49,7 +49,10 @@ await build({
 const shim = `#!/usr/bin/env node
 // Force React's production build before anything imports React (see build.mjs).
 if (!process.env.NODE_ENV) process.env.NODE_ENV = "production";
-import("./main.js");
+// Handle a LOAD/eval failure of the bundle (e.g. a missing/mismatched react|ink
+// dependency) deterministically — a clean message + exit 1 instead of an ugly
+// UnhandledPromiseRejection. Errors inside main() are handled there via .catch.
+import("./main.js").catch((err) => { console.error(err && err.stack || err); process.exit(1); });
 `;
 writeFileSync(join(root, "dist/cli.js"), shim);
 
