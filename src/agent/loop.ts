@@ -8,7 +8,7 @@ import { toolListToSystemPrompt } from "../tools/registry";
 import { ContextTracker } from "./context";
 import { estimateMessagesTokens, trimToFit } from "./token-estimate";
 import { overclaimWarning, editClaimWithoutChange } from "./overclaim";
-import { looksLikeTextToolCall, announcedNextActionWithoutCalling } from "./text-tool-call";
+import { looksLikeTextToolCall, announcedNextActionWithoutCalling, filterTextToolCalls, shouldParseTextToolCalls } from "./text-tool-call";
 import { parseImageLimit, isImageUnsupported, capImagesTo, countImages } from "./image-cap";
 import { parseContextLimit } from "./context-limit";
 import { isJunkResponse, isBinaryGarbage } from "./degeneration";
@@ -287,7 +287,15 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
         turnToolCalls = [];
         sawError = false;
         endReason = undefined;
-        for await (const e of opts.provider.stream(req)) {
+        // For providers whose servers may not emit structured tool calls (local
+        // model servers, OpenRouter), parse text-form tool-call markup out of the
+        // content stream into real tool_call events and strip the markup (incl. the
+        // stray closing tags Qwen/llama.cpp leaks). No-op for native-tool providers.
+        const rawStream = opts.provider.stream(req);
+        const stream = shouldParseTextToolCalls(opts.provider.id, getEnv("FREECODE_PARSE_TEXT_TOOL_CALLS"))
+          ? filterTextToolCalls(rawStream, new Set((req.tools ?? []).map((t) => t.name)))
+          : rawStream;
+        for await (const e of stream) {
           emitted = true;
           switch (e.type) {
             case "text_delta":
