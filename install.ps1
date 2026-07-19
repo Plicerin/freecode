@@ -37,17 +37,47 @@ Ok "Installed. 'freecode' is on your PATH."
 
 # --- Remove the OLD auto-updating source launcher (it SHADOWED the npm install) ---
 # A PowerShell function named 'freecode' beats a PATH executable, so the old
-# installer's profile function ran a git clone instead of what you installed.
-$profilePath = $PROFILE.CurrentUserAllHosts
-if ($profilePath -and (Test-Path $profilePath)) {
-  $existing = Get-Content $profilePath -Raw
-  $cleaned = [regex]::Replace($existing, "(?s)# >>> freecode launcher.*?# <<< freecode launcher[^\r\n]*\r?\n?", "")
-  $cleaned = ($cleaned -split "`r?`n" | Where-Object { $_ -notmatch '^\s*function\s+freecode\s*\{.*bun.*cli\.tsx' }) -join "`n"
-  if ($cleaned -ne $existing) {
-    [System.IO.File]::WriteAllText($profilePath, $cleaned)
-    Warn "Removed the old auto-updating 'freecode' launcher from your PowerShell profile (it was shadowing the npm install)."
-    Warn "Open a NEW terminal so the change takes effect."
+# installer's profile function ran a bun/git-clone source build instead of what
+# you installed. It can hide in ANY of the profile files: Windows PowerShell 5.1
+# (Documents\WindowsPowerShell\) and PowerShell 7 (Documents\PowerShell\) use
+# DIFFERENT folders, and each has profile.ps1 (all hosts) + Microsoft.PowerShell_
+# profile.ps1 (current host). Documents may also be OneDrive-redirected. Scrub
+# every candidate regardless of which edition is running this script — cleaning
+# only the current edition's $PROFILE (the old bug) left the launcher in place.
+$docRoots = @(
+  [Environment]::GetFolderPath("MyDocuments"),
+  (Join-Path $HOME "Documents"),
+  (Join-Path $HOME "OneDrive\Documents")
+) | Where-Object { $_ } | Select-Object -Unique
+$candidates = @()
+foreach ($doc in $docRoots) {
+  foreach ($edition in @("WindowsPowerShell", "PowerShell")) {
+    foreach ($hostFile in @("profile.ps1", "Microsoft.PowerShell_profile.ps1")) {
+      $candidates += (Join-Path $doc (Join-Path $edition $hostFile))
+    }
   }
+}
+$candidates = $candidates | Select-Object -Unique
+$removedAny = $false
+foreach ($profilePath in $candidates) {
+  if (-not (Test-Path $profilePath)) { continue }
+  $existing = Get-Content $profilePath -Raw
+  # (1) marker-block form:  # >>> freecode launcher ... # <<< freecode launcher
+  $cleaned = [regex]::Replace($existing, "(?s)# >>> freecode launcher.*?# <<< freecode launcher[^\r\n]*\r?\n?", "")
+  # (2) bare one-line function form:  function freecode { ... src\cli.tsx ... }
+  $cleaned = ($cleaned -split "`r?`n" | Where-Object { $_ -notmatch '^\s*function\s+freecode\b.*cli\.tsx' }) -join "`n"
+  if ($cleaned -ne $existing) {
+    try {
+      [System.IO.File]::WriteAllText($profilePath, $cleaned)
+      Warn ("Removed the old 'freecode' launcher from " + $profilePath + " (it was shadowing the npm install).")
+      $removedAny = $true
+    } catch {
+      Warn ("Found the old 'freecode' launcher in " + $profilePath + " but could not edit it: " + $_.Exception.Message)
+    }
+  }
+}
+if ($removedAny) {
+  Warn "Open a NEW terminal so the change takes effect (the launcher is cached in your current session)."
 }
 
 # --- Shared memory config (non-destructive) ---

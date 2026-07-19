@@ -1,5 +1,6 @@
 import type { ChatMessage, ChatRequest, ModelInfo, Provider, StreamEvent, TokenUsage } from "./types";
 import { friendlyError, makeError } from "./friendly-errors";
+import { parseRetryAfterMs } from "./retry-after";
 import { zodToJsonSchema } from "./schema-util";
 import { debug } from "../utils/debug";
 import { getEnv } from "../utils/env";
@@ -227,8 +228,14 @@ export class OpenAICompatProvider implements Provider {
     if (!resp.ok || !resp.body) {
       watchdog.clear();
       const text = await resp.text().catch(() => "");
-      const err = new Error(`${resp.status} ${text}`) as Error & { status?: number };
+      const err = new Error(`${resp.status} ${text}`) as Error & { status?: number; retryAfterMs?: number };
       err.status = resp.status;
+      // Capture the provider's own reset signal so the retry layer waits exactly
+      // that long instead of guessing (the OpenRouter/NIM 429-cascade fix).
+      if (resp.status === 429 || resp.status === 503) {
+        const ra = parseRetryAfterMs(resp.headers, Date.now());
+        if (ra !== undefined) err.retryAfterMs = ra;
+      }
       throw friendlyError(err, this.id, req.model);
     }
 

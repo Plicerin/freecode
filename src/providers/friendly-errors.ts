@@ -9,6 +9,15 @@ export function makeError(provider: string, message: string, code?: string, retr
   return err;
 }
 
+/** A retryable error that carries a parsed Retry-After delay (ms) forward, so the
+ *  retry layer can honor the provider's own reset time instead of guessing. */
+function retryableError(message: string, retryAfterMs?: number): ProviderError {
+  const e = new Error(message) as ProviderError;
+  e.retryable = true;
+  if (typeof retryAfterMs === "number") e.retryAfterMs = retryAfterMs;
+  return e;
+}
+
 export function friendlyError(err: unknown, provider: string, model?: string): Error {
   if (!(err instanceof Error)) return new Error(String(err));
   const code = (err as { code?: string }).code ?? "";
@@ -45,14 +54,13 @@ export function friendlyError(err: unknown, provider: string, model?: string): E
     return new Error(`${provider} returned 404 for ${model ? `model "${model}"` : "the request"} — the model may be unavailable, OR the endpoint/baseUrl is wrong or the server is down. Check the endpoint/server, then try /model. (${err.message})`);
   }
   if (status === 429 || code === "rate_limit_exceeded" || msg.includes("rate limit") || code === "RESOURCE_EXHAUSTED") {
-    const e = new Error(`Rate limited by ${provider} — retrying with backoff`) as Error & { retryable: boolean };
-    e.retryable = true;
-    return e;
+    const ra = (err as { retryAfterMs?: number }).retryAfterMs;
+    const when = typeof ra === "number" ? ` — waiting ${Math.max(1, Math.ceil(ra / 1000))}s (provider Retry-After)` : " — retrying with backoff";
+    return retryableError(`Rate limited by ${provider}${when}`, ra);
   }
-  if (status === 529 || code === "overloaded") {
-    const e = new Error(`${provider} is overloaded — retrying`) as Error & { retryable: boolean };
-    e.retryable = true;
-    return e;
+  if (status === 529 || status === 503 || code === "overloaded") {
+    const ra = (err as { retryAfterMs?: number }).retryAfterMs;
+    return retryableError(`${provider} is overloaded — retrying`, ra);
   }
   if (msg.includes("context length") || msg.includes("context window") || msg.includes("maximum context")) {
     // Keep the ORIGINAL message: it carries the token count the loop's

@@ -7,8 +7,7 @@ import { debug } from "../utils/debug";
 import { toolListToSystemPrompt } from "../tools/registry";
 import { ContextTracker } from "./context";
 import { estimateMessagesTokens, trimToFit } from "./token-estimate";
-import { overclaimWarning, editClaimWithoutChange } from "./overclaim";
-import { looksLikeTextToolCall, announcedNextActionWithoutCalling } from "./text-tool-call";
+import { looksLikeTextToolCall, announcedNextActionWithoutCalling, filterTextToolCalls, shouldParseTextToolCalls } from "./text-tool-call";
 import { parseImageLimit, isImageUnsupported, capImagesTo, countImages } from "./image-cap";
 import { parseContextLimit } from "./context-limit";
 import { isJunkResponse, isBinaryGarbage } from "./degeneration";
@@ -28,8 +27,6 @@ export interface TurnLedger {
   verified: string[];
   observed: string[];
   believed: string[];
-  /** A loud caution when the reply's success claim isn't backed by evidence. */
-  warning?: string;
 }
 
 export interface AgentEvent {
@@ -287,7 +284,15 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
         turnToolCalls = [];
         sawError = false;
         endReason = undefined;
-        for await (const e of opts.provider.stream(req)) {
+        // For providers whose servers may not emit structured tool calls (local
+        // model servers, OpenRouter), parse text-form tool-call markup out of the
+        // content stream into real tool_call events and strip the markup (incl. the
+        // stray closing tags Qwen/llama.cpp leaks). No-op for native-tool providers.
+        const rawStream = opts.provider.stream(req);
+        const stream = shouldParseTextToolCalls(opts.provider.id, getEnv("FREECODE_PARSE_TEXT_TOOL_CALLS"))
+          ? filterTextToolCalls(rawStream, new Set((req.tools ?? []).map((t) => t.name)))
+          : rawStream;
+        for await (const e of stream) {
           emitted = true;
           switch (e.type) {
             case "text_delta":
@@ -322,7 +327,15 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
       },
       // Retry only BEFORE the first event (a 429 or a connect/stall timeout at
       // connection time). Once tokens are flowing we don't re-run a partial stream.
-      { shouldRetry: (err) => !emitted && (isRateLimitError(err) || isRetryable(err)) },
+      {
+        shouldRetry: (err) => !emitted && (isRateLimitError(err) || isRetryable(err)),
+        // Surface the wait so an honored Retry-After (which can be tens of seconds)
+        // reads as "rate limited, waiting" instead of a frozen spinner.
+        onRetry: (attempt, delayMs, err) => opts.onEvent({
+          type: "compacted",
+          text: `${(err as Error)?.message || "Rate limited"} — retry ${attempt} in ${Math.max(1, Math.round(delayMs / 1000))}s`,
+        }),
+      },
       );
       break; // stream consumed successfully
      } catch (err) {
@@ -714,20 +727,9 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
         : `changed ${changedCount} file(s) without running checks — unverified`);
     }
 
-    // Two complementary honesty guards. Overclaim catches a sweeping "all done"
-    // claim that the evidence doesn't back (no verification, or a failing check).
-    // The contradiction-guard catches a more specific lie: the final reply
-    // describes an edit ("I edited the file", "the config is updated") but the
-    // ledger shows zero files changed. Layered priority: overclaim wins (it's
-    // broader); contradiction only surfaces when no sweeping claim was made.
-    const finalText = [...messages].reverse().find((m) => m.role === "assistant")?.content ?? "";
-    const claimWarn = overclaimWarning(finalText, { changedCount, verifiedCount: verified.length, anyFailed });
-    const contradictWarn = editClaimWithoutChange(finalText, changedCount);
-    const warning = (claimWarn ?? contradictWarn) ?? undefined;
-
-    if (observed.length || verified.length || believed.length || warning) {
-      logActivity(`LEDGER verified=[${verified.join("; ")}] observed=[${observed.join("; ")}] believed=[${believed.join("; ")}]${warning ? ` warning=[${warning}]` : ""}`);
-      opts.onEvent({ type: "ledger", ledger: { verified, observed, believed, warning } });
+    if (observed.length || verified.length || believed.length) {
+      logActivity(`LEDGER verified=[${verified.join("; ")}] observed=[${observed.join("; ")}] believed=[${believed.join("; ")}]`);
+      opts.onEvent({ type: "ledger", ledger: { verified, observed, believed } });
     }
   }
 

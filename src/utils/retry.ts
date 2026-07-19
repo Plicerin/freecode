@@ -11,6 +11,9 @@ export interface RetryOptions {
 }
 
 const DEFAULT_MAX = 10;
+// Cap on an honored Retry-After: respect the provider's reset, but never block a
+// turn for more than 2 minutes on a single wait (a pathological header value).
+const RETRY_AFTER_MAX_MS = 120_000;
 
 export function isRateLimitError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
@@ -27,6 +30,16 @@ function expBackoff(attempt: number, baseMs: number, maxMs: number, jitter: bool
   const exp = Math.min(maxMs, baseMs * 2 ** attempt);
   if (!jitter) return exp;
   return Math.floor(exp * (0.5 + Math.random() * 0.5));
+}
+
+/** Delay before the next retry. Honors a provider-supplied Retry-After / reset
+ *  (err.retryAfterMs) — capped, plus a small buffer so we don't retry exactly at
+ *  the boundary and re-trip the limit — otherwise falls back to exponential
+ *  backoff. `attempt` is zero-based. Pure, so the policy is testable without sleeping. */
+export function nextRetryDelayMs(err: unknown, attempt: number, baseMs: number, maxMs: number, jitter: boolean): number {
+  const hinted = (err as { retryAfterMs?: number })?.retryAfterMs;
+  if (typeof hinted === "number" && hinted >= 0) return Math.min(hinted + 250, RETRY_AFTER_MAX_MS);
+  return expBackoff(attempt, baseMs, maxMs, jitter);
 }
 
 export async function withRetry<T>(
@@ -52,7 +65,7 @@ export async function withRetry<T>(
         }
         throw err;
       }
-      const delay = expBackoff(attempt - 1, baseMs, maxMs, jitter);
+      const delay = nextRetryDelayMs(err, attempt - 1, baseMs, maxMs, jitter);
       debug.warn(`retry ${attempt} in ${delay}ms`, String(err));
       opts.onRetry?.(attempt, delay, err);
       await new Promise((r) => setTimeout(r, delay));

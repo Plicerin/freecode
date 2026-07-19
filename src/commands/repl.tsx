@@ -38,7 +38,7 @@ import { Vault } from "../config/vault";
 import { loadCustomCommands, expandCommand } from "./custom-commands";
 import { executeBench, formatBenchPlain } from "./bench";
 import { previewToolResult } from "../tui/preview";
-import { type Confidence, nextConfidence, attachWarning } from "../tui/confidence";
+import { type Confidence, nextConfidence } from "../tui/confidence";
 import { MarkdownBody } from "../tui/markdown-render";
 import { BRACKET_PASTE_ON, BRACKET_PASTE_OFF, hasPasteStart, pastePlaceholder, expandPastes, shouldCollapse, normalizeNewlines } from "../tui/paste";
 import { tokensPerSecond, estTokens, formatSpeed, streamHealth } from "../tui/speed";
@@ -83,12 +83,6 @@ export interface UiMessage {
   text: string;
   toolName?: string;
   ok?: boolean;
-  // Sidecar warning attached to an ASSISTANT bubble by attachWarning in
-  // src/tui/confidence.ts. Rendered as a round-bordered block IMMEDIATELY
-  // below the assistant prose so the contradiction-guard / overclaim
-  // caution reads as PART OF the turn (not a post-script line dropped at
-  // bottom). The renderer in MessageLine is the only consumer.
-  warning?: string;
 }
 
 export type StaticItem =
@@ -459,20 +453,7 @@ function MessageLine({ m, theme }: { m: UiMessage; theme: ReturnType<typeof make
         </Box>
       </Box>
     );
-    // attachWarning (confidence.ts) plants a `m.warning` sidecar here when the
-    // contradiction-guard / overclaim-guard fired for this turn. Paint it as a
-    // round amber-bordered block IMMEDIATELY below the prose — same logical turn,
-    // NOT a post-script line dropped at the transcript end. Round corners +
-    // warning-color border echo the approval-prompt surface ("stop and look").
-    if (!m.warning) return <Box marginTop={1}>{body}</Box>;
-    return (
-      <Box flexDirection="column" marginTop={1}>
-        {body}
-        <Box borderStyle="round" borderColor={theme.hex.warning} paddingX={1} marginTop={1} marginLeft={2}>
-          <Text color={theme.hex.warning} bold>{"⚠ "}{m.warning}</Text>
-        </Box>
-      </Box>
-    );
+    return <Box marginTop={1}>{body}</Box>;
   }
   // YOUR prompt stands out: a blank line above sets each exchange apart, and the
   // emoji + bold + brand color make it easy to find when scanning back.
@@ -1300,20 +1281,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
             if (L.verified.length) lines.push(`✓ verified  ${L.verified.join("; ")}`);
             if (L.observed.length) lines.push(`· observed  ${L.observed.join("; ")}`);
             if (L.believed.length) lines.push(`~ believed  ${L.believed.join("; ")}`);
-            // Sidecar the contradiction-guard / overclaim warning onto the FINAL
-            // assistant bubble (via attachWarning) instead of letting it float
-            // post-loop at the bottom of the transcript. The renderer paints
-            // it as a round amber-bordered block below the assistant prose in
-            // the same React subtree — visually part of the turn, not a post-
-            // script line. (See MessageLine's assistant branch.)
-            setMessages((prev) => {
-              let next = prev;
-              if (lines.length) next = [...next, { id: `led-${Date.now()}-${next.length}`, role: "ledger", text: lines.join("\n") }];
-              if (L.warning) {
-                next = attachWarning(next, L.warning);
-              }
-              return next;
-            });
+            if (lines.length) setMessages((prev) => [...prev, { id: `led-${Date.now()}-${prev.length}`, role: "ledger", text: lines.join("\n") }]);
           } else if (e.type === "error" && e.error) {
             setErrorLine(e.error);
           }
