@@ -7,7 +7,6 @@ import { debug } from "../utils/debug";
 import { toolListToSystemPrompt } from "../tools/registry";
 import { ContextTracker } from "./context";
 import { estimateMessagesTokens, trimToFit } from "./token-estimate";
-import { overclaimWarning, editClaimWithoutChange } from "./overclaim";
 import { looksLikeTextToolCall, announcedNextActionWithoutCalling, filterTextToolCalls, shouldParseTextToolCalls } from "./text-tool-call";
 import { parseImageLimit, isImageUnsupported, capImagesTo, countImages } from "./image-cap";
 import { parseContextLimit } from "./context-limit";
@@ -28,8 +27,6 @@ export interface TurnLedger {
   verified: string[];
   observed: string[];
   believed: string[];
-  /** A loud caution when the reply's success claim isn't backed by evidence. */
-  warning?: string;
 }
 
 export interface AgentEvent {
@@ -730,20 +727,9 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
         : `changed ${changedCount} file(s) without running checks — unverified`);
     }
 
-    // Two complementary honesty guards. Overclaim catches a sweeping "all done"
-    // claim that the evidence doesn't back (no verification, or a failing check).
-    // The contradiction-guard catches a more specific lie: the final reply
-    // describes an edit ("I edited the file", "the config is updated") but the
-    // ledger shows zero files changed. Layered priority: overclaim wins (it's
-    // broader); contradiction only surfaces when no sweeping claim was made.
-    const finalText = [...messages].reverse().find((m) => m.role === "assistant")?.content ?? "";
-    const claimWarn = overclaimWarning(finalText, { changedCount, verifiedCount: verified.length, anyFailed });
-    const contradictWarn = editClaimWithoutChange(finalText, changedCount);
-    const warning = (claimWarn ?? contradictWarn) ?? undefined;
-
-    if (observed.length || verified.length || believed.length || warning) {
-      logActivity(`LEDGER verified=[${verified.join("; ")}] observed=[${observed.join("; ")}] believed=[${believed.join("; ")}]${warning ? ` warning=[${warning}]` : ""}`);
-      opts.onEvent({ type: "ledger", ledger: { verified, observed, believed, warning } });
+    if (observed.length || verified.length || believed.length) {
+      logActivity(`LEDGER verified=[${verified.join("; ")}] observed=[${observed.join("; ")}] believed=[${believed.join("; ")}]`);
+      opts.onEvent({ type: "ledger", ledger: { verified, observed, believed } });
     }
   }
 
