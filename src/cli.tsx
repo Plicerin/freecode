@@ -3,14 +3,16 @@ import { type CliFlags } from "./config/loader";
 import { debug } from "./utils/debug";
 import { VERSION } from "./version";
 
-// Default to the PRODUCTION React build for SOURCE runs (`bun run src/cli.tsx`),
-// which load React from node_modules at runtime. React's DEV build emits a
-// performance-track measure every commit that Node never frees → a long TUI
-// session leaks to GBs (the OOM root cause). This runs before the dynamic import
-// of the REPL (and thus React). The published BUNDLE handles this in its bin shim
-// instead (build.mjs) — there main.js's hoisted React import evaluates before
-// this line. A dev can opt into dev React with NODE_ENV=development.
-if (!process.env.NODE_ENV) process.env.NODE_ENV = "production";
+// NOTE: we deliberately do NOT set process.env.NODE_ENV here. NODE_ENV must be
+// decided BEFORE the process starts. Bun picks its JSX runtime from NODE_ENV at
+// startup (production `jsx`/classic vs the dev automatic `jsxDEV`), so flipping
+// NODE_ENV here — after Bun has already transpiled the JSX — can desync React's
+// runtime mode from the emitted JSX and crash ("jsxDEV is not a function" once
+// React is production). React's DEV build also leaks (a performance-track measure
+// per commit → GBs over a long TUI session), so we still want production, we just
+// set it in the right place: the SOURCE launcher exports NODE_ENV=production before
+// invoking Bun, and the published BUNDLE sets it in its bin shim (build.mjs) before
+// importing React. A dev gets DEV React by simply leaving NODE_ENV unset (`bun run dev`).
 
 interface ParsedArgs {
   prompt?: string;
