@@ -74,6 +74,10 @@ export interface ProviderError extends Error {
   code?: string;
   retryable?: boolean;
   provider?: string;
+  /** ms to wait before retrying, parsed from the provider's Retry-After /
+   *  x-ratelimit-reset headers on a 429/503. The retry layer honors this over its
+   *  exponential-backoff guess so we don't retry too early and re-trip the limit. */
+  retryAfterMs?: number;
 }
 
 /** Richer per-model metadata, when the provider's catalog exposes it (e.g.

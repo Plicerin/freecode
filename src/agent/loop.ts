@@ -330,7 +330,15 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
       },
       // Retry only BEFORE the first event (a 429 or a connect/stall timeout at
       // connection time). Once tokens are flowing we don't re-run a partial stream.
-      { shouldRetry: (err) => !emitted && (isRateLimitError(err) || isRetryable(err)) },
+      {
+        shouldRetry: (err) => !emitted && (isRateLimitError(err) || isRetryable(err)),
+        // Surface the wait so an honored Retry-After (which can be tens of seconds)
+        // reads as "rate limited, waiting" instead of a frozen spinner.
+        onRetry: (attempt, delayMs, err) => opts.onEvent({
+          type: "compacted",
+          text: `${(err as Error)?.message || "Rate limited"} — retry ${attempt} in ${Math.max(1, Math.round(delayMs / 1000))}s`,
+        }),
+      },
       );
       break; // stream consumed successfully
      } catch (err) {
