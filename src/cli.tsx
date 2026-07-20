@@ -3,16 +3,27 @@ import { type CliFlags } from "./config/loader";
 import { debug } from "./utils/debug";
 import { VERSION } from "./version";
 
-// NOTE: we deliberately do NOT set process.env.NODE_ENV here. NODE_ENV must be
-// decided BEFORE the process starts. Bun picks its JSX runtime from NODE_ENV at
-// startup (production `jsx`/classic vs the dev automatic `jsxDEV`), so flipping
-// NODE_ENV here — after Bun has already transpiled the JSX — can desync React's
-// runtime mode from the emitted JSX and crash ("jsxDEV is not a function" once
-// React is production). React's DEV build also leaks (a performance-track measure
-// per commit → GBs over a long TUI session), so we still want production, we just
-// set it in the right place: the SOURCE launcher exports NODE_ENV=production before
-// invoking Bun, and the published BUNDLE sets it in its bin shim (build.mjs) before
-// importing React. A dev gets DEV React by simply leaving NODE_ENV unset (`bun run dev`).
+// Default SOURCE runs to PRODUCTION React. React's DEV build emits a performance-
+// track measure on EVERY commit that the runtime never frees, so a long TUI session
+// climbs until the engine dies — V8 OOM under Node, JSC "MemoryExhaustion" under Bun.
+//
+// This MUST live here and not only in a launcher. freecode is started by several
+// different launchers across machines; the ones that don't export NODE_ENV silently
+// ran DEV React and crashed (the 0.1.7 regression on mazinger, where an auto-updating
+// `bun run …/src/cli.tsx` launcher sets no env). Runs before the dynamic import of
+// the REPL — the first thing that pulls in React.
+//
+// Safe because this project's JSX is CLASSIC (tsconfig "jsx": "react" → both Bun and
+// esbuild emit React.createElement, which exists in dev AND production React). It
+// would NOT be safe under the automatic runtime: Bun picks jsx vs jsxDEV from NODE_ENV
+// at STARTUP, so flipping it here after transpile would leave jsxDEV calls hitting a
+// production React ("jsxDEV is not a function"). tests/jsx-runtime.test.ts locks the
+// classic transpile so that precondition can't regress silently.
+//
+// The published BUNDLE also sets NODE_ENV in its bin shim (build.mjs) before importing
+// React; this is the belt-and-braces for source runs. Opt into DEV React explicitly
+// with NODE_ENV=development.
+if (!process.env.NODE_ENV) process.env.NODE_ENV = "production";
 
 interface ParsedArgs {
   prompt?: string;
