@@ -7,7 +7,7 @@ import { debug } from "../utils/debug";
 import { toolListToSystemPrompt } from "../tools/registry";
 import { ContextTracker } from "./context";
 import { estimateMessagesTokens, trimToFit } from "./token-estimate";
-import { looksLikeTextToolCall, announcedNextActionWithoutCalling, filterTextToolCalls, shouldParseTextToolCalls } from "./text-tool-call";
+import { looksLikeTextToolCall, filterTextToolCalls, shouldParseTextToolCalls } from "./text-tool-call";
 import { parseImageLimit, isImageUnsupported, capImagesTo, countImages } from "./image-cap";
 import { parseContextLimit } from "./context-limit";
 import { isJunkResponse, isBinaryGarbage } from "./degeneration";
@@ -139,13 +139,6 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
   // provider's own 400, then applied proactively for the rest of the session).
   let imageLimit: number | null = null;
 
-  // Auto-continue: when a reply is cut off at the output cap mid-thought (no tool
-  // call), resume it automatically instead of dead-ending and making the user
-  // type "continue". Bounded so a model that just reasons in circles can't loop
-  // forever; the counter resets whenever the model actually acts (calls a tool).
-  const rawAutoContinue = Number.parseInt(process.env.FREECODE_MAX_AUTO_CONTINUE ?? "3", 10);
-  const MAX_AUTO_CONTINUE = Number.isFinite(rawAutoContinue) && rawAutoContinue >= 0 ? rawAutoContinue : 3;
-  let autoContinues = 0;
 
   // Auto-verify gate state.
   const verifyMode = opts.verifyMode ?? "off";
@@ -417,17 +410,13 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
     if (turnText.trim()) producedText = true;
     if (sawError) break;
 
-    // A reply cut off at the output cap with NO tool call was truncated
-    // mid-thought. Auto-continue so the turn finishes on its own; only warn once
-    // we've exhausted the budget (the model isn't converging).
+    // A reply cut off at the output cap (finish_reason=length) is a real
+    // truncation. We do NOT auto-continue — freecode injecting a "continue" is a
+    // nudge (puppeteering the model). Keep the partial reply, end the turn, and
+    // state the fact once so a cut-off reply isn't mysterious; the user decides
+    // whether to continue.
     if (endReason === "max_tokens" && turnToolCalls.length === 0 && !opts.signal?.aborted) {
-      if (autoContinues < MAX_AUTO_CONTINUE) {
-        autoContinues += 1;
-        messages.push({ role: "user", content: "Your previous reply was cut off at the output token limit. Continue from exactly where you left off — do not repeat what you already wrote. If you were about to call a tool, call it now instead of explaining." });
-        opts.onEvent({ type: "compacted", text: `Reply hit the output token limit — auto-continuing (${autoContinues}/${MAX_AUTO_CONTINUE})…` });
-        continue;
-      }
-      opts.onEvent({ type: "error", error: `⚠ The model's reply keeps hitting the output token limit (finish_reason=length) even after ${MAX_AUTO_CONTINUE} auto-continues — it may be stuck reasoning without converging. Raise FREECODE_MAX_OUTPUT_TOKENS, simplify the step, or try a less verbose / larger model.` });
+      opts.onEvent({ type: "error", error: `Reply hit the output token limit and was truncated — the text above is partial. Send a follow-up to continue, or raise FREECODE_MAX_OUTPUT_TOKENS.` });
     }
     // Make a silent stop legible: an empty reply, or a tool call leaked as text.
     else if (turnToolCalls.length === 0 && looksLikeTextToolCall(turnText)) {
@@ -479,23 +468,6 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
     }
 
     if (turnToolCalls.length === 0) {
-      // The model announced a next step in prose ("I'll check X") but didn't emit
-      // the tool call, then ended its turn — the "stops mid-task, needs 'continue
-      // continue'" failure on weaker local models (the same gemma keeps going in
-      // other CLIs). Instead of surrendering the turn, nudge it to ACT. Bounded by
-      // the auto-continue budget (which resets the moment it actually acts), and
-      // harmless on a false positive — a finished model just confirms it's done.
-      // Skipped when a verify is pending (handled just below) or the turn was empty
-      // (that's the genuinely-stuck case warned about above).
-      if (!opts.signal?.aborted
-          && autoContinues < MAX_AUTO_CONTINUE
-          && !(verifyEnabled && changed)
-          && (announcedNextActionWithoutCalling(turnText) || looksLikeTextToolCall(turnText))) {
-        autoContinues += 1;
-        messages.push({ role: "user", content: "You described a next step but didn't run it — your turn ended without a tool call. If there's more to do, CALL THE TOOL now instead of describing it. If you're genuinely finished, say so in one short line." });
-        opts.onEvent({ type: "compacted", text: `The model announced a step but didn't run it — nudging it to continue (${autoContinues}/${MAX_AUTO_CONTINUE})…` });
-        continue;
-      }
       // The agent is done talking. Earn the "done": if it changed files, run
       // the verify gate; on failure, feed it back and let it self-correct.
       if (verifyEnabled && changed && verifyAttempts < MAX_VERIFY && !opts.signal?.aborted) {
@@ -532,10 +504,6 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
       }
       break;
     }
-
-    // The model acted (called tools) → it's making progress, so refresh the
-    // auto-continue budget for any later truncation.
-    autoContinues = 0;
 
     // Execute tools sequentially; could parallelize later
     const pendingImages: ImagePart[] = [];
