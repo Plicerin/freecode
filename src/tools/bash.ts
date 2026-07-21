@@ -3,6 +3,7 @@ import { openSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { APP_DIR } from "../utils/paths";
+import { translateUnixCommand } from "./win-cmd-translate";
 import type { Tool } from "./types";
 
 const ArgsSchema = z.object({
@@ -63,12 +64,14 @@ export function looksLikeLongRunningServer(command: string): boolean {
 }
 
 /** Rewrite the bash-isms weak models emit into PowerShell equivalents so they don't
- *  fail. The big one: `2>/dev/null` — PowerShell treats `/dev/null` as a FILE path
- *  (`C:\dev\null`) and errors, so a model suppressing stderr the way it learned from
- *  bash breaks every time. Only unambiguous Unix-isms are touched; valid PowerShell
- *  (`2>&1`, `2>$null`) is left alone. */
+ *  fail. Two layers: (1) translate the Unix COMMANDS they reflexively reach for
+ *  (grep/head/tail/which/ls → Select-String/Get-Content/Get-Command/Get-ChildItem)
+ *  so `grep foo` works instead of "not recognized"; (2) fix redirection bash-isms —
+ *  the big one is `2>/dev/null`, which PowerShell reads as a FILE path (`C:\dev\null`)
+ *  and errors on. Both are deterministic; valid PowerShell (`2>&1`, `2>$null`) is
+ *  left alone, and command translation passes through anything it can't map faithfully. */
 export function normalizeForPowerShell(command: string): string {
-  return command
+  return translateUnixCommand(command)
     .replace(/&>\s*\/dev\/null/g, () => "*>$null")            // bash "&>" both streams
     .replace(/(\d*)>\s*\/dev\/null/g, (_m, fd) => `${fd}>$null`) // 2>/dev/null, >/dev/null, 1>/dev/null
     .replace(/\/dev\/null/g, () => "$null");                  // any leftover literal (never a real Windows path)
