@@ -99,6 +99,26 @@ function splitEveryChar(s: string): string[] {
   return [...s];
 }
 
+// Stream chunks as a given channel (text_delta or thinking_delta) and collect all
+// three outputs — used to prove tool calls are extracted from the REASONING channel.
+async function runChannel(
+  chunks: string[],
+  channel: "text_delta" | "thinking_delta",
+  known?: Set<string>,
+): Promise<{ text: string; thinking: string; calls: ToolCall[] }> {
+  async function* src(): AsyncIterable<StreamEvent> {
+    for (const c of chunks) yield { type: channel, delta: c } as StreamEvent;
+    yield { type: "end", reason: "end_turn" };
+  }
+  const text: string[] = [], thinking: string[] = [], calls: ToolCall[] = [];
+  for await (const e of filterTextToolCalls(src(), known)) {
+    if (e.type === "text_delta") text.push(e.delta);
+    else if (e.type === "thinking_delta") thinking.push(e.delta);
+    else if (e.type === "tool_call") calls.push(e.call);
+  }
+  return { text: text.join(""), thinking: thinking.join(""), calls };
+}
+
 describe("filterTextToolCalls (streaming)", () => {
   const QWEN = `<tool_call>\n<function=Glob>\n<parameter=pattern>**/*.js</parameter>\n</function>\n</tool_call>`;
 
@@ -146,6 +166,42 @@ describe("filterTextToolCalls (streaming)", () => {
     expect(text).toContain("First I check.");
     expect(text).toContain("Now the result is in.");
     expect(text).not.toContain("tool_call");
+  });
+});
+
+describe("filterTextToolCalls — REASONING channel (the Qwen3.6 leak)", () => {
+  // A reasoning model emits its tool call inside chain-of-thought (reasoning_content
+  // → thinking_delta). Filtering only the content channel left these unrun and
+  // leaking into the thinking bubble — the reported "tool calls don't show" bug.
+  const QWEN = `<tool_call>\n<function=Bash>\n<parameter=command>Get-Process node 2>&1 | Where-Object Name -eq "node"</parameter>\n</function>\n</tool_call>`;
+  const K = new Set(["Bash"]);
+
+  test("a tool call in the reasoning channel is extracted, not leaked", async () => {
+    const chunks = splitEveryChar(`The server is running. Let me check:\n${QWEN}`);
+    const { thinking, calls } = await runChannel(chunks, "thinking_delta", K);
+    expect(calls.map((c) => ({ name: c.name, arguments: c.arguments }))).toEqual([
+      { name: "Bash", arguments: { command: `Get-Process node 2>&1 | Where-Object Name -eq "node"` } },
+    ]);
+    expect(thinking).not.toContain("<tool_call>");
+    expect(thinking).not.toContain("<function=");
+    expect(thinking.trim()).toBe("The server is running. Let me check:");
+  });
+
+  test("reasoning prose without a call passes through untouched", async () => {
+    const { thinking, calls } = await runChannel(splitEveryChar("I think a < b here, so grep would work."), "thinking_delta", K);
+    expect(calls).toEqual([]);
+    expect(thinking).toBe("I think a < b here, so grep would work.");
+  });
+
+  test("same call in BOTH reasoning and content runs once (cross-channel dedup)", async () => {
+    async function* src(): AsyncIterable<StreamEvent> {
+      yield { type: "thinking_delta", delta: QWEN };
+      yield { type: "text_delta", delta: `running ${QWEN}` };
+      yield { type: "end", reason: "end_turn" };
+    }
+    const calls: ToolCall[] = [];
+    for await (const e of filterTextToolCalls(src(), K)) if (e.type === "tool_call") calls.push(e.call);
+    expect(calls).toHaveLength(1);
   });
 });
 
