@@ -39,6 +39,7 @@ import { loadCustomCommands, expandCommand } from "./custom-commands";
 import { executeBench, formatBenchPlain } from "./bench";
 import { previewToolResult } from "../tui/preview";
 import { type Confidence, nextConfidence } from "../tui/confidence";
+import { ICON, SPINNER_FRAMES } from "../tui/icons";
 import { MarkdownBody } from "../tui/markdown-render";
 import { BRACKET_PASTE_ON, BRACKET_PASTE_OFF, hasPasteStart, pastePlaceholder, expandPastes, shouldCollapse, normalizeNewlines } from "../tui/paste";
 import { tokensPerSecond, estTokens, formatSpeed, streamHealth } from "../tui/speed";
@@ -193,7 +194,7 @@ export function restoredMessagesFromEvents(events: SessionEvent[], sessionId: st
     const id = `${sessionId}-${i}`;
     if (e.kind === "user") out.push({ id, role: "user", text: e.text });
     else if (e.kind === "assistant") { if (e.text.trim()) out.push({ id, role: "assistant", text: e.text }); }
-    else if (e.kind === "tool_call") out.push({ id, role: "tool", text: `→ ${e.name}(${JSON.stringify(e.args).slice(0, 120)})`, toolName: e.name });
+    else if (e.kind === "tool_call") out.push({ id, role: "tool", text: `${ICON.toolCall} ${e.name}(${JSON.stringify(e.args).slice(0, 120)})`, toolName: e.name });
     else if (e.kind === "tool_result") out.push({ id, role: "tool", text: previewToolResult(e.output), toolName: "result", ok: e.ok });
   });
   return out;
@@ -219,20 +220,16 @@ export function inputHistoryFromEvents(events: SessionEvent[]): string[] {
 const SLASH_COMMANDS = ["/model", "/models", "/new", "/resume", "/rename", "/context", "/cost", "/memory", "/config", "/doctor", "/diff", "/commit", "/commit-push-pr", "/branch", "/issue", "/pr-comments", "/review", "/security-review", "/autofix-pr", "/explore", "/agents", "/skills", "/learn", "/goal", "/expand", "/recover", "/workflows", "/ultraplan", "/bg", "/plugins", "/provider", "/scan", "/consult", "/advisor", "/plan", "/verify", "/bench", "/log", "/mcp", "/help", "/compact", "/about", "/exit"];
 
 // Spinner frames — proof of life while a turn runs. Not the braille snake every
-// other CLI ships: this is Bubo's eye. He holds your gaze, glances right, glances
-// left, then blinks (upper lid down ◓ → shut ─ → up ◓) — a watchful eye scanning,
-// fitting a tool whose whole identity is checking before it says "done".
-// Swap-in alternatives (same render path):
-//   iris pulse:  ["◌","◍","◉","●","◉","◍"]
-//   scan sweep:  ["◴","◵","◶","◷"]
-const SPINNER_FRAMES = ["◉", "◑", "◉", "◐", "◉", "◓", "─", "◓"];
+// The "Working…" spinner + all UI glyphs come from the central icon set
+// (src/tui/icons.ts): one place to swap sets (nerd/unicode/ascii via FREECODE_ICONS)
+// and keep them consistent. SPINNER_FRAMES is the mode-resolved moon spinner.
 
 // A streamed workflow event → one status line (or null to swallow it). Shared by
 // /workflows and /ultraplan so both show live per-stage / per-task progress.
 function workflowEventLine(e: WorkflowEvent): string | null {
-  if (e.type === "stage_start") return `  ◐ stage ${e.index + 1}${e.name ? ` (${e.name})` : ""} — ${e.tasks} task${e.tasks > 1 ? "s" : ""} running…`;
+  if (e.type === "stage_start") return `  ${SPINNER_FRAMES[0]} stage ${e.index + 1}${e.name ? ` (${e.name})` : ""} — ${e.tasks} task${e.tasks > 1 ? "s" : ""} running…`;
   if (e.type === "task_activity") return `       ${e.agent ?? "general"} ${e.label}`;
-  if (e.type === "task_done") return `     ${e.ok ? "✓" : "✗"} ${e.agent ?? "general"} done`;
+  if (e.type === "task_done") return `     ${e.ok ? ICON.ok : ICON.fail} ${e.agent ?? "general"} done`;
   return null; // stage_done is implied by the next stage_start or the final output
 }
 
@@ -376,10 +373,10 @@ function providerReason(provider: string, source: string): string {
 // signals (see ../tui/confidence) — never a synthesized score.
 function ConfidenceBadge({ state, theme }: { state: Confidence; theme: ReturnType<typeof makeTheme> }): JSX.Element {
   switch (state) {
-    case "verified": return <Text color={theme.hex.success}>✓ verified</Text>;
+    case "verified": return <Text color={theme.hex.success}>{ICON.ok} verified</Text>;
     case "unverified": return <Text color={theme.hex.warning}>~ unverified</Text>;
-    case "failing": return <Text color={theme.hex.error}>✗ failing</Text>;
-    default: return <Text dimColor>· unchecked</Text>;
+    case "failing": return <Text color={theme.hex.error}>{ICON.fail} failing</Text>;
+    default: return <Text dimColor>{ICON.bullet} unchecked</Text>;
   }
 }
 
@@ -403,9 +400,9 @@ function Intro({ provider, model, endpoint, isLocal, providerNote, hasKey, theme
         <Box flexDirection="column" justifyContent="center" marginLeft={3}>
           <Banner />
           <Box marginTop={1}>
-            <Text color={theme.hex.assistant}>✦ </Text>
+            <Text color={theme.hex.assistant}>{ICON.sparkle} </Text>
             <Text>Total freedom. No guesswork.</Text>
-            <Text color={theme.hex.assistant}> ✦</Text>
+            <Text color={theme.hex.assistant}> {ICON.sparkle}</Text>
           </Box>
         </Box>
       </Box>
@@ -420,7 +417,7 @@ function Intro({ provider, model, endpoint, isLocal, providerNote, hasKey, theme
         <Text>{label("Endpoint")}<Text color={theme.user}>{endpoint}</Text></Text>
       </Box>
       <Box marginLeft={1}>
-        <Text color={theme.hex.success}>● </Text>
+        <Text color={theme.hex.success}>{ICON.ready} </Text>
         <Text color={theme.dim}>{(isLocal ? "local" : "remote").padEnd(8)}</Text>
         <Text color={theme.dim}>Ready — type </Text>
         <Text color={theme.hex.assistant}>/help</Text>
@@ -447,7 +444,7 @@ function MessageLine({ m, theme }: { m: UiMessage; theme: ReturnType<typeof make
     // step (spacing pass — the transcript was a flush wall of text before).
     const body = (
       <Box flexDirection="row">
-        <Text color={theme.hex.assistant}>● </Text>
+        <Text color={theme.hex.assistant}>{ICON.assistant} </Text>
         <Box flexDirection="column" flexGrow={1} flexShrink={1}>
           <MarkdownBody text={m.text} theme={theme} />
         </Box>
@@ -461,22 +458,22 @@ function MessageLine({ m, theme }: { m: UiMessage; theme: ReturnType<typeof make
     // Normalise any stray CR (e.g. a paste persisted before the capture-time fix,
     // or a resumed older session) so a lone "\r" can't overwrite earlier lines and
     // leave only the last one visible.
-    return <Box marginTop={1}><Text color={theme.user} bold>{"🧑 "}{normalizeNewlines(m.text)}</Text></Box>;
+    return <Box marginTop={1}><Text color={theme.user} bold>{`${ICON.user} `}{normalizeNewlines(m.text)}</Text></Box>;
   }
   // Sub-steps of the current turn — tool calls/results, reasoning, ledger, system
   // notes, inline warnings — sit indented under the reply with NO extra blank
   // line, so a run of tool calls groups tightly beneath the answer it belongs to.
   if (m.role === "warning") {
-    return <Box marginLeft={2}><Text color={theme.hex.warning} bold>{"⚠ "}{m.text}</Text></Box>;
+    return <Box marginLeft={2}><Text color={theme.hex.warning} bold>{`${ICON.warn} `}{m.text}</Text></Box>;
   }
   if (m.role === "reasoning") {
-    return <Box marginLeft={2}><Text color={theme.dim} italic>{"💭 "}{m.text}</Text></Box>;
+    return <Box marginLeft={2}><Text color={theme.dim} italic>{`${ICON.thinking} `}{m.text}</Text></Box>;
   }
   return (
     <Box marginLeft={2}>
       <Text>
-        {m.role === "tool" && <Text color={theme.tool}>⚙ </Text>}
-        {m.role === "system" && <Text color={theme.dim}>· </Text>}
+        {m.role === "tool" && <Text color={theme.hex.assistant}>{ICON.tool} </Text>}
+        {m.role === "system" && <Text color={theme.dim}>{ICON.bullet} </Text>}
         <Text color={m.role === "ledger" ? theme.dim : undefined} dimColor={m.role === "ledger"}>{m.text}</Text>
       </Text>
     </Box>
@@ -969,7 +966,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
       try {
         const latest = await checkForUpdate();
         if (latest) setMessages((prev) => [...prev, { id: "update-notice", role: "system",
-          text: `↑ freecode ${latest} is available (you have ${baseVersion(VERSION)}) — run: ${UPDATE_HINT}` }]);
+          text: `${ICON.update} freecode ${latest} is available (you have ${baseVersion(VERSION)}) — run: ${UPDATE_HINT}` }]);
       } catch { /* never let the update check disrupt startup */ }
     })();
   }, []);
@@ -1247,7 +1244,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
             burstCharsRef.current = 0; burstStartRef.current = null; // new burst → reset the speedometer
             const call = e.call;
             const tid = `t-${call.id ?? Math.random().toString(36).slice(2, 8)}`;
-            setMessages((prev) => [...prev, { id: tid, role: "tool", text: `→ ${call.name}(${JSON.stringify(call.arguments).slice(0, 120)})`, toolName: call.name }]);
+            setMessages((prev) => [...prev, { id: tid, role: "tool", text: `${ICON.toolCall} ${call.name}(${JSON.stringify(call.arguments).slice(0, 120)})`, toolName: call.name }]);
             appendEvent(sessionRef.current, { kind: "tool_call", id: call.id ?? tid, name: call.name, args: call.arguments, ts: new Date().toISOString() });
           } else if (e.type === "tool_result" && e.result) {
             const r = e.result;
@@ -1255,7 +1252,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
             const tid = `r-${rid}`;
             setMessages((prev) =>
               prev
-                .map((m) => (m.id === `t-${rid}` ? { ...m, text: m.text + (r.ok ? " ✓" : " ✗") } : m))
+                .map((m) => (m.id === `t-${rid}` ? { ...m, text: m.text + (r.ok ? ` ${ICON.ok}` : ` ${ICON.fail}`) } : m))
                 .concat([{ id: tid, role: "tool", text: previewToolResult(r.output), toolName: "result", ok: r.ok }]),
             );
             appendEvent(sessionRef.current, { kind: "tool_result", id: rid, output: r.output, ok: r.ok, durationMs: r.durationMs, ts: new Date().toISOString() });
@@ -1278,7 +1275,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
             // Drive the confidence badge from the real ledger (sticky on read-only turns).
             updateConfidence((c) => nextConfidence(c, L));
             const lines: string[] = [];
-            if (L.verified.length) lines.push(`✓ verified  ${L.verified.join("; ")}`);
+            if (L.verified.length) lines.push(`${ICON.ok} verified  ${L.verified.join("; ")}`);
             if (L.observed.length) lines.push(`· observed  ${L.observed.join("; ")}`);
             if (L.believed.length) lines.push(`~ believed  ${L.believed.join("; ")}`);
             if (lines.length) setMessages((prev) => [...prev, { id: `led-${Date.now()}-${prev.length}`, role: "ledger", text: lines.join("\n") }]);
@@ -1311,7 +1308,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
       // live "Working…" readout vanishes when the turn ends).
       if (burstStartRef.current !== null) { genMsRef.current += Date.now() - burstStartRef.current; burstStartRef.current = null; }
       const genSpeed = formatSpeed(tokensPerSecond(estTokens(genCharsRef.current), genMsRef.current));
-      if (genSpeed) setMessages((prev) => [...prev, { id: `spd-${t0}`, role: "system", text: `⚡ ${genSpeed} (generation)` }]);
+      if (genSpeed) setMessages((prev) => [...prev, { id: `spd-${t0}`, role: "system", text: `${ICON.bolt} ${genSpeed} (generation)` }]);
       debug.log("turn complete", { turns: result.turns, usage: result.usage });
     } catch (err) {
       flushStream(); // preserve whatever streamed before the error/abort
@@ -1322,7 +1319,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
           "This is a model-side failure, not your prompt — retry, or switch models with /model." }]);
       } else if (controller.signal.aborted) {
         aborted = true;
-        setMessages((prev) => [...prev, { id: `int-${Date.now()}`, role: "system", text: "⏹ Interrupted." }]);
+        setMessages((prev) => [...prev, { id: `int-${Date.now()}`, role: "system", text: `${ICON.stop} Interrupted.` }]);
       } else {
         setErrorLine(err instanceof Error ? err.message : String(err));
       }
@@ -1418,7 +1415,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
       ...conversationRef.current.slice(0, baseLen),
       { role: "user", content: `[A separate supervisor model — ${cfg.provider}:${supModel} — was consulted with the task: "${task}". Its review follows. Treat it as external feedback; any file changes it made are already on disk.]\n\n${text.trim() || "(the supervisor returned no text)"}` },
     ];
-    setMessages((prev) => [...prev, { id: `cons-end-${Date.now()}`, role: "system", text: `🧐 Supervisor (${cfg.provider}:${supModel}) finished — its review is threaded into the conversation for the primary agent.` }]);
+    setMessages((prev) => [...prev, { id: `cons-end-${Date.now()}`, role: "system", text: `${ICON.eye} Supervisor (${cfg.provider}:${supModel}) finished — its review is threaded into the conversation for the primary agent.` }]);
   }
 
   // `!<cmd>`: run a shell command yourself, right here — no agent, no round-trip.
@@ -1661,7 +1658,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
           if (goalActiveRef.current) {
             goalActiveRef.current = false; setGoalActive(false);
             abortRef.current?.abort(); // interrupt the in-flight cycle too
-            setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "◆ Goal stopped." }]);
+            setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `${ICON.goal} Goal stopped.` }]);
           } else {
             setErrorLine("No goal is running.");
           }
@@ -1683,7 +1680,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
         const verifyPlan = resolveVerify(process.cwd(), config.verify);
         goalActiveRef.current = true; setGoalActive(true);
         setMessages((prev) => [...prev, { id: `goal-${Date.now()}`, role: "system", text:
-          `◆ Goal: ${objective}\n  ${uncapped ? "Working autonomously until done (no cycle cap). " : `Working autonomously (up to ${max} cycles). `}` +
+          `${ICON.goal} Goal: ${objective}\n  ${uncapped ? "Working autonomously until done (no cycle cap). " : `Working autonomously (up to ${max} cycles). `}` +
           (verifyPlan.source === "none"
             ? "No verify command configured — DONE will be the model's word, unverified."
             : `DONE is verified with: ${verifyPlan.commands.join(" && ")}.`) +
@@ -1696,7 +1693,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
           const MAX_NO_PROGRESS = 2;
           let pendingFailure: { failedCommand: string; output: string } | null = null;
           while (goalActiveRef.current) {
-            setMessages((prev) => [...prev, { id: `gc-${Date.now()}`, role: "system", text: uncapped ? `◆ cycle ${completed + 1}` : `◆ cycle ${completed + 1}/${max}` }]);
+            setMessages((prev) => [...prev, { id: `gc-${Date.now()}`, role: "system", text: uncapped ? `${ICON.goal} cycle ${completed + 1}` : `${ICON.goal} cycle ${completed + 1}/${max}` }]);
             const prompt = pendingFailure
               ? goalVerifyFailedPrompt(objective, pendingFailure.failedCommand, pendingFailure.output)
               : goalPrompt(objective, completed);
@@ -1704,7 +1701,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
             const res = await submit(prompt);
             completed += 1;
             if (res.aborted) {
-              setMessages((prev) => [...prev, { id: `gd-${Date.now()}`, role: "system", text: `◆ Goal halted after ${completed} cycle${completed === 1 ? "" : "s"}.` }]);
+              setMessages((prev) => [...prev, { id: `gd-${Date.now()}`, role: "system", text: `${ICON.goal} Goal halted after ${completed} cycle${completed === 1 ? "" : "s"}.` }]);
               break;
             }
             const status = goalStatus(res.text);
@@ -1715,7 +1712,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
                   `✓ Model reports DONE after ${completed} cycle${completed === 1 ? "" : "s"} — but there's no verify command, so this is UNVERIFIED (its word, not checked). Add a \`verify\` command to gate future goals.` }]);
                 break;
               }
-              setMessages((prev) => [...prev, { id: `gv-${Date.now()}`, role: "system", text: `◆ Model reports DONE — verifying: ${verifyPlan.commands.join(" && ")}…` }]);
+              setMessages((prev) => [...prev, { id: `gv-${Date.now()}`, role: "system", text: `${ICON.goal} Model reports DONE — verifying: ${verifyPlan.commands.join(" && ")}…` }]);
               const v = await runVerify(verifyPlan, process.cwd());
               if (!goalActiveRef.current) break; // stopped during verification
               if (v.ok) {
@@ -1725,7 +1722,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
               verifyFails += 1;
               if (verifyFails > MAX_VERIFY_FAILS || (!uncapped && completed >= max)) {
                 setMessages((prev) => [...prev, { id: `gd-${Date.now()}`, role: "warning", text:
-                  `◆ Model reported DONE, but \`${v.failedCommand}\` kept failing after ${verifyFails} fix attempt${verifyFails === 1 ? "" : "s"} — stopping for you to review. Last error:\n${(v.output || "").slice(-600)}` }]);
+                  `${ICON.goal} Model reported DONE, but \`${v.failedCommand}\` kept failing after ${verifyFails} fix attempt${verifyFails === 1 ? "" : "s"} — stopping for you to review. Last error:\n${(v.output || "").slice(-600)}` }]);
                 break;
               }
               setMessages((prev) => [...prev, { id: `gd-${Date.now()}`, role: "system", text: `✗ Not done — \`${v.failedCommand}\` failed. Sending it back to fix (attempt ${verifyFails}/${MAX_VERIFY_FAILS}).` }]);
@@ -1737,12 +1734,12 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
             if (res.toolCalls === 0) noProgress += 1; else noProgress = 0;
             if (noProgress >= MAX_NO_PROGRESS) {
               setMessages((prev) => [...prev, { id: `gd-${Date.now()}`, role: "warning", text:
-                `◆ Stopped: ${noProgress} cycles with no tool action — the model is describing steps, not doing them. Refine the goal, or try a stronger model.` }]);
+                `${ICON.goal} Stopped: ${noProgress} cycles with no tool action — the model is describing steps, not doing them. Refine the goal, or try a stronger model.` }]);
               break;
             }
             if (!uncapped && completed >= max) {
               setMessages((prev) => [...prev, { id: `gd-${Date.now()}`, role: "system", text:
-                `◆ Reached the ${max}-cycle cap without a verified DONE. Run /goal "${objective}" to keep going.` }]);
+                `${ICON.goal} Reached the ${max}-cycle cap without a verified DONE. Run /goal "${objective}" to keep going.` }]);
               break;
             }
             // else → next cycle
@@ -2733,7 +2730,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
           })()}
           {busy && (
             <Text color={workingHealthColor()}>
-              {reducedMotion ? "•" : SPINNER_FRAMES[tick % SPINNER_FRAMES.length]} Working… <Text dimColor>({Math.max(0, Math.floor((Date.now() - busyStartRef.current) / 1000))}s · esc to interrupt{queuedCount > 0 ? ` · ${queuedCount} queued` : ""}{speedText ? ` · ⚡ ${speedText}` : ""})</Text>
+              {reducedMotion ? ICON.bullet : SPINNER_FRAMES[tick % SPINNER_FRAMES.length]} Working… <Text dimColor>({Math.max(0, Math.floor((Date.now() - busyStartRef.current) / 1000))}s · esc to interrupt{queuedCount > 0 ? ` · ${queuedCount} queued` : ""}{speedText ? ` · ${ICON.bolt} ${speedText}` : ""})</Text>
             </Text>
           )}
           {errorLine && <Text color={theme.hex.error}>! {errorLine}</Text>}
@@ -2767,7 +2764,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
             const sel = i === consultPicker.idx;
             return (
               <Text key={p} color={sel ? theme.user : undefined} dimColor={!sel}>
-                {sel ? "❯ " : "  "}{p}{p === config.provider ? "  (current)" : ""}
+                {sel ? `${ICON.prompt} ` : "  "}{p}{p === config.provider ? "  (current)" : ""}
               </Text>
             );
           })}
@@ -2793,7 +2790,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
                 {offset > 0 && <Text dimColor>{`  ↑ ${offset} more`}</Text>}
                 {slice.map((m, i) => {
                   const sel = offset + i === idx;
-                  return <Text key={m} color={sel ? theme.user : undefined} dimColor={!sel}>{sel ? "❯ " : "  "}{m}</Text>;
+                  return <Text key={m} color={sel ? theme.user : undefined} dimColor={!sel}>{sel ? `${ICON.prompt} ` : "  "}{m}</Text>;
                 })}
                 {tail > 0 && <Text dimColor>{`  ↓ ${tail} more`}</Text>}
               </>
@@ -2811,7 +2808,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
             const current = s.baseUrl === config.baseUrl;
             return (
               <Text key={s.endpoint} color={sel ? theme.user : undefined} dimColor={!sel}>
-                {sel ? "❯ " : "  "}{s.kind} · {s.endpoint}{ctx}{current ? " (current)" : ""}  <Text dimColor>({s.models.length}: {models || "n/a"})</Text>
+                {sel ? `${ICON.prompt} ` : "  "}{s.kind} · {s.endpoint}{ctx}{current ? " (current)" : ""}  <Text dimColor>({s.models.length}: {models || "n/a"})</Text>
               </Text>
             );
           })}
@@ -2837,7 +2834,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
                 {offset > 0 && <Text dimColor>{`  ↑ ${offset} more`}</Text>}
                 {slice.map((m, i) => {
                   const sel = offset + i === idx;
-                  return <Text key={m} color={sel ? theme.user : undefined} dimColor={!sel}>{sel ? "❯ " : "  "}{m}</Text>;
+                  return <Text key={m} color={sel ? theme.user : undefined} dimColor={!sel}>{sel ? `${ICON.prompt} ` : "  "}{m}</Text>;
                 })}
                 {tail > 0 && <Text dimColor>{`  ↓ ${tail} more`}</Text>}
               </>
@@ -2868,7 +2865,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
                   const isCurrent = m === model;
                   return (
                     <Text key={m} color={sel ? theme.user : undefined} dimColor={!sel}>
-                      {sel ? "❯ " : "  "}{isCurrent ? "→ " : "  "}
+                      {sel ? `${ICON.prompt} ` : "  "}{isCurrent ? "→ " : "  "}
                       {/* highlight "free" in hot pink; other parts inherit the line style */}
                       {m.split(/(free)/i).map((part, j) =>
                         /^free$/i.test(part)
@@ -2892,7 +2889,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
             const label = s.title || s.preview || "(empty session)";
             return (
               <Text key={s.id} color={sel ? theme.user : undefined} dimColor={!sel}>
-                {sel ? "❯ " : "  "}{label.padEnd(42).slice(0, 42)}  <Text dimColor>{`${s.count} msg · ${relTime(s.mtime)}`}</Text>
+                {sel ? `${ICON.prompt} ` : "  "}{label.padEnd(42).slice(0, 42)}  <Text dimColor>{`${s.count} msg · ${relTime(s.mtime)}`}</Text>
               </Text>
             );
           })}
@@ -2917,7 +2914,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
             const sel = i === Math.min(menuIdx, menuMatches.length - 1);
             return (
               <Text key={m.name} color={sel ? theme.user : undefined} dimColor={!sel}>
-                {sel ? "❯ " : "  "}{m.name}{m.desc ? `  —  ${m.desc}` : ""}
+                {sel ? `${ICON.prompt} ` : "  "}{m.name}{m.desc ? `  —  ${m.desc}` : ""}
               </Text>
             );
           })}
