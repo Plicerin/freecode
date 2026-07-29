@@ -18,14 +18,21 @@ import { redactSecrets } from "../utils/redact";
 
 export const ASSISTANT_PEER = "assistant";
 
-/** The assistant (work/task) peer id, scoped to the current project so one
- *  project's accumulated state can't be recalled into another. Derived from the
- *  project key (see project-scope.ts) as a short stable slug. Falls back to the
- *  global peer when no key is given (keeps old single-project behavior/tests). */
-export function assistantPeerFor(projectKey: string | undefined): string {
-  if (!projectKey) return ASSISTANT_PEER;
+/** Scope a peer id to a project so one project's accumulated memory can't be
+ *  recalled into another. Appends a short stable slug of the project key (see
+ *  project-scope.ts). BOTH peers are scoped — Honcho's deriver fills even the
+ *  user peer with project TASKS (not clean identity), so a global user peer
+ *  leaks project context just as badly as the assistant peer did. No key →
+ *  the bare peer id (single-project/legacy behavior + tests). */
+export function scopedPeer(base: string, projectKey: string | undefined): string {
+  if (!projectKey) return base;
   const hash = createHash("sha1").update(projectKey).digest("hex").slice(0, 12);
-  return `${ASSISTANT_PEER}-${hash}`;
+  return `${base}-${hash}`;
+}
+
+/** The assistant (work/task) peer id for a project. */
+export function assistantPeerFor(projectKey: string | undefined): string {
+  return scopedPeer(ASSISTANT_PEER, projectKey);
 }
 
 // Bound each injected representation so a large one can't blow up the prompt.
@@ -88,7 +95,9 @@ class HonchoMemoryStore implements MemoryStore {
   readonly enabled = true;
   private readonly client: HonchoClient;
   private readonly cfg: MemoryConfig;
+  private readonly userPeer: string;      // per-project human peer (identity + this project's turns)
   private readonly assistantPeer: string; // per-project work peer (see assistantPeerFor)
+  private readonly cacheScope: string;     // disk-cache key: workspace + project (never workspace alone)
   private pending: HonchoMessage[] = [];
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private bootstrapped: Promise<void> | null = null;
@@ -99,7 +108,9 @@ class HonchoMemoryStore implements MemoryStore {
 
   constructor(cfg: MemoryConfig) {
     this.cfg = cfg;
-    this.assistantPeer = assistantPeerFor(cfg.projectKey);
+    this.userPeer = scopedPeer(cfg.peer, cfg.projectKey);
+    this.assistantPeer = scopedPeer(ASSISTANT_PEER, cfg.projectKey);
+    this.cacheScope = cfg.projectKey ? `${cfg.workspace}::${cfg.projectKey}` : cfg.workspace;
     this.client = new HonchoClient({ baseUrl: cfg.baseUrl!, workspace: cfg.workspace, apiKey: cfg.apiKey });
   }
 
@@ -108,9 +119,9 @@ class HonchoMemoryStore implements MemoryStore {
     if (!this.bootstrapped) {
       this.bootstrapped = (async () => {
         await this.client.ensureWorkspace();
-        await this.client.ensurePeer(this.cfg.peer);
+        await this.client.ensurePeer(this.userPeer);
         await this.client.ensurePeer(this.assistantPeer);
-        await this.client.ensureSession(this.cfg.sessionId, [this.cfg.peer, this.assistantPeer]);
+        await this.client.ensureSession(this.cfg.sessionId, [this.userPeer, this.assistantPeer]);
       })().catch((e) => {
         this.bootstrapped = null; // allow a later retry
         throw e;
@@ -127,17 +138,17 @@ class HonchoMemoryStore implements MemoryStore {
       // (what freecode established) while the `user` peer holds preferences. Pull
       // BOTH — recalling only `user` misses the substantive continuity.
       const [userRep, assistantRep] = await Promise.all([
-        this.client.getRepresentation(this.cfg.peer, opts).catch(() => ""),
+        this.client.getRepresentation(this.userPeer, opts).catch(() => ""),
         this.client.getRepresentation(this.assistantPeer, opts).catch(() => ""),
       ]);
       let card: string[] = [];
-      if (!userRep.trim() && !assistantRep.trim()) card = await this.client.getPeerCard(this.cfg.peer).catch(() => []);
+      if (!userRep.trim() && !assistantRep.trim()) card = await this.client.getPeerCard(this.userPeer).catch(() => []);
       const block = formatMemoryBlock(userRep, assistantRep, card);
       if (block.trim()) {
         // Good recall — remember it so a later transient failure degrades to
         // "slightly stale" instead of "gone" (memory shouldn't vanish between
         // sessions just because Honcho was briefly slow at the wrong moment).
-        writeMemoryCache(this.cfg.workspace, block);
+        writeMemoryCache(this.cacheScope, block);
         this.lastRepChars = userRep.trim().length + assistantRep.trim().length;
         this.lastCardLines = card.length;
         this.cachedFromDisk = false;
@@ -145,7 +156,7 @@ class HonchoMemoryStore implements MemoryStore {
         return block;
       }
       // Empty this time — fall back to the last-known-good recall on disk.
-      const disk = readMemoryCache(this.cfg.workspace);
+      const disk = readMemoryCache(this.cacheScope);
       this.cachedFromDisk = !!disk;
       this.lastRepChars = disk ? disk.length : 0;
       this.cachedContext = disk ?? "";
@@ -153,7 +164,7 @@ class HonchoMemoryStore implements MemoryStore {
     } catch (e) {
       debug.warn("memory recall failed", String(e));
       if (!this.cachedContext) {
-        const disk = readMemoryCache(this.cfg.workspace); // last-known-good, even on a hard failure
+        const disk = readMemoryCache(this.cacheScope); // last-known-good, even on a hard failure
         if (disk) { this.cachedFromDisk = true; this.lastRepChars = disk.length; this.cachedContext = disk; }
       }
       return this.cachedContext;
@@ -171,7 +182,7 @@ class HonchoMemoryStore implements MemoryStore {
     // pasted key or one the model echoes.
     const content = redactSecrets(text.trim()).text;
     if (!content) return;
-    this.pending.push({ content, peer_id: role === "user" ? this.cfg.peer : this.assistantPeer });
+    this.pending.push({ content, peer_id: role === "user" ? this.userPeer : this.assistantPeer });
     if (this.pending.length >= FLUSH_AT_PENDING) {
       void this.flush();
       return;
@@ -208,7 +219,7 @@ class HonchoMemoryStore implements MemoryStore {
       cached: this.cachedFromDisk,
       baseUrl: this.cfg.baseUrl,
       workspace: this.cfg.workspace,
-      peer: this.cfg.peer,
+      peer: this.userPeer,
       assistantPeer: this.assistantPeer,
       projectKey: this.cfg.projectKey ?? "",
     };
