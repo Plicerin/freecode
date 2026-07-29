@@ -97,7 +97,7 @@ class HonchoMemoryStore implements MemoryStore {
   private readonly cfg: MemoryConfig;
   private readonly userPeer: string;      // per-project human peer (identity + this project's turns)
   private readonly assistantPeer: string; // per-project work peer (see assistantPeerFor)
-  private readonly cacheScope: string;     // disk-cache key: workspace + project (never workspace alone)
+  private readonly cacheScope: string;     // disk-cache key: `workspace::project` (bare workspace only when unscoped — legacy/tests)
   private pending: HonchoMessage[] = [];
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private bootstrapped: Promise<void> | null = null;

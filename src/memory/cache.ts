@@ -54,7 +54,10 @@ export function writeMemoryCache(scope: string, block: string, path?: string): v
     const f = readFileSafe(p);
     const byScope = { ...(f.byScope ?? {}) };
     byScope[scope] = { block, ts: new Date().toISOString() };
-    writeFileAtomic(p, JSON.stringify({ ...f, byScope }, null, 2));
+    // Write ONLY byScope — deliberately dropping any legacy `byWorkspace` map so
+    // the old workspace-keyed (cross-project-leaked) entry is cleaned up the
+    // first time any project caches a good recall, not carried forward forever.
+    writeFileAtomic(p, JSON.stringify({ byScope }, null, 2));
   } catch (e) {
     debug.warn("memory cache write failed", String(e));
   }
