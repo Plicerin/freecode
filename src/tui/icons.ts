@@ -20,7 +20,7 @@ export type IconMode = "nerd" | "unicode" | "ascii";
 export type IconName =
   | "assistant" | "tool" | "toolCall" | "subAgent" | "prompt" | "thinking"
   | "user" | "ok" | "fail" | "warn" | "bolt" | "goal" | "stop" | "search"
-  | "update" | "sparkle" | "globe" | "eye" | "bullet" | "ready";
+  | "update" | "sparkle" | "globe" | "eye" | "bullet" | "ready" | "memory";
 
 // Nerd column as Font-Awesome CODEPOINTS (built at runtime so this source stays
 // pure ASCII — no Private-Use glyphs to get mangled by an editor). These U+F0xx
@@ -46,6 +46,7 @@ const NERD_CP: Record<IconName, number> = {
   eye:       0xf06e, // eye
   bullet:    0xf111, // circle
   ready:     0xf111, // circle
+  memory:    0xf1c0, // database (persistent recall store)
 };
 
 // [unicode, ascii]. Unicode is the elegant, font-independent default; the trailing
@@ -71,6 +72,7 @@ const GLYPH: Record<IconName, readonly [string, string]> = {
   eye:       ["\u{1F9D0}", "o"], // 🧐  supervisor / consult
   bullet:    ["·", "."], // ·  system-note bullet
   ready:     ["●", "*"], // ●  ready dot (kept green)
+  memory:    ["\u{1F9E0}", "*"], // 🧠  persistent-memory recall (Honcho)
 };
 
 // Elegant spinner (waxing/waning "moon") — font-independent, so it's shared by

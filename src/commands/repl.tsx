@@ -1024,11 +1024,11 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
       const st = await store.status();
       let text: string;
       if (!st.reachable) {
-        text = `🧠 memory: Honcho unreachable at ${mem?.baseUrl} — running without persistent memory this session`;
+        text = `${ICON.memory} memory: Honcho unreachable at ${mem?.baseUrl} — running without persistent memory this session`;
       } else if (block) {
-        text = `🧠 memory: recalled ${st.representationChars} chars from prior sessions${st.cached ? " (cached — Honcho didn't respond this time)" : ""} (workspace ${st.workspace})`;
+        text = `${ICON.memory} memory: recalled ${st.representationChars} chars from prior sessions${st.cached ? " (cached — Honcho didn't respond this time)" : ""} (workspace ${st.workspace})`;
       } else {
-        text = `🧠 memory: connected to Honcho (workspace ${st.workspace}) — nothing recalled yet; this session will add to it`;
+        text = `${ICON.memory} memory: connected to Honcho (workspace ${st.workspace}) — nothing recalled yet; this session will add to it`;
       }
       setMessages((prev) => [...prev, { id: `mem-${Date.now()}`, role: "system", text }]);
     })();
@@ -2118,7 +2118,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
       }
       case "/scan": {
         if (busy) { setErrorLine("Finish or interrupt the current turn before scanning."); break; }
-        setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "🔎 Scanning for Ollama + llama-server — localhost + online Tailscale peers + the LAN /24…" }]);
+        setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: `${ICON.search} Scanning for Ollama + llama-server — localhost + online Tailscale peers + the LAN /24…` }]);
         setBusy(true);
         try {
           const servers = await discoverServers();
@@ -2291,7 +2291,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
           setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: "· Refreshing memory from Honcho…" }]);
           await store.flush();
           const block = await store.recall();
-          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: block ? `🧠 memory refreshed — ${block.length} chars recalled.` : "🧠 memory refreshed — nothing recalled yet." }]);
+          setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: block ? `${ICON.memory} memory refreshed — ${block.length} chars recalled.` : `${ICON.memory} memory refreshed — nothing recalled yet.` }]);
           break;
         }
         const st = await store.status();
@@ -2759,7 +2759,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
         </Box>
       ) : consultPicker && consultPicker.stage === "provider" ? (
         <Box flexDirection="column" borderStyle="round" borderColor={theme.user} paddingX={1} marginTop={1}>
-          <Text bold color={theme.user}>🧐 Consult a supervisor — pick a provider</Text>
+          <Text bold color={theme.user}>{ICON.eye} Consult a supervisor — pick a provider</Text>
           {consultPicker.items.map((p, i) => {
             const sel = i === consultPicker.idx;
             return (
@@ -2772,7 +2772,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
         </Box>
       ) : consultPicker && consultPicker.stage === "model" ? (
         <Box flexDirection="column" borderStyle="round" borderColor={theme.user} paddingX={1} marginTop={1}>
-          <Text bold color={theme.user}>🧐 Supervisor model — {consultPicker.providerId}</Text>
+          <Text bold color={theme.user}>{ICON.eye} Supervisor model — {consultPicker.providerId}</Text>
           <Text>
             <Text dimColor>search </Text>
             <Text color={theme.user}>{consultPicker.query}</Text>
@@ -2800,7 +2800,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
         </Box>
       ) : scanPicker && scanPicker.stage === "server" ? (
         <Box flexDirection="column" borderStyle="round" borderColor={theme.user} paddingX={1} marginTop={1}>
-          <Text bold color={theme.user}>🔎 Discovered servers — pick one</Text>
+          <Text bold color={theme.user}>{ICON.search} Discovered servers — pick one</Text>
           {scanPicker.servers.map((s, i) => {
             const sel = i === scanPicker.idx;
             const models = s.models.slice(0, 4).join(", ") + (s.models.length > 4 ? `, +${s.models.length - 4}` : "");
@@ -2816,7 +2816,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
         </Box>
       ) : scanPicker && scanPicker.stage === "model" ? (
         <Box flexDirection="column" borderStyle="round" borderColor={theme.user} paddingX={1} marginTop={1}>
-          <Text bold color={theme.user}>🔎 Model on {scanPicker.server.endpoint}</Text>
+          <Text bold color={theme.user}>{ICON.search} Model on {scanPicker.server.endpoint}</Text>
           <Text>
             <Text dimColor>search </Text>
             <Text color={theme.user}>{scanPicker.query}</Text>
@@ -2936,7 +2936,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
           <Text dimColor>  · ctx </Text>
           <Text color={{ ok: theme.hex.success, warn: theme.hex.warning, crit: theme.hex.error }[contextTone(ctxFill)]}>{contextBar(ctxFill)}</Text>
           <Text dimColor> {Math.round(ctxFill * 100)}%{ctxTokens > 0 ? ` (${formatTokens(ctxTokens)}/${formatTokens(trackerRef.current.window())})` : ""} · </Text>
-          <Text color={theme.dim}>{isLanModelEndpoint(config.provider, config.baseUrl) ? `🌐 ${endpointHostLabel(config.baseUrl, config.provider)} · ` : ""}{serverLabel ?? config.provider}:</Text>
+          <Text color={theme.dim}>{isLanModelEndpoint(config.provider, config.baseUrl) ? `${ICON.globe} ${endpointHostLabel(config.baseUrl, config.provider)} · ` : ""}{serverLabel ?? config.provider}:</Text>
           <Text color={theme.hex.assistant}>{model}</Text>
           <Text dimColor>  cost </Text>
           <Text color={theme.hex.success}>${costUsd.toFixed(4)}</Text>

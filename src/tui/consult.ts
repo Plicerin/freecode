@@ -2,6 +2,7 @@
 // or answer — a different provider/model than the one driving the session. It
 // runs as a full agent (its own tools), seeded with the conversation so far, and
 // its turn threads back INTO the conversation so the primary agent sees it.
+import { ICON } from "./icons";
 
 /** Providers offerable as a supervisor (implemented ones; excludes the
  *  unimplemented bedrock/vertex and the mock). Order is picker order. */
@@ -30,5 +31,5 @@ export function supervisorPrompt(task: string): string {
 /** One-line banner echoed into history when a consult starts. */
 export function consultBanner(providerId: string, model: string, task: string): string {
   const t = task.trim();
-  return `🧐 Consulting supervisor ${providerId}:${model}${t ? ` — ${t}` : ""}`;
+  return `${ICON.eye} Consulting supervisor ${providerId}:${model}${t ? ` — ${t}` : ""}`;
 }

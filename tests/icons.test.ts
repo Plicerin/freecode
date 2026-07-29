@@ -7,7 +7,7 @@ import { makeIcons, resolveIconMode, spinnerFrames, ICON, type IconName } from "
 const ALL: IconName[] = [
   "assistant", "tool", "toolCall", "subAgent", "prompt", "thinking", "user",
   "ok", "fail", "warn", "bolt", "goal", "stop", "search", "update", "sparkle",
-  "globe", "eye", "bullet", "ready",
+  "globe", "eye", "bullet", "ready", "memory",
 ];
 
 describe("makeIcons", () => {

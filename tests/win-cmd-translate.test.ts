@@ -43,10 +43,21 @@ describe("grep → Select-String", () => {
     expect(tr("fgrep a.b f")).toBe("Select-String -Pattern 'a.b' -SimpleMatch -CaseSensitive -Path f");
   });
 
+  test("multiple -e patterns become a -Pattern array (grep matches ANY); positionals are paths", () => {
+    expect(tr("grep -e foo -e bar file")).toBe("Select-String -Pattern 'foo','bar' -CaseSensitive -Path file");
+    expect(tr("grep --regexp=foo --regexp=bar file")).toBe("Select-String -Pattern 'foo','bar' -CaseSensitive -Path file");
+  });
+
   test("unmappable flags pass through UNCHANGED (wrong output would be worse)", () => {
     for (const cmd of ["grep -c foo f", "grep -o foo f", "grep -A2 foo f", "grep --perl-regexp foo f"]) {
       expect(tr(cmd)).toBe(cmd);
     }
+  });
+
+  test("unfaithful combinations pass through: -F -w (\\b can't ride -SimpleMatch), -l on a pipe (no Path)", () => {
+    expect(tr("grep -F -w foo f")).toBe("grep -F -w foo f");
+    expect(tr("grep -Fw foo f")).toBe("grep -Fw foo f");
+    expect(tr("cat f | grep -l foo")).toBe("cat f | grep -l foo");
   });
   test("grep with neither a file nor a pipe passes through (would read stdin)", () => {
     expect(tr("grep foo")).toBe("grep foo");
@@ -61,6 +72,10 @@ describe("head / tail", () => {
   test("head in a pipe → Select-Object -First", () => { expect(tr("ls | head -5")).toBe("Get-ChildItem | Select-Object -First 5"); });
   test("tail in a pipe → Select-Object -Last", () => { expect(tr("cat f | tail -n 2")).toBe("cat f | Select-Object -Last 2"); });
   test("tail -f passes through (follow blocks)", () => { expect(tr("tail -f log")).toBe("tail -f log"); });
+  test("MULTIPLE files pass through (per-file '==> name <==' headers can't be replicated)", () => {
+    expect(tr("head a.txt b.txt")).toBe("head a.txt b.txt");
+    expect(tr("tail -n 5 a.log b.log")).toBe("tail -n 5 a.log b.log");
+  });
 });
 
 describe("which / ls", () => {
