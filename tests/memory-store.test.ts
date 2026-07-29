@@ -2,7 +2,7 @@
 // FAIL-SOFT contract — a throwing/absent Honcho must never throw out of record/
 // flush/recall. HonchoMemoryStore is exercised through a stubbed global fetch.
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
-import { createMemoryStore, formatMemoryBlock, ASSISTANT_PEER } from "../src/memory/store";
+import { createMemoryStore, formatMemoryBlock, ASSISTANT_PEER, assistantPeerFor } from "../src/memory/store";
 
 describe("createMemoryStore — disabled/unconfigured", () => {
   test("returns an inert store when disabled", async () => {
@@ -17,6 +17,21 @@ describe("createMemoryStore — disabled/unconfigured", () => {
   test("returns an inert store when enabled but no baseUrl", async () => {
     const s = createMemoryStore({ enabled: true, workspace: "freecode", peer: "user", sessionId: "s1" });
     expect(s.enabled).toBe(false);
+  });
+});
+
+describe("assistantPeerFor — per-project work peer", () => {
+  test("no key → the global assistant peer (legacy single-project behavior)", () => {
+    expect(assistantPeerFor(undefined)).toBe(ASSISTANT_PEER);
+    expect(assistantPeerFor("")).toBe(ASSISTANT_PEER);
+  });
+  test("a key → a stable, distinct slug under the assistant namespace", () => {
+    const a = assistantPeerFor("remote:github.com/o/alpha");
+    const b = assistantPeerFor("remote:github.com/o/beta");
+    expect(a).toMatch(/^assistant-[0-9a-f]{12}$/);
+    expect(a).not.toBe(b);
+    expect(a).not.toBe(ASSISTANT_PEER);
+    expect(assistantPeerFor("remote:github.com/o/alpha")).toBe(a); // stable
   });
 });
 
@@ -111,6 +126,35 @@ describe("HonchoMemoryStore over a stubbed fetch", () => {
     // provisioning happened first (workspace/peers/session get-or-create)
     expect(calls.some((c) => c.url.endsWith("/v3/workspaces"))).toBe(true);
     expect(calls.some((c) => c.url.endsWith("/sessions"))).toBe(true);
+  });
+
+  test("with a projectKey, work turns record under the SCOPED assistant peer (user stays global)", async () => {
+    const projectKey = "remote:github.com/o/proj";
+    const scoped = assistantPeerFor(projectKey);
+    const s = createMemoryStore({ enabled: true, baseUrl: "http://h:8100", workspace: "freecode", peer: "user", sessionId: "sess-9", projectKey });
+    s.record("user", "hello");
+    s.record("assistant", "hi there");
+    await s.flush();
+    const msgPost = calls.find((c) => c.url.endsWith("/sessions/sess-9/messages"));
+    expect(msgPost!.body.messages).toEqual([
+      { content: "hello", peer_id: "user" },        // identity → global peer
+      { content: "hi there", peer_id: scoped },      // work → per-project peer
+    ]);
+    expect(scoped).not.toBe(ASSISTANT_PEER);
+    // provisioned the scoped peer, not the global assistant
+    expect(calls.some((c) => c.url.endsWith("/peers") && c.body?.id === scoped)).toBe(true);
+    expect(calls.some((c) => c.url.endsWith("/peers") && c.body?.id === ASSISTANT_PEER)).toBe(false);
+  });
+
+  test("with a projectKey, recall pulls the scoped assistant peer — never the global one", async () => {
+    responder = () => ({ json: { representation: "x" } });
+    const projectKey = "remote:github.com/o/proj";
+    const scoped = assistantPeerFor(projectKey);
+    const s = createMemoryStore({ enabled: true, baseUrl: "http://h:8100", workspace: "freecode", peer: "user", sessionId: "sess-9", projectKey });
+    await s.recall();
+    expect(calls.some((c) => c.url.includes(`/peers/${scoped}/representation`))).toBe(true);
+    expect(calls.some((c) => c.url.endsWith(`/peers/${ASSISTANT_PEER}/representation`))).toBe(false);
+    expect((await s.status()).assistantPeer).toBe(scoped);
   });
 
   test("blank turns are ignored and never flushed", async () => {

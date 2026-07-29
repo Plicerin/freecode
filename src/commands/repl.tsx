@@ -60,6 +60,7 @@ import { degenerationReason } from "../agent/degeneration";
 import { basename } from "node:path";
 import { historyFromEvents } from "../session/history";
 import { createMemoryStore, type MemoryStore } from "../memory/store";
+import { resolveProjectKey } from "../memory/project-scope";
 import { makeTheme } from "../tui/theme";
 import { Mascot, OWL_MICRO, OWL_FRAMES, MASCOT_BIO } from "../tui/mascot";
 import { debug } from "../utils/debug";
@@ -1016,6 +1017,9 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
       peer: mem?.peer ?? "user",
       apiKey: mem?.apiKey,
       sessionId,
+      // Scope work memory to THIS project so another project's state can't be
+      // recalled into this session (the user peer stays global for identity).
+      projectKey: resolveProjectKey(process.cwd()),
     });
     memoryRef.current = store;
     if (!store.enabled) return;
@@ -1028,7 +1032,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
       } else if (block) {
         text = `${ICON.memory} memory: recalled ${st.representationChars} chars from prior sessions${st.cached ? " (cached — Honcho didn't respond this time)" : ""} (workspace ${st.workspace})`;
       } else {
-        text = `${ICON.memory} memory: connected to Honcho (workspace ${st.workspace}) — nothing recalled yet; this session will add to it`;
+        text = `${ICON.memory} memory: connected to Honcho (workspace ${st.workspace}) — no memory for this project yet; this session will start it`;
       }
       setMessages((prev) => [...prev, { id: `mem-${Date.now()}`, role: "system", text }]);
     })();
@@ -2299,7 +2303,9 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
           `provider     honcho`,
           `endpoint     ${st.baseUrl}  (${st.reachable ? "reachable ✓" : "UNREACHABLE ✗"})`,
           `workspace    ${st.workspace}`,
-          `peer         ${st.peer}`,
+          `peer         ${st.peer} (global identity)`,
+          `project      ${st.projectKey || "(unscoped)"}`,
+          `work peer    ${st.assistantPeer} (this project only)`,
           `recalled     ${st.representationChars} chars${st.cardLines ? ` (+${st.cardLines} card lines)` : ""}`,
           `pending      ${st.pending} turn(s) queued for ingest`,
         ];
