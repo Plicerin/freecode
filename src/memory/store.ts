@@ -10,12 +10,23 @@
 // dialogue, so the deriver sees a real conversation. Both live in freecode's own
 // workspace, isolated from anything else in the same Honcho.
 
+import { createHash } from "node:crypto";
 import { HonchoClient, type HonchoMessage } from "./honcho";
 import { readMemoryCache, writeMemoryCache } from "./cache";
 import { debug } from "../utils/debug";
 import { redactSecrets } from "../utils/redact";
 
 export const ASSISTANT_PEER = "assistant";
+
+/** The assistant (work/task) peer id, scoped to the current project so one
+ *  project's accumulated state can't be recalled into another. Derived from the
+ *  project key (see project-scope.ts) as a short stable slug. Falls back to the
+ *  global peer when no key is given (keeps old single-project behavior/tests). */
+export function assistantPeerFor(projectKey: string | undefined): string {
+  if (!projectKey) return ASSISTANT_PEER;
+  const hash = createHash("sha1").update(projectKey).digest("hex").slice(0, 12);
+  return `${ASSISTANT_PEER}-${hash}`;
+}
 
 // Bound each injected representation so a large one can't blow up the prompt.
 // The assistant peer holds the accumulated project/work state (the useful cross-
@@ -36,6 +47,10 @@ export interface MemoryConfig {
   apiKey?: string;
   /** This freecode session's id — reused verbatim as the Honcho session id. */
   sessionId: string;
+  /** Stable identity of the project this session is in (see project-scope.ts).
+   *  Scopes the assistant (work) peer so cross-session continuity stays WITHIN a
+   *  project. Omit → the global assistant peer (single-project/legacy behavior). */
+  projectKey?: string;
 }
 
 export interface MemoryStatus {
@@ -50,6 +65,10 @@ export interface MemoryStatus {
   baseUrl?: string;
   workspace: string;
   peer: string;
+  /** The per-project assistant (work) peer this session records/recalls under. */
+  assistantPeer: string;
+  /** The resolved project key the assistant peer is scoped to ("" if unscoped). */
+  projectKey: string;
 }
 
 export interface MemoryStore {
@@ -69,6 +88,7 @@ class HonchoMemoryStore implements MemoryStore {
   readonly enabled = true;
   private readonly client: HonchoClient;
   private readonly cfg: MemoryConfig;
+  private readonly assistantPeer: string; // per-project work peer (see assistantPeerFor)
   private pending: HonchoMessage[] = [];
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private bootstrapped: Promise<void> | null = null;
@@ -79,6 +99,7 @@ class HonchoMemoryStore implements MemoryStore {
 
   constructor(cfg: MemoryConfig) {
     this.cfg = cfg;
+    this.assistantPeer = assistantPeerFor(cfg.projectKey);
     this.client = new HonchoClient({ baseUrl: cfg.baseUrl!, workspace: cfg.workspace, apiKey: cfg.apiKey });
   }
 
@@ -88,8 +109,8 @@ class HonchoMemoryStore implements MemoryStore {
       this.bootstrapped = (async () => {
         await this.client.ensureWorkspace();
         await this.client.ensurePeer(this.cfg.peer);
-        await this.client.ensurePeer(ASSISTANT_PEER);
-        await this.client.ensureSession(this.cfg.sessionId, [this.cfg.peer, ASSISTANT_PEER]);
+        await this.client.ensurePeer(this.assistantPeer);
+        await this.client.ensureSession(this.cfg.sessionId, [this.cfg.peer, this.assistantPeer]);
       })().catch((e) => {
         this.bootstrapped = null; // allow a later retry
         throw e;
@@ -107,7 +128,7 @@ class HonchoMemoryStore implements MemoryStore {
       // BOTH — recalling only `user` misses the substantive continuity.
       const [userRep, assistantRep] = await Promise.all([
         this.client.getRepresentation(this.cfg.peer, opts).catch(() => ""),
-        this.client.getRepresentation(ASSISTANT_PEER, opts).catch(() => ""),
+        this.client.getRepresentation(this.assistantPeer, opts).catch(() => ""),
       ]);
       let card: string[] = [];
       if (!userRep.trim() && !assistantRep.trim()) card = await this.client.getPeerCard(this.cfg.peer).catch(() => []);
@@ -150,7 +171,7 @@ class HonchoMemoryStore implements MemoryStore {
     // pasted key or one the model echoes.
     const content = redactSecrets(text.trim()).text;
     if (!content) return;
-    this.pending.push({ content, peer_id: role === "user" ? this.cfg.peer : ASSISTANT_PEER });
+    this.pending.push({ content, peer_id: role === "user" ? this.cfg.peer : this.assistantPeer });
     if (this.pending.length >= FLUSH_AT_PENDING) {
       void this.flush();
       return;
@@ -188,6 +209,8 @@ class HonchoMemoryStore implements MemoryStore {
       baseUrl: this.cfg.baseUrl,
       workspace: this.cfg.workspace,
       peer: this.cfg.peer,
+      assistantPeer: this.assistantPeer,
+      projectKey: this.cfg.projectKey ?? "",
     };
   }
 }
@@ -208,7 +231,7 @@ class NullMemoryStore implements MemoryStore {
     /* no-op */
   }
   async status(): Promise<MemoryStatus> {
-    return { enabled: false, reachable: false, representationChars: 0, cardLines: 0, pending: 0, cached: false, workspace: "", peer: "" };
+    return { enabled: false, reachable: false, representationChars: 0, cardLines: 0, pending: 0, cached: false, workspace: "", peer: "", assistantPeer: "", projectKey: "" };
   }
 }
 
