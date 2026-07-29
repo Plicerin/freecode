@@ -37,4 +37,14 @@ describe("memory cache", () => {
     writeMemoryCache("freecode", "x", p);
     expect(readMemoryCache("nope", p)).toBeNull();
   });
+
+  test("different project scopes under one workspace don't collide (the cross-project leak)", () => {
+    const p = tmp();
+    writeMemoryCache("freecode::remote:github.com/o/a", "A", p);
+    writeMemoryCache("freecode::remote:github.com/o/b", "B", p);
+    expect(readMemoryCache("freecode::remote:github.com/o/a", p)).toBe("A");
+    expect(readMemoryCache("freecode::remote:github.com/o/b", p)).toBe("B");
+    // a workspace-only key (the old global behavior) matches neither project
+    expect(readMemoryCache("freecode", p)).toBeNull();
+  });
 });

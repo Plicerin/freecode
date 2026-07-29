@@ -1100,7 +1100,10 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
       appendEvent(sessionRef.current, { kind: "user", text: prompt, ts: new Date().toISOString() });
     }
     // Feed the turn to cross-session memory (once per submit, incl. queued input).
-    memoryRef.current?.record("user", prompt);
+    // NOT for a consult: `prompt` there is the SUPERVISOR framing ("you are a
+    // second, independent model…"), and recording it as a user turn taught the
+    // deriver that the USER is a reviewer — polluting identity across projects.
+    if (!ov) memoryRef.current?.record("user", prompt);
     if (failed.length) setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: "system", text: failed.join("\n") }]);
     let buffer = "";
     let streamedAny = false;
@@ -1305,7 +1308,7 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
         setMessages((prev) => [...prev, { id: `a-${t0}`, role: "assistant", text: buffer }]);
       }
       appendEvent(sessionRef.current, { kind: "assistant", text: buffer, ts: new Date().toISOString(), usage: result.usage as unknown as Record<string, number> });
-      memoryRef.current?.record("assistant", buffer);
+      if (!ov) memoryRef.current?.record("assistant", buffer); // consult = a different model's review, not our dialogue
       void memoryRef.current?.flush(); // end of turn: persist the pair now (survives a quick quit)
       // Persistent speedometer: bank the final burst's time, then show the run's
       // generation throughput as a dim line that stays in the transcript (the
@@ -2303,9 +2306,9 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
           `provider     honcho`,
           `endpoint     ${st.baseUrl}  (${st.reachable ? "reachable ✓" : "UNREACHABLE ✗"})`,
           `workspace    ${st.workspace}`,
-          `peer         ${st.peer} (global identity)`,
           `project      ${st.projectKey || "(unscoped)"}`,
-          `work peer    ${st.assistantPeer} (this project only)`,
+          `user peer    ${st.peer} (this project)`,
+          `work peer    ${st.assistantPeer} (this project)`,
           `recalled     ${st.representationChars} chars${st.cardLines ? ` (+${st.cardLines} card lines)` : ""}`,
           `pending      ${st.pending} turn(s) queued for ingest`,
         ];
