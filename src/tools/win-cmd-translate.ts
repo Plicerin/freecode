@@ -77,12 +77,14 @@ function grepToSelectString(rest: string, piped: boolean): string | null {
   const { args, redir } = splitRedir(rest);
   const tokens = tokenize(args);
   let i = false, recursive = false, invert = false, word = false, fixed = false, list = false;
-  let pattern: string | null = null;
+  const patterns: string[] = []; // grep matches ANY of these (-e a -e b); Select-String -Pattern takes an array
+  let sawE = false;              // once -e/--regexp appears, positionals are all paths (grep semantics)
+  let positional: string | null = null;
   const paths: string[] = [];
-  let expectPattern = false; // after -e
+  let expectPattern = false; // after a bare -e / --regexp
   let operandsOnly = false;
   for (const t of tokens) {
-    if (expectPattern) { if (pattern === null) pattern = t; expectPattern = false; continue; }
+    if (expectPattern) { patterns.push(t); expectPattern = false; continue; }
     if (!operandsOnly && t === "--") { operandsOnly = true; continue; }
     if (!operandsOnly && t.startsWith("--")) {
       const [name, val] = t.slice(2).split("=", 2);
@@ -93,7 +95,7 @@ function grepToSelectString(rest: string, piped: boolean): string | null {
         case "word-regexp": word = true; break;
         case "fixed-strings": fixed = true; break;
         case "files-with-matches": list = true; break;
-        case "regexp": if (val !== undefined) pattern = val; else expectPattern = true; break;
+        case "regexp": sawE = true; if (val !== undefined) patterns.push(val); else expectPattern = true; break;
         case "extended-regexp": case "basic-regexp": case "line-number": case "no-filename":
         case "with-filename": case "color": case "colour": break; // harmless to ignore
         default: return null; // unknown long flag → don't risk a wrong rewrite
@@ -107,18 +109,26 @@ function grepToSelectString(rest: string, piped: boolean): string | null {
         else if (ch === "F") fixed = true;
         else if (ch === "l") list = true;
         else if (ch === "n" || ch === "H" || ch === "h" || ch === "E" || ch === "G" || ch === "s") { /* ignorable */ }
-        else if (ch === "e") { expectPattern = true; break; }
+        else if (ch === "e") { expectPattern = true; sawE = true; break; }
         else return null; // unknown short flag (e.g. -c, -o, -A/-B/-C) → passthrough
       }
     } else {
-      if (pattern === null) pattern = t;
+      if (!sawE && positional === null) positional = t; // first bare word is the pattern (only when no -e)
       else paths.push(t);
     }
   }
-  if (pattern === null) return null;
+  if (!sawE && positional !== null) patterns.push(positional);
+  if (patterns.length === 0) return null;
 
-  const patText = word && !fixed ? `\\b${pattern}\\b` : pattern;
-  let ss = `Select-String -Pattern ${psq(patText)}`;
+  // Faithfulness guards — shapes with no honest Select-String mapping pass through unchanged:
+  //  • -F -w: -SimpleMatch is literal, so it can't carry the \b word boundary -w requires.
+  //  • -l with neither a file nor -r: piped/stdin MatchInfo has no Path to list.
+  if (word && fixed) return null;
+  if (list && !paths.length && !recursive) return null;
+
+  const wrap = (p: string) => (word && !fixed ? `\\b${p}\\b` : p);
+  const patArg = patterns.map((p) => psq(wrap(p))).join(",");
+  let ss = `Select-String -Pattern ${patArg}`;
   if (fixed) ss += " -SimpleMatch";
   if (!i) ss += " -CaseSensitive"; // grep is case-SENSITIVE by default; Select-String is not
   if (invert) ss += " -NotMatch";
@@ -153,6 +163,9 @@ function headTail(kind: "head" | "tail", rest: string, piped: boolean): string |
     if (t.startsWith("-")) return null; // -f (follow), -c (bytes), … → passthrough
     files.push(t);
   }
+  // head/tail over MULTIPLE files prints per-file "==> name <==" headers; a single
+  // Get-Content over a comma-list can't replicate them → pass through unchanged.
+  if (files.length > 1) return null;
   let cmd: string;
   if (files.length) {
     const flag = kind === "head" ? `-TotalCount ${n}` : `-Tail ${n}`;
