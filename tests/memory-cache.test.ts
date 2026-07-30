@@ -2,7 +2,7 @@
 // of "gone" when Honcho is briefly slow/unreachable at session start (the
 // "recalled something one session, nothing the next" symptom).
 import { test, expect, describe } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readMemoryCache, writeMemoryCache } from "../src/memory/cache";
@@ -46,5 +46,22 @@ describe("memory cache", () => {
     expect(readMemoryCache("freecode::remote:github.com/o/b", p)).toBe("B");
     // a workspace-only key (the old global behavior) matches neither project
     expect(readMemoryCache("freecode", p)).toBeNull();
+  });
+
+  test("a write actively drops legacy byWorkspace data (leak-preserving spread must not return)", () => {
+    const p = tmp();
+    // A file as it exists after the field rename but before cleanup: the legacy
+    // cross-project blob alongside a new per-project byScope entry.
+    writeFileSync(p, JSON.stringify({
+      byWorkspace: { freecode: { block: "LEAKED cross-project memory", ts: "2020-01-01T00:00:00.000Z" } },
+      byScope: { "freecode::remote:github.com/o/a": { block: "A", ts: "2020-01-01T00:00:00.000Z" } },
+    }));
+    writeMemoryCache("freecode::remote:github.com/o/b", "B", p);
+    const raw = readFileSync(p, "utf8");
+    expect(raw).not.toContain("byWorkspace"); // the legacy map is gone from disk
+    expect(raw).not.toContain("LEAKED");
+    expect(readMemoryCache("freecode::remote:github.com/o/a", p)).toBe("A"); // existing byScope preserved
+    expect(readMemoryCache("freecode::remote:github.com/o/b", p)).toBe("B"); // new one added
+    expect(readMemoryCache("freecode", p)).toBeNull(); // legacy workspace-only key no longer resolves
   });
 });
