@@ -3,6 +3,9 @@ import { createBashTool } from "../src/tools/bash";
 
 const ctx = { cwd: process.cwd(), signal: undefined as unknown as AbortSignal };
 const sleepCmd = process.platform === "win32" ? "Start-Sleep -Seconds 30" : "sleep 30";
+const failCmd = process.platform === "win32"
+  ? "[Console]::Error.WriteLine('boom-trace'); exit 7"
+  : "printf '%s\\n' 'boom-trace' >&2; exit 7";
 
 test("a normal command runs to completion with stdin ignored", async () => {
   const tool = createBashTool();
@@ -43,7 +46,7 @@ test("runInBackground launches detached and returns a pid + log handle without b
 test("runInBackground reports an immediately-failing command, with its captured output", async () => {
   const tool = createBashTool();
   // Write to stderr then exit nonzero — the error must surface BOTH and not look "clean".
-  const r = await tool.run({ command: "[Console]::Error.WriteLine('boom-trace'); exit 7", runInBackground: true } as never, ctx);
+  const r = await tool.run({ command: failCmd, runInBackground: true } as never, ctx);
   expect(r.ok).toBe(false);
   expect(r.error).toMatch(/exited right away/i);
   expect(r.error).toMatch(/boom-trace/); // the captured reason is surfaced inline
