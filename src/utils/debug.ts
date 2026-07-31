@@ -1,11 +1,17 @@
+import { redactSecrets } from "./redact";
+
 const enabled = process.env.CLAUDE_DEBUG === "1";
 
-function emit(level: string, msg: string, extra?: unknown): void {
-  if (!enabled) return;
+export function formatDebugLine(level: string, msg: string, extra?: unknown): string {
   const line = extra === undefined
     ? `[freecode][${level}] ${msg}`
     : `[freecode][${level}] ${msg} ${JSON.stringify(extra)}`;
-  process.stderr.write(line + "\n");
+  return redactSecrets(line).text;
+}
+
+function emit(level: string, msg: string, extra?: unknown): void {
+  if (!enabled) return;
+  process.stderr.write(formatDebugLine(level, msg, extra) + "\n");
 }
 
 export const debug = {

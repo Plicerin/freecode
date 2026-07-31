@@ -14,7 +14,7 @@ Your guide is **Bubo** `(◉‿◉)` — the freecode owl, named for the bronze 
 
 ```bash
 bun install
-bun test                  # 17 unit tests
+bun test                  # full automated test suite
 bun run src/cli.tsx       # launch REPL (mock provider — no API key needed)
 ```
 
@@ -22,14 +22,14 @@ First run uses the **Mock provider** so the app works with zero config. Wire a r
 
 ## Install (another machine)
 
-One command, runs on **Node** (no clone, no Bun on the target). The repo is private, so the machine needs GitHub access once — an SSH key, `gh auth login`, or a PAT in your git credential helper.
+One command, runs on **Node** (no clone or Bun required on the target):
 
 ```bash
-npm install -g "github:Plicerin/freecode#feat/tier-a-parity"
+npm install -g @vrocket/freecode@latest
 freecode
 ```
 
-That clones, installs deps, bundles a Node-runnable CLI (via esbuild — no Bun needed), and puts `freecode` on your PATH. **Upgrade** by re-running the same command. (The `#feat/tier-a-parity` picks the working branch; once it merges to `main`, plain `github:Plicerin/freecode` will do.) Requires Node ≥ 18.
+This installs the published Node-runnable CLI and puts `freecode` on your PATH. **Upgrade** with `freecode update` or by re-running the command. Requires Node ≥ 18.
 
 Enable shared cross-session memory by writing `~/.freecode/settings.json` (Honcho is Tailscale-only, so the machine must be on your tailnet):
 
@@ -37,9 +37,9 @@ Enable shared cross-session memory by writing `~/.freecode/settings.json` (Honch
 { "memory": { "provider": "honcho", "enabled": true, "baseUrl": "http://<honcho-host>:8100", "workspace": "freecode", "peer": "user" } }
 ```
 
-Memory keys off one `user` peer, so pointing two machines at the same Honcho gives them the **same** accumulated memory; it's fail-soft, so freecode runs fine without it. Other config (vault keys, session logs) lives in `~/.freecode/` — copy `vault.json` + `vault.key` to carry provider keys over.
+Memory is scoped per project, so sessions and machines working on the same project can share context without leaking one project's work into another; it's fail-soft, so freecode runs fine without it. Other config (vault keys, session logs) lives in `~/.freecode/` — copy `vault.json` + `vault.key` together to carry device-mode provider keys over.
 
-**Alternative — auto-updating source install.** If you'd rather run from source with an `freecode` launcher that self-updates on launch, clone and run `./install.sh --honcho <url>` (macOS/Linux) or `./install.ps1 -HonchoUrl <url>` (Windows); details in [`install.sh`](install.sh). A standalone binary (no runtime at all) is `bun run build:exe` → `dist/freecode`.
+The repository's `install.sh` and `install.ps1` scripts install the same published package and can also configure Honcho. A standalone binary (no runtime at all) is `bun run build:exe` → `dist/freecode`.
 
 ## Providers
 
@@ -55,7 +55,10 @@ Set the active provider with an env flag, then supply the matching key:
 | Google Vertex   | `CLAUDE_CODE_USE_VERTEX=1`              | `GOOGLE_APPLICATION_CREDENTIALS`    |
 | Ollama          | `CLAUDE_CODE_USE_OLLAMA=1`              | `OLLAMA_HOST` (default `http://127.0.0.1:11434`) |
 | LM Studio       | `CLAUDE_CODE_USE_LMSTUDIO=1`            | `LMSTUDIO_HOST` (default `http://127.0.0.1:1234`) |
+| llama.cpp server| `--provider llama-server`               | `LLAMA_SERVER_HOST` (default `http://127.0.0.1:8080`) |
 | NVIDIA NIM      | `CLAUDE_CODE_USE_NIM=1`                 | `NVIDIA_API_KEY` (`nvapi-...`); base `https://integrate.api.nvidia.com/v1` |
+| DeepSeek        | `CLAUDE_CODE_USE_DEEPSEEK=1`            | `DEEPSEEK_API_KEY`                  |
+| OpenRouter      | `CLAUDE_CODE_USE_OPENROUTER=1`          | `OPENROUTER_API_KEY`                |
 
 Without a flag, freecode auto-detects whichever key is set.
 
@@ -76,9 +79,9 @@ Without a flag, freecode auto-detects whichever key is set.
 
 ## API key vault
 
-On first run, freecode walks you through onboarding: pick the providers you have keys for, paste each key once, and they're stored **encrypted** — no plaintext keys in env vars or profiles, and you never enter them again.
+On first run, freecode walks you through onboarding: pick the providers you have keys for, paste each key once, and they're stored encrypted. Environment variables and project profiles remain supported, but values placed there are plaintext and should be protected accordingly.
 
-Keys live in `~/.freecode/vault.json` (AES-256-GCM). By default the vault auto-unlocks with a per-machine device key at `~/.freecode/vault.key` (permission-locked) — zero friction, no prompt. For stronger protection, set `FREECODE_VAULT_PASSPHRASE` and the vault is keyed off that passphrase (scrypt) instead. No plaintext key ever touches disk.
+Keys live in `~/.freecode/vault.json` (AES-256-GCM). By default the vault auto-unlocks with a per-machine key at `~/.freecode/vault.key`; this prevents accidental disclosure of the vault alone, but anyone who can read both files can decrypt it. For stronger protection, set `FREECODE_VAULT_PASSPHRASE` before creating the vault so its key is derived with scrypt. Vault writes are atomic, and plaintext vault values are not written to disk.
 
 Manage it anytime:
 ```bash
@@ -144,7 +147,7 @@ freecode                                    # REPL
 freecode --prompt "..."                     # REPL with initial prompt
 freecode --print --prompt "..."             # headless one-shot
 freecode --resume <session-id>              # resume a session in REPL
-freecode --serve --port 50051               # gRPC server (placeholder)
+freecode --serve --port 50051               # experimental HTTP health placeholder (not gRPC)
 freecode --provider openai --model gpt-4o   # override provider
 freecode --permission-mode bypass           # skip all prompts
 freecode --thinking                          # enable extended thinking / reasoning
@@ -152,22 +155,16 @@ freecode --thinking                          # enable extended thinking / reason
 
 ## Slash commands (REPL)
 
-| Command    | What it does                                  |
-|------------|-----------------------------------------------|
-| `/model`   | List the models your key can use, or switch   |
-| `/new`     | Start a fresh session                         |
-| `/resume`  | Open the session picker (↑/↓ to choose, Enter) |
-| `/rename`  | Name the current session (shows in the picker) |
-| `/context` | Show token usage + cost                       |
-| `/provider`| Show or switch provider                       |
-| `/mcp`     | List connected MCP servers and their tools    |
-| `/plan`    | Toggle read-only plan mode (propose, don't change) |
-| `/verify`  | Run the project's checks and report the real result |
-| `/bench`   | Race the performance ghost without leaving the REPL |
-| `/help`    | List commands                                 |
-| `/compact` | Force context compaction                      |
-| `/about`   | Meet Bubo, the freecode owl                    |
-| `/exit`    | Exit freecode (`/quit`, or `Ctrl+C`)           |
+`/help` shows the live command list, including custom and plugin commands. Built-ins are grouped here for readability:
+
+| Area | Commands |
+|---|---|
+| Models and sessions | `/model`, `/new`, `/resume`, `/rename`, `/context`, `/cost`, `/compact`, `/recover`, `/memory` |
+| Git and review | `/diff`, `/commit`, `/commit-push-pr`, `/branch`, `/issue`, `/pr-comments`, `/review`, `/security-review`, `/autofix-pr` |
+| Agents and learning | `/explore`, `/agents`, `/skills`, `/learn`, `/goal`, `/expand`, `/workflows`, `/ultraplan`, `/consult` (`/advisor`) |
+| Extensions and jobs | `/plugins`, `/bg`, `/mcp` |
+| Configuration and checks | `/config`, `/doctor`, `/provider`, `/scan`, `/plan`, `/verify`, `/bench`, `/log` |
+| Help and lifecycle | `/help`, `/about`, `/exit` (`/quit`) |
 
 ### Custom slash commands
 
@@ -193,7 +190,7 @@ Type `/` to open a live command menu (filters as you type); `↑`/`↓` to selec
 
 ## Tools
 
-`Bash` · `FileRead` · `FileWrite` · `FileEdit` · `Glob` · `Grep` (ripgrep) · `WebSearch` · `WebFetch`
+`Bash` · `FileRead` · `FileWrite` · `FileEdit` · `Glob` · `Grep` (ripgrep) · `WebSearch` · `WebFetch` · `ViewImage` · `Agent` · `Skill`
 
 Bash has a denylist for `rm -rf /`, fork bombs, sudo, `mkfs`, `dd if=`, piped shell, `chmod -R 777 /`. Grep uses `rg` (ripgrep) when it's on PATH and falls back to a built-in search otherwise; both ignore `.git/`, `node_modules/`, `dist/`.
 
@@ -302,6 +299,6 @@ Retries use exponential backoff with jitter. `CLAUDE_DEBUG=1` writes verbose log
 
 This is a working v0.1. See `SPEC.md` for the full design.
 
-**Working:** real providers — Anthropic, OpenAI-compat (covers OpenAI / GitHub Models / LM Studio / NVIDIA NIM), Gemini, and **Ollama** (local, via its OpenAI-compatible API); plus an explicit `mock` provider for offline demos. Settings priority + JSONC + hot-reload, sessions + /new + /resume, 8 built-in tools + **MCP client** (stdio servers, tools loaded at startup), permission engine with interactive approval prompts (allow / allow-always / deny), denylist, REPL with banner + info box + slash commands + keybinds, dark/light theme, agent loop with streaming + tool exec + retry, **auto-compaction** when the context window fills, **per-model cost** estimation (local models free), friendly error mapping, --print headless mode, 27 unit tests.
+**Working:** real providers — Anthropic, OpenAI-compat (OpenAI / GitHub Models / LM Studio / llama.cpp server / NVIDIA NIM / DeepSeek / OpenRouter), Gemini, and **Ollama**; plus an explicit `mock` provider for offline demos. Settings priority + JSONC + hot-reload, sessions and recovery, sub-agents, skills, plugins, parallel workflows, built-in tools + **MCP client** (stdio servers, tools loaded at startup), permission engine with interactive approval prompts, denylist, REPL with slash commands, themes, streaming tool execution, retries, **auto-compaction**, prompt caching, **per-model cost** estimation, friendly errors, headless/background modes, and a comprehensive automated test suite.
 
-**Not implemented yet (fail honestly — no fake output):** AWS Bedrock (needs SigV4 signing) and Google Vertex (needs service-account auth) return a clear "not implemented" error. Also deferred: gRPC bidirectional stream (`serve` is a port-binding placeholder), spinner shimmer component, prompt-cache markers in provider requests.
+**Not implemented yet (fail honestly — no fake output):** AWS Bedrock (needs SigV4 signing) and Google Vertex (needs service-account auth) return a clear "not implemented" error. Also deferred: the gRPC bidirectional stream (`serve` is explicitly an experimental HTTP health placeholder) and the spinner shimmer component.

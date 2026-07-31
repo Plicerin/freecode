@@ -5,11 +5,12 @@
 // project locations), so plugins contribute through the same code paths — no new
 // formats. The marketplace/install half (network, versioning) is deferred; this
 // is local discovery + enable/disable.
-import { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync, statSync, cpSync, rmSync, renameSync, mkdtempSync } from "node:fs";
+import { readdirSync, readFileSync, mkdirSync, existsSync, statSync, cpSync, rmSync, renameSync, mkdtempSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { join, isAbsolute } from "node:path";
+import { join, isAbsolute, resolve, relative } from "node:path";
 import { APP_DIR } from "./utils/paths";
+import { writeFileAtomic } from "./utils/atomic";
 
 const execFileAsync = promisify(execFile);
 
@@ -29,6 +30,31 @@ export interface Plugin {
 // discovered), so a plugin dropped into the folder works without ceremony.
 const STATE_FILE = join(APP_DIR, "plugins-state.json");
 
+// Plugin names become directory names and are accepted from both an untrusted
+// manifest and a user command. Keep them to one portable path component: no
+// separators, drive prefixes, dot segments, or Windows-trailing dots/spaces.
+const PLUGIN_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+export function validatePluginName(raw: string): string {
+  const name = raw.trim();
+  if (!PLUGIN_NAME.test(name) || name === "." || name === "..") {
+    throw new Error(`Invalid plugin name "${raw}". Use 1-64 letters, numbers, dots, underscores, or hyphens.`);
+  }
+  return name;
+}
+
+/** Resolve a plugin directory and prove it is a direct child of `root`. */
+function pluginDestination(root: string, rawName: string): string {
+  const name = validatePluginName(rawName);
+  const base = resolve(root);
+  const dest = resolve(base, name);
+  const rel = relative(base, dest);
+  if (!rel || rel.startsWith("..") || isAbsolute(rel) || rel.includes("/") || rel.includes("\\")) {
+    throw new Error(`Invalid plugin destination for "${rawName}".`);
+  }
+  return dest;
+}
+
 function loadDisabled(): Set<string> {
   try {
     const parsed = JSON.parse(readFileSync(STATE_FILE, "utf8")) as { disabled?: string[] };
@@ -40,7 +66,7 @@ function loadDisabled(): Set<string> {
 
 function saveDisabled(disabled: Set<string>): void {
   mkdirSync(APP_DIR, { recursive: true });
-  writeFileSync(STATE_FILE, JSON.stringify({ disabled: [...disabled] }, null, 2));
+  writeFileAtomic(STATE_FILE, JSON.stringify({ disabled: [...disabled] }, null, 2));
 }
 
 /** Discover plugins from the user dir and the project's `.freecode/plugins`.
@@ -61,7 +87,7 @@ export function resolvePlugins(cwd: string): Plugin[] {
       if (!existsSync(manifest)) continue;
       try {
         const m = JSON.parse(readFileSync(manifest, "utf8")) as { name?: string; description?: string; version?: string };
-        const name = m.name?.trim() || entry.name;
+        const name = validatePluginName(m.name?.trim() || entry.name);
         out.set(name, {
           name,
           description: m.description ?? "",
@@ -79,6 +105,7 @@ export function resolvePlugins(cwd: string): Plugin[] {
 }
 
 export function setPluginEnabled(name: string, enabled: boolean): void {
+  name = validatePluginName(name);
   const disabled = loadDisabled();
   if (enabled) disabled.delete(name);
   else disabled.add(name);
@@ -165,9 +192,10 @@ export async function installPlugin(source: string, cwd: string, root: string = 
     }
     const manifest = readManifest(staging);
     if (!manifest) throw new Error("No valid plugin.json found in the plugin source.");
-    const name = manifest.name?.trim() || deriveName(source);
-    if (!name) throw new Error("Could not determine a plugin name (no manifest name and unnamable source).");
-    const dest = join(root, name);
+    const rawName = manifest.name?.trim() || deriveName(source);
+    if (!rawName) throw new Error("Could not determine a plugin name (no manifest name and unnamable source).");
+    const name = validatePluginName(rawName);
+    const dest = pluginDestination(root, name);
     if (existsSync(dest)) throw new Error(`Plugin "${name}" is already installed. Uninstall it first: /plugins uninstall ${name}`);
     renameSync(staging, dest);
     return {
@@ -188,7 +216,8 @@ export async function installPlugin(source: string, cwd: string, root: string = 
  *  user plugins dir is touched — project plugins live in the repo and are managed
  *  there. */
 export function uninstallPlugin(name: string, root: string = userPluginsRoot()): void {
-  const dest = join(root, name);
+  name = validatePluginName(name);
+  const dest = pluginDestination(root, name);
   if (!existsSync(dest)) throw new Error(`Plugin "${name}" is not installed in the user plugins dir.`);
   rmSync(dest, { recursive: true, force: true });
   const disabled = loadDisabled();

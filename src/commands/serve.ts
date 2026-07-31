@@ -19,13 +19,13 @@ export interface GrpcLikeServer {
  * process. Replace with @grpc/grpc-js + proto-loader in the next pass.
  */
 export async function startServer(opts: ServeOptions): Promise<GrpcLikeServer> {
-  const httpServer: Server = createServer((req, res) => {
+  const httpServer: Server = createServer((_req, res) => {
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ name: "freecode", status: "ok", grpc: true }));
+    res.end(JSON.stringify({ name: "freecode", status: "ok", transport: "http", grpc: false }));
   });
   await new Promise<void>((resolve) => httpServer.listen(opts.port, resolve));
-  debug.log(`freecode grpc placeholder listening on :${opts.port}`);
-  console.error(`[freecode] grpc placeholder listening on :${opts.port} (proto loader pending)`);
+  debug.log(`freecode HTTP placeholder listening on :${opts.port}`);
+  console.error(`[freecode] experimental HTTP health placeholder listening on :${opts.port} (gRPC not implemented)`);
   return {
     port: opts.port,
     start: async () => {},

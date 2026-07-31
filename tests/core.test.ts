@@ -4,7 +4,7 @@ import { createBashTool } from "../src/tools/bash";
 import { FileReadTool } from "../src/tools/file-read";
 import { FileWriteTool } from "../src/tools/file-write";
 import { newSession, appendEvent, readSession } from "../src/session/manager";
-import { mkdtempSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createPermissionEngine, type ApprovalCallback } from "../src/permissions/modes";

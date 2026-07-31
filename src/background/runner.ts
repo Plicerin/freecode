@@ -3,14 +3,14 @@
 // runs the headless agent loop, streams to a log file, and records its own final
 // status. The parent returns immediately. Nothing here keeps a long-lived daemon
 // alive — the OS owns the detached child; the registry is the source of truth.
-import { openSync, appendFileSync } from "node:fs";
+import { openSync, closeSync, appendFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import type { CliFlags } from "../config/loader";
 import { loadConfig } from "../config/loader";
 import { runHeadless } from "../agent/headless";
 import { newId, nowIso } from "../utils/ids";
-import { bgDir, logFile, saveJob, readJob, updateJob, isPidAlive, type BgJob } from "./registry";
+import { logFile, saveJob, readJob, updateJob, isPidAlive, type BgJob } from "./registry";
 
 /** How to re-invoke THIS cli for the detached child — works whether we're run as
  *  `bun run src/cli.tsx` / `node dist/cli.js` (argv[1] is the script) or as a
@@ -44,13 +44,18 @@ export function startBackground(prompt: string, flags: CliFlags, root?: string):
   const out = openSync(job.logPath, "a");
   const extra = ["bg-exec", id, ...(root ? ["--bg-root", root] : [])];
   const { cmd, args } = selfInvocation(extra);
-  const child = spawn(cmd, args, {
-    cwd,
-    detached: true,
-    stdio: ["ignore", out, out],
-    windowsHide: true,
-    env: { ...process.env, FREECODE_BG_CHILD: "1" },
-  });
+  let child: ReturnType<typeof spawn>;
+  try {
+    child = spawn(cmd, args, {
+      cwd,
+      detached: true,
+      stdio: ["ignore", out, out],
+      windowsHide: true,
+      env: { ...process.env, FREECODE_BG_CHILD: "1" },
+    });
+  } finally {
+    try { closeSync(out); } catch { /* already closed */ }
+  }
   child.unref();
 
   saveJob({ ...job, pid: child.pid }, root);

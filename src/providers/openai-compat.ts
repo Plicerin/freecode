@@ -1,4 +1,4 @@
-import type { ChatMessage, ChatRequest, ModelInfo, Provider, StreamEvent, TokenUsage } from "./types";
+import type { ChatMessage, ChatRequest, ModelInfo, Provider, StreamEvent } from "./types";
 import { friendlyError, makeError } from "./friendly-errors";
 import { parseRetryAfterMs } from "./retry-after";
 import { zodToJsonSchema } from "./schema-util";

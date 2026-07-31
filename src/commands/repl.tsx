@@ -7,7 +7,7 @@ import { detectLocalModels, detectServerKind, detectLlamaServerContext, detectOl
 import { discoverServers, type DiscoveredServer } from "../providers/server-discovery";
 import { zodToJsonSchema } from "../providers/schema-util";
 import { buildToolRegistry, toolListToSystemPrompt } from "../tools/registry";
-import { createPermissionEngine, approvalDecisionForKey, type ApprovalCallback, type ApprovalDecision, type ApprovalRequest, type PermissionEngine } from "../permissions/modes";
+import { createPermissionEngine, approvalDecisionForKey, type ApprovalCallback, type ApprovalRequest, type PermissionEngine } from "../permissions/modes";
 import { makeGrantStore } from "../config/permission-grants";
 import { VERSION } from "../version";
 import { checkForUpdate, baseVersion, UPDATE_HINT } from "../agent/update-check";
@@ -2371,12 +2371,12 @@ export function Repl({ flags, resumeId, initialPrompt, extraTools, mcpStatus, mc
   }
 
   useInput((input2, key) => {
-    // Input diagnostics: FREECODE_PASTE_DEBUG=1 logs every keypress to
-    // ~/.freecode/paste-debug.log — the exact chunk + key flags + the state the
-    // history/menu decision reads — so paste AND history-scroll bugs are
-    // inspectable instead of guessed. Off by default.
-    if (process.env.FREECODE_PASTE_DEBUG) {
-      try { appendFileSync(`${APP_DIR}/paste-debug.log`, JSON.stringify({ input: input2, len: input2.length, up: !!key.upArrow, down: !!key.downArrow, ret: !!key.return, esc: !!key.escape, histIdx: historyIdxRef.current, menu: menuMatches.length, picker: !!picker, modelPicker: !!modelPicker, pending: !!pending }) + "\n"); } catch { /* ignore */ }
+    // Input diagnostics: FREECODE_PASTE_DEBUG=1 logs keypress metadata and UI
+    // state to ~/.freecode/paste-debug.log. Input content is never logged.
+    if (process.env.FREECODE_PASTE_DEBUG === "1") {
+      // Input may be a password, API key, or pasted .env file. Diagnostics need
+      // only the chunk shape and UI state, never the user's actual characters.
+      try { appendFileSync(`${APP_DIR}/paste-debug.log`, JSON.stringify({ len: input2.length, multiline: /[\r\n]/.test(input2), up: !!key.upArrow, down: !!key.downArrow, ret: !!key.return, esc: !!key.escape, histIdx: historyIdxRef.current, menu: menuMatches.length, picker: !!picker, modelPicker: !!modelPicker, pending: !!pending }) + "\n"); } catch { /* ignore */ }
     }
     if (key.ctrl && input2 === "c") {
       exitNow();

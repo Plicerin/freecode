@@ -1,5 +1,5 @@
-import { spawn, spawnSync } from "node:child_process";
-import { openSync, mkdirSync, readFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { openSync, closeSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { APP_DIR } from "../utils/paths";
@@ -46,10 +46,10 @@ const IS_WINDOWS = process.platform === "win32";
 const DEFAULT_TIMEOUT_MS = 120_000;
 
 // How long a backgrounded process must stay alive before we call it "started".
-// It must comfortably exceed shell COLD-START: on Windows, launching PowerShell
-// itself takes ~600ms, so a command that exits "immediately" still does so near
-// 600ms — too close to a 600ms window to tell apart from a server that's up.
-const STARTUP_GRACE_MS = IS_WINDOWS ? 1500 : 700;
+// It must comfortably exceed shell cold-start. Windows security scanning and
+// PowerShell profiles can delay an immediate failure by several seconds.
+const STARTUP_GRACE_MS = IS_WINDOWS ? 1000 : 700;
+const SHELL_READY_TIMEOUT_MS = IS_WINDOWS ? 15_000 : 5_000;
 
 /** The shell the Bash tool executes in, for the system prompt and UX. */
 export function bashShellName(): string {
@@ -84,13 +84,14 @@ export function normalizeForPowerShell(command: string): string {
 let _winShell: string | null = null;
 export function defaultWindowsShell(): string {
   if (_winShell) return _winShell;
-  try {
-    const r = spawnSync("pwsh", ["-NoProfile", "-NoLogo", "-Command", "$null"], { stdio: "ignore", timeout: 5000, windowsHide: true });
-    _winShell = !r.error && r.status === 0 ? "pwsh" : "powershell.exe";
-  } catch {
-    _winShell = "powershell.exe";
+  // A probe that starts PowerShell can itself take several seconds under Windows
+  // security scanning. Check the standard install location without launching it.
+  for (const root of [process.env.ProgramW6432, process.env.ProgramFiles]) {
+    if (!root) continue;
+    const candidate = join(root, "PowerShell", "7", "pwsh.exe");
+    if (existsSync(candidate)) return (_winShell = candidate);
   }
-  return _winShell;
+  return (_winShell = "powershell.exe");
 }
 
 /**
@@ -112,9 +113,9 @@ interface RunCtx {
 }
 
 /** Read the tail of a background log (the captured stdout/stderr), trimmed. */
-function readLogTail(path: string, maxChars = 1500): string {
+function readLogTail(path: string, maxChars = 1500, omit?: string): string {
   try {
-    const t = readFileSync(path, "utf8").trim();
+    const t = readFileSync(path, "utf8").replace(omit ?? /$^/, "").trim();
     return t.length > maxChars ? "…" + t.slice(-maxChars) : t;
   } catch {
     return "";
@@ -147,21 +148,40 @@ function runDetached(
   } catch (err) {
     return Promise.resolve({ ok: false, output: "", error: `Could not open background log: ${(err as Error).message}` });
   }
-  const inv = spawnArgs(args.command, shellPath);
-  const child = spawn(inv.file, inv.args, {
-    shell: inv.useShell,
-    cwd: args.cwd ?? ctx.cwd,
-    env: { ...process.env, ...(args.env ?? {}) },
-    stdio: ["ignore", fd, fd], // no stdin; stdout+stderr → log file
-  });
+  // Emit a private readiness marker after the shell has initialized, then start
+  // the requested command. The grace period begins at this marker, not at spawn,
+  // so a slow PowerShell cold-start cannot make an immediate crash look healthy.
+  const readyMarker = `__FREECODE_READY_${process.pid}_${Math.random().toString(36).slice(2)}__`;
+  const wrapped = IS_WINDOWS
+    ? `Write-Output '${readyMarker}'; ${args.command}`
+    : `printf '%s\\n' '${readyMarker}'; ${args.command}`;
+  const inv = spawnArgs(wrapped, shellPath);
+  let child: ReturnType<typeof spawn>;
+  try {
+    child = spawn(inv.file, inv.args, {
+      shell: inv.useShell,
+      cwd: args.cwd ?? ctx.cwd,
+      env: { ...process.env, ...(args.env ?? {}) },
+      stdio: ["ignore", fd, fd], // no stdin; stdout+stderr → log file
+    });
+  } finally {
+    // spawn duplicates/inherits the descriptor; the parent must release its copy.
+    try { closeSync(fd); } catch { /* already closed */ }
+  }
   const pid = child.pid;
   const stopHint = IS_WINDOWS ? `taskkill /PID ${pid} /F` : `kill ${pid}`;
 
   return new Promise((resolve) => {
     let settled = false;
+    let poll: ReturnType<typeof setInterval> | undefined;
+    let grace: ReturnType<typeof setTimeout> | undefined;
+    let readyDeadline: ReturnType<typeof setTimeout> | undefined;
     const finish = (r: { ok: boolean; output: string; error?: string; metadata?: Record<string, unknown> }): void => {
       if (settled) return;
       settled = true;
+      if (poll) clearInterval(poll);
+      if (grace) clearTimeout(grace);
+      if (readyDeadline) clearTimeout(readyDeadline);
       resolve(r);
     };
     child.on("error", (err) => finish({ ok: false, output: "", error: `Failed to start background process: ${err.message}` }));
@@ -171,7 +191,7 @@ function runDetached(
       // crash can be reported as "no output" — both a UX miss and a test flake).
       let tries = 0;
       const attempt = (): void => {
-        const tail = readLogTail(logPath);
+        const tail = readLogTail(logPath, 1500, readyMarker);
         if (!tail && tries < 4) { tries++; setTimeout(attempt, 90); return; }
         const why = tail ? `\n--- captured output ---\n${tail}` : " (no output was captured)";
         finish({
@@ -184,11 +204,9 @@ function runDetached(
       setTimeout(attempt, 60);
     };
     child.on("exit", onEarlyExit);
-    // Survived the startup window → treat it as running.
-    setTimeout(() => {
-      child.removeListener("exit", onEarlyExit);
+    const markRunning = (): void => {
       child.unref();
-      const tail = readLogTail(logPath, 600);
+      const tail = readLogTail(logPath, 600, readyMarker);
       finish({
         ok: true,
         output:
@@ -198,7 +216,25 @@ function runDetached(
           `\nStop it with: ${stopHint}`,
         metadata: { pid, logPath, background: true },
       });
-    }, STARTUP_GRACE_MS);
+    };
+    poll = setInterval(() => {
+      try {
+        if (readFileSync(logPath, "utf8").includes(readyMarker)) {
+          clearInterval(poll);
+          poll = undefined;
+          grace = setTimeout(markRunning, STARTUP_GRACE_MS);
+        }
+      } catch { /* log may not be visible yet */ }
+    }, 50);
+    readyDeadline = setTimeout(() => {
+      try { child.kill(); } catch { /* already gone */ }
+      finish({
+        ok: false,
+        output: "",
+        error: `The background shell did not become ready within ${SHELL_READY_TIMEOUT_MS}ms.`,
+        metadata: { pid, logPath, background: true },
+      });
+    }, SHELL_READY_TIMEOUT_MS);
   });
 }
 

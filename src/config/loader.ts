@@ -1,6 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
+import type { Profile } from "./schema";
 import { PROFILE_PATH } from "../utils/paths";
-import { ProfileSchema, type Profile } from "./schema";
 import { loadJsoncSettings } from "./settings-jsonc";
 import { loadProfile } from "./profile";
 import { readLastSession, rememberedFor } from "./last-session";
@@ -54,10 +53,6 @@ function pick<T>(cli: T | undefined, profile: T | undefined, env: T | undefined,
 
 function envValueFor(key: string): string | undefined {
   return getEnv(key);
-}
-
-function profileProvider(profile: Profile, envProvider: ProviderId | undefined): ProviderId | undefined {
-  return profile.provider ?? envProvider;
 }
 
 /** Read a provider key from the encrypted vault. Device-mode vaults unlock

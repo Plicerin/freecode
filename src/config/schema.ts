@@ -65,6 +65,7 @@ export type MemorySettings = z.infer<typeof MemorySettingsSchema>;
 export const HookSchema = z.object({
   matcher: z.string().optional(), // regex tested against the tool name (default: all)
   command: z.string().min(1),
+  timeoutMs: z.number().int().positive().max(600_000).optional(),
 });
 export type HookConfig = z.infer<typeof HookSchema>;
 export const HooksSchema = z.record(z.array(HookSchema)); // keyed by event name

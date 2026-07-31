@@ -142,4 +142,13 @@ describe("Gemini serialization", () => {
     expect(contents[1]!.parts.some((p) => p.functionCall?.name === "Glob")).toBe(true);
     expect(contents[2]!.parts.filter((p) => p.functionResponse).length).toBe(2);
   });
+
+  it("uses the function name, not an OpenAI call id, after a provider switch", () => {
+    const contents = toGeminiContents([
+      { role: "assistant", content: "", toolCalls: [{ id: "call_123", name: "FileRead", arguments: { path: "x" } }] },
+      { role: "tool", content: "ok", toolCallId: "call_123", name: "FileRead" },
+    ]);
+    const response = contents[1]!.parts.find((p) => p.functionResponse)!.functionResponse as { name: string };
+    expect(response.name).toBe("FileRead");
+  });
 });

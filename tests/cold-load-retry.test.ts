@@ -5,7 +5,6 @@
 // error. Burned once per run — any further empties are real stuck-model
 // signals and surface normally.
 import { test, expect, describe } from "bun:test";
-import { z } from "zod";
 import { runAgentLoop, type AgentEvent } from "../src/agent/loop";
 import { createPermissionEngine } from "../src/permissions/modes";
 

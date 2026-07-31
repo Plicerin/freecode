@@ -27,6 +27,15 @@ describe("hooks", () => {
     const hooks: HooksConfig = { PostToolUse: [{ command: "exit 5" }] };
     expect((await runHooks("PostToolUse", hooks, {}, "Bash")).blocked).toBe(false);
   }, 30000);
+
+  it("times out a hung hook instead of hanging the agent", async () => {
+    const command = process.platform === "win32" ? "Start-Sleep -Seconds 5" : "sleep 5";
+    const started = Date.now();
+    const r = await runHooks("PreToolUse", { PreToolUse: [{ command, timeoutMs: 150 }] }, {}, "Bash");
+    expect(r.blocked).toBe(true);
+    expect(r.reason).toContain("timed out");
+    expect(Date.now() - started).toBeLessThan(2000);
+  }, 5000);
 });
 
 import { runAgentLoop } from "../src/agent/loop";

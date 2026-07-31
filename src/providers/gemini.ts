@@ -55,7 +55,7 @@ export function toGeminiContents(messages: ChatMessage[]): GeminiContent[] {
     const parts: GeminiPart[] = [];
     if (m.role === "tool") {
       role = "user";
-      parts.push({ functionResponse: { name: m.toolCallId ?? "tool", response: { result: m.content } } });
+      parts.push({ functionResponse: { name: m.name ?? m.toolCallId ?? "tool", response: { result: m.content } } });
     } else if (m.role === "assistant") {
       role = "model";
       if (m.content) parts.push({ text: m.content });
@@ -122,7 +122,8 @@ export class GeminiProvider implements Provider {
     };
     if (req.system) body.systemInstruction = { parts: [{ text: req.system }] };
     if (req.tools && req.tools.length > 0) body.tools = toGeminiTools(req.tools);
-    debug.log("gemini request", { url, model: req.model });
+    // Never log `url`: Gemini authenticates through its `?key=` query string.
+    debug.log("gemini request", { endpoint: `${this.baseUrl}/v1beta/models/${req.model}:streamGenerateContent`, model: req.model });
     // Idle watchdog — abort if the stream goes silent (see stall-timeout.ts).
     const idleMs = streamIdleMs();
     const watchdog = createStallTimeout(req.signal, idleMs);

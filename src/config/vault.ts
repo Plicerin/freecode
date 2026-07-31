@@ -1,6 +1,7 @@
 import { randomBytes, scryptSync, createCipheriv, createDecipheriv } from "node:crypto";
-import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, chmodSync } from "node:fs";
 import { VAULT_PATH, VAULT_KEY_PATH, APP_DIR } from "../utils/paths";
+import { writeFileAtomic } from "../utils/atomic";
 
 type Mode = "device" | "passphrase";
 
@@ -29,7 +30,7 @@ function deviceKey(keyPath: string): Buffer {
   }
   ensureAppDir();
   const k = randomBytes(KEY_LEN);
-  writeFileSync(keyPath, k.toString("base64"), "utf8");
+  writeFileAtomic(keyPath, k.toString("base64"));
   try { chmodSync(keyPath, 0o600); } catch { /* no-op on Windows */ }
   return k;
 }
@@ -136,7 +137,7 @@ export class Vault {
       tag: cipher.getAuthTag().toString("base64"),
       data: ciphertext.toString("base64"),
     };
-    writeFileSync(this.path, JSON.stringify(file), "utf8");
+    writeFileAtomic(this.path, JSON.stringify(file));
     try { chmodSync(this.path, 0o600); } catch { /* no-op on Windows */ }
   }
 }

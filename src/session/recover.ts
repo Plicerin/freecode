@@ -1,8 +1,7 @@
-import { readFileSync, existsSync, writeFileSync, readdirSync, statSync } from "node:fs";
-import { isAbsolute, resolve, join } from "node:path";
+import { readFileSync, existsSync, writeFileSync } from "node:fs";
+import { isAbsolute, resolve } from "node:path";
 import { createHash } from "node:crypto";
-import { readSession, type Session, type SessionEvent } from "./manager";
-import { PROJECTS_DIR, encodeProjectPath } from "../utils/paths";
+import { listSessions, readSession, type SessionEvent } from "./manager";
 import { listBackups } from "../tools/backup";
 import { debug } from "../utils/debug";
 
@@ -82,28 +81,6 @@ export function snapshotsFromEvents(events: SessionEvent[], sessionCwd: string, 
   return cands;
 }
 
-/** Session files for a cwd, matching the project-dir slug CASE-INSENSITIVELY.
- *  Windows paths are case-insensitive, so a folder opened as `…\Documents\…` in
- *  one run and `…\documents\…` in another produces two differently-cased slugs
- *  for the same project — an exact match would miss the older sessions holding
- *  the version we need to recover. */
-function sessionsForCwd(cwd: string): Session[] {
-  const want = encodeProjectPath(cwd).toLowerCase();
-  let dirs: string[];
-  try { dirs = readdirSync(PROJECTS_DIR); } catch { return []; }
-  const out: Session[] = [];
-  for (const d of dirs) {
-    if (d.toLowerCase() !== want) continue;
-    const full = join(PROJECTS_DIR, d);
-    let files: string[];
-    try { if (!statSync(full).isDirectory()) continue; files = readdirSync(full); } catch { continue; }
-    for (const f of files) {
-      if (f.endsWith(".jsonl")) out.push({ id: f.replace(/\.jsonl$/, ""), cwd, path: join(full, f) });
-    }
-  }
-  return out;
-}
-
 /** Collapse candidates to DISTINCT versions (by content), newest sighting wins,
  *  sorted newest-first. */
 export function dedupeSnapshots(cands: RecoverSnapshot[]): RecoverSnapshot[] {
@@ -132,7 +109,7 @@ export function collectSnapshots(cwd: string, targetAbs: string): RecoverSnapsho
   }
 
   // (2) Session logs for this project — FileWrite contents and complete FileReads.
-  for (const session of sessionsForCwd(cwd)) {
+  for (const session of listSessions(cwd)) {
     let events: SessionEvent[];
     try { events = readSession(session); } catch { continue; }
     cands.push(...snapshotsFromEvents(events, session.cwd, session.id, targetAbs));

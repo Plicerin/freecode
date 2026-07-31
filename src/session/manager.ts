@@ -1,10 +1,11 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, appendFileSync, writeFileSync, statSync } from "node:fs";
-import { dirname } from "node:path";
-import { projectDir, sessionPath, PROJECTS_DIR } from "../utils/paths";
+import { existsSync, mkdirSync, readdirSync, readFileSync, appendFileSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { canonicalProjectPath, legacyEncodeProjectPath, projectDir, sessionPath, PROJECTS_DIR } from "../utils/paths";
 import { newId, nowIso } from "../utils/ids";
 import { debug } from "../utils/debug";
 import { redactSecrets } from "../utils/redact";
 import type { ChatMessage } from "../providers/types";
+import { writeFileAtomic } from "../utils/atomic";
 
 // Scrub known secret formats from EVERYTHING we persist to disk. `redactSecrets`
 // was only applied to tool OUTPUT before — so a FileWrite of a `.env`, a pasted key
@@ -65,21 +66,48 @@ export function newSession(cwd: string): Session {
 }
 
 export function appendEvent(session: Session, event: SessionEvent): void {
-  ensureDir(projectDir(session.cwd));
+  ensureDir(dirname(session.path));
   appendFileSync(session.path, JSON.stringify(redactDeep(event)) + "\n");
 }
 
+function legacyDirs(cwd: string): string[] {
+  const want = legacyEncodeProjectPath(cwd).toLowerCase();
+  try {
+    return readdirSync(PROJECTS_DIR, { withFileTypes: true })
+      .filter((e) => e.isDirectory() && e.name.toLowerCase() === want)
+      .map((e) => join(PROJECTS_DIR, e.name));
+  } catch {
+    return [];
+  }
+}
+
+/** Old collision-prone directories are accepted only when the session's own
+ * start event proves it belongs to this cwd. */
+function legacySessionMatches(path: string, cwd: string): boolean {
+  try {
+    for (const line of readFileSync(path, "utf8").split("\n").slice(0, 5)) {
+      if (!line.trim()) continue;
+      const event = JSON.parse(line) as { kind?: string; text?: string };
+      const match = event.kind === "system" ? event.text?.match(/^session start cwd=(.*)$/) : undefined;
+      if (match?.[1]) return canonicalProjectPath(match[1]) === canonicalProjectPath(cwd);
+    }
+  } catch { /* unreadable/corrupt legacy session */ }
+  return false;
+}
+
 export function listSessions(cwd: string): Session[] {
-  const dir = projectDir(cwd);
-  if (!existsSync(dir)) return [];
-  return readdirSync(dir)
-    .filter((f) => f.endsWith(".jsonl"))
-    .map((f) => {
-      const id = f.replace(/\.jsonl$/, "");
-      const path = sessionPath(cwd, id);
-      const mtime = statSync(path).mtimeMs;
-      return { id, cwd, path, mtime } as Session & { mtime: number };
-    })
+  const primary = projectDir(cwd);
+  const dirs = [primary, ...legacyDirs(cwd).filter((d) => d !== primary)];
+  const sessions: Array<Session & { mtime: number }> = [];
+  for (const dir of dirs) {
+    if (!existsSync(dir)) continue;
+    for (const f of readdirSync(dir).filter((name) => name.endsWith(".jsonl"))) {
+      const path = join(dir, f);
+      if (dir !== primary && !legacySessionMatches(path, cwd)) continue;
+      sessions.push({ id: f.replace(/\.jsonl$/, ""), cwd, path, mtime: statSync(path).mtimeMs });
+    }
+  }
+  return sessions
     .sort((a, b) => (b.mtime ?? 0) - (a.mtime ?? 0))
     .map(({ mtime: _m, ...rest }) => rest as Session);
 }
@@ -100,9 +128,7 @@ export function readSession(session: Session): SessionEvent[] {
 }
 
 export function resumeSession(cwd: string, id: string): Session | undefined {
-  const path = sessionPath(cwd, id);
-  if (!existsSync(path)) return undefined;
-  return { id, cwd, path };
+  return listSessions(cwd).find((session) => session.id === id);
 }
 
 /** Give the session a human-readable name (latest title event wins). */
@@ -141,7 +167,7 @@ export function writeConversationState(session: Session, messages: ChatMessage[]
   try {
     const p = statePath(session);
     ensureDir(dirname(p));
-    writeFileSync(p, JSON.stringify({ v: 1, messages: redactDeep(messages) }));
+    writeFileAtomic(p, JSON.stringify({ v: 1, messages: redactDeep(messages) }));
   } catch (err) {
     debug.warn(`could not persist conversation state for ${session.id}`, String(err));
   }
@@ -163,13 +189,8 @@ export function readConversationState(session: Session): ChatMessage[] | undefin
 
 /** Sessions with display metadata, newest first — for the resume picker. */
 export function listSessionMetas(cwd: string): SessionMeta[] {
-  const dir = projectDir(cwd);
-  if (!existsSync(dir)) return [];
-  return readdirSync(dir)
-    .filter((f) => f.endsWith(".jsonl"))
-    .map((f) => {
-      const id = f.replace(/\.jsonl$/, "");
-      const path = sessionPath(cwd, id);
+  return listSessions(cwd)
+    .map(({ id, path }) => {
       const mtime = statSync(path).mtimeMs;
       const events = readSession({ id, cwd, path });
       const firstUser = events.find((e) => e.kind === "user") as { text?: string } | undefined;

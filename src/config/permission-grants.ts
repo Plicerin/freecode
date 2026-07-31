@@ -1,13 +1,7 @@
-// Persist "allow always" tool grants PER PROJECT FOLDER so they survive a
-// relaunch. In-memory grants reset every launch, which reads as "permissions
-// don't stick" — you re-approve FileWrite in the same project every time. This is
-// a small machine-managed file, kept separate from settings.json so it never
-// clobbers hand-edited (possibly commented) config.
-//
-// SAFETY: command execution (Bash) is NEVER persisted. Auto-approving arbitrary
-// commands on every future launch of a folder is too powerful, so Bash always
-// re-confirms each session even if you pressed "always". The exclusion is applied
-// on BOTH write and read, so a hand-edited file can't smuggle Bash back in.
+// Persist "allow always" grants for read-only built-ins PER PROJECT FOLDER so
+// they survive a relaunch. Mutating, command-execution, and external tool grants
+// stay session-only. This machine-managed file is separate from settings.json so
+// it never clobbers hand-edited (possibly commented) config.
 import { existsSync, readFileSync, mkdirSync } from "node:fs";
 import { writeFileAtomic } from "../utils/atomic";
 import { join, dirname } from "node:path";
@@ -15,12 +9,14 @@ import { APP_DIR } from "../utils/paths";
 import type { GrantStore } from "../permissions/modes";
 import { debug } from "../utils/debug";
 
-// Tools whose allow-always is never remembered across sessions.
-const NON_PERSISTED = new Set<string>(["Bash"]);
+// Persist only intrinsically read-only built-ins. A tool-wide grant has no
+// argument/path scope, so persisting FileWrite/FileEdit or an external MCP tool
+// would silently authorize unrelated future mutations after a relaunch.
+const PERSISTABLE = new Set<string>(["FileRead", "Glob", "Grep", "WebSearch", "WebFetch", "ViewImage", "Skill"]);
 
 /** May this tool's allow-always grant be persisted across sessions? */
 export function isPersistableTool(tool: string): boolean {
-  return !NON_PERSISTED.has(tool);
+  return PERSISTABLE.has(tool);
 }
 
 // On disk: a per-CWD map of granted tool names, so each project folder keeps its
@@ -46,7 +42,7 @@ function readFileSafe(p: string): GrantsFile {
   }
 }
 
-/** Persisted allow-always tool names for a project folder (Bash filtered out). */
+/** Persisted allow-always read-only tool names for a project folder. */
 export function readGrants(cwd: string, path?: string): string[] {
   if (path === undefined && underTest) return [];
   const file = readFileSafe(path ?? defaultPath());
@@ -54,7 +50,7 @@ export function readGrants(cwd: string, path?: string): string[] {
 }
 
 /** Persist one allow-always grant for a folder. No-op for non-persistable tools
- *  (Bash) and if it's already saved. Never throws — remembering must not break a run. */
+ * and if it's already saved. Never throws — remembering must not break a run. */
 export function persistGrant(cwd: string, tool: string, path?: string): void {
   if (!isPersistableTool(tool)) return;
   if (path === undefined && underTest) return;

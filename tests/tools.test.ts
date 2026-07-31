@@ -3,10 +3,9 @@ import { GlobTool } from "../src/tools/glob";
 import { FileReadTool } from "../src/tools/file-read";
 import { WebFetchTool } from "../src/tools/web-fetch";
 import { FileEditTool } from "../src/tools/file-edit";
-import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { z } from "zod";
 
 describe("Glob", () => {
   it("finds files by pattern", async () => {

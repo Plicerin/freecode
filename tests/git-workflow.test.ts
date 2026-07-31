@@ -1,7 +1,7 @@
 // Stage 1 parity — git/PR workflow. Drives the real helpers against a real temp
 // git repo (no network/gh needed for the git-only paths). The gh-dependent
 // branches are exercised through their honest "not configured" responses.
-import { test, expect, describe, beforeEach } from "bun:test";
+import { test, expect, describe } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

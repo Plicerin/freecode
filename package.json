@@ -34,7 +34,7 @@
     "build": "node build.mjs",
     "prepare": "node build.mjs",
     "build:exe": "bun run scripts/build-exe.ts",
-    "test": "bun test",
+    "test": "bun test --timeout 30000",
     "typecheck": "tsc --noEmit",
     "serve": "bun run src/commands/serve.ts"
   },

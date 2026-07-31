@@ -518,7 +518,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
         const msg = restricted
           ? `${call.name} is unavailable in plan mode (read-only). Don't try to run commands or edit files — investigate with FileRead/Grep/Glob and PROPOSE a plan. The user runs /plan to exit plan mode and let you act.`
           : `Error: tool "${call.name}" not found. Available tools (use these EXACT names): ${tools.map((t) => t.name).join(", ")}.`;
-        messages.push({ role: "tool", toolCallId: call.id, content: msg });
+        messages.push({ role: "tool", toolCallId: call.id, name: call.name, content: msg });
         opts.onEvent({ type: "tool_result", result: { id: call.id, output: msg, ok: false, durationMs: 0 } });
         continue;
       }
@@ -530,7 +530,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
       if (approval === "deny") {
         opts.permission.rememberDenied({ tool: tool.name, argsSummary });
         const deniedMsg = "User denied this tool call.";
-        messages.push({ role: "tool", toolCallId: call.id, content: deniedMsg });
+        messages.push({ role: "tool", toolCallId: call.id, name: call.name, content: deniedMsg });
         opts.onEvent({ type: "tool_result", result: { id: call.id, output: deniedMsg, ok: false, durationMs: 0 } });
         continue;
       }
@@ -539,16 +539,18 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
         const issues = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
         const hint = tool.correctionHint?.(call.arguments);
         const errMsg = `Invalid arguments to ${tool.name}: ${issues}.${hint ? ` ${hint}` : ""}`;
-        messages.push({ role: "tool", toolCallId: call.id, content: errMsg });
+        messages.push({ role: "tool", toolCallId: call.id, name: call.name, content: errMsg });
         opts.onEvent({ type: "tool_result", result: { id: call.id, output: errMsg, ok: false, durationMs: 0 } });
-        debug.warn(`${tool.name} args rejected`, { err: errMsg, raw: call.arguments });
+        // Raw arguments can contain a complete .env/FileWrite body. Validation
+        // diagnostics identify the tool + schema issue without echoing payloads.
+        debug.warn(`${tool.name} args rejected`, { err: errMsg, argumentKeys: Object.keys(call.arguments) });
         continue;
       }
       // PreToolUse hook — can veto the call (non-zero exit blocks it).
       const pre = await runHooks("PreToolUse", opts.hooks, { event: "PreToolUse", tool: tool.name, arguments: parsed.data, cwd: process.cwd() }, tool.name, opts.signal);
       if (pre.blocked) {
         const msg = `Blocked by PreToolUse hook: ${pre.reason}`;
-        messages.push({ role: "tool", toolCallId: call.id, content: msg });
+        messages.push({ role: "tool", toolCallId: call.id, name: call.name, content: msg });
         opts.onEvent({ type: "tool_result", result: { id: call.id, output: msg, ok: false, durationMs: 0 } });
         continue;
       }
@@ -606,7 +608,7 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<{ turns: num
       else if (tool.name === "ViewImage") led.viewed += 1;
       else led.other.push(tool.name);
       logActivity(`TOOL ${tool.name} ${argsSummary.slice(0, 100)} → ${result.ok ? "ok" : "FAIL"} (${durationMs}ms)${result.ok && changed && (tool.name === "FileWrite" || tool.name === "FileEdit") ? " [CHANGED]" : ""}`);
-      messages.push({ role: "tool", toolCallId: call.id, content: payload });
+      messages.push({ role: "tool", toolCallId: call.id, name: call.name, content: payload });
       opts.onEvent({ type: "tool_result", result: { id: call.id, output: payload, ok: result.ok, durationMs } });
       // PostToolUse hook — observe the result (side effects only; can't block).
       await runHooks("PostToolUse", opts.hooks, { event: "PostToolUse", tool: tool.name, arguments: parsed.data, result: { ok: result.ok, output: result.output.slice(0, 4000) }, cwd: process.cwd() }, tool.name, opts.signal);

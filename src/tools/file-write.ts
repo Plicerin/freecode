@@ -1,4 +1,4 @@
-import { writeFileSync, mkdirSync, existsSync, statSync, renameSync } from "node:fs";
+import { writeFileSync, mkdirSync, existsSync, renameSync } from "node:fs";
 import { dirname, resolve, isAbsolute } from "node:path";
 import { z } from "zod";
 import type { Tool } from "./types";

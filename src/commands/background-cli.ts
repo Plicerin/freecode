@@ -4,7 +4,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import type { CliFlags } from "../config/loader";
 import { startBackground, runBackgroundJob, stopJob } from "../background/runner";
-import { listJobs, reapJobs, readJob, type BgJob, type BgStatus } from "../background/registry";
+import { reapJobs, readJob, type BgJob, type BgStatus } from "../background/registry";
 
 const ICON: Record<BgStatus, string> = { running: "●", done: "✓", failed: "✗", stopped: "◼" };
 

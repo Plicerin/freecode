@@ -3,7 +3,7 @@
 // complete FileReads), the de-numbering of read output, the dedup/ordering that
 // surfaces distinct versions newest-first, and the non-destructive restore.
 import { test, expect, describe } from "bun:test";
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SessionEvent } from "../src/session/manager";

@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { PROFILE_PATH, isWindows } from "../utils/paths";
+import { PROFILE_PATH } from "../utils/paths";
 import { ProfileSchema, type Profile } from "./schema";
 import { debug } from "../utils/debug";
 

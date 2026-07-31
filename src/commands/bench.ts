@@ -32,7 +32,7 @@ function fmt(ms: number): string {
   return `${(ms / 1000).toFixed(2)}s`;
 }
 
-function verdictLine(stats: BenchStats, cmp: Comparison): string {
+function verdictLine(_stats: BenchStats, cmp: Comparison): string {
   const pct = `${cmp.deltaPct >= 0 ? "+" : ""}${cmp.deltaPct.toFixed(1)}%`;
   switch (cmp.verdict) {
     case "new":

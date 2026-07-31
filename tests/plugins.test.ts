@@ -67,6 +67,24 @@ function sourceBundle(opts: { name?: string } = {}): string {
 }
 
 describe("install / uninstall (local path)", () => {
+  test("rejects a manifest name that escapes the plugin root", async () => {
+    const host = mkdtempSync(join(tmpdir(), "fc-plugin-traversal-"));
+    const root = join(host, "plugins");
+    mkdirSync(root);
+    await expect(installPlugin(sourceBundle({ name: "../escaped" }), process.cwd(), root)).rejects.toThrow(/invalid plugin name/i);
+    expect(existsSync(join(host, "escaped"))).toBe(false);
+  });
+
+  test("uninstall rejects traversal without deleting the target", () => {
+    const host = mkdtempSync(join(tmpdir(), "fc-plugin-traversal-"));
+    const root = join(host, "plugins");
+    const outside = join(host, "outside");
+    mkdirSync(root);
+    mkdirSync(outside);
+    expect(() => uninstallPlugin("../outside", root)).toThrow(/invalid plugin name/i);
+    expect(existsSync(outside)).toBe(true);
+  });
+
   test("installs a local bundle into the target root with its contributions", async () => {
     const root = mkdtempSync(join(tmpdir(), "fc-root-"));
     const installed = await installPlugin(sourceBundle({ name: "greeter" }), process.cwd(), root);

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { Tool } from "./types";
+import { createDeadline } from "../utils/abort";
 
 const ArgsSchema = z.object({
   query: z.string().min(1).describe("The search query (required, non-empty)."),
@@ -34,27 +35,31 @@ export function createWebSearchTool(opts: WebSearchOptions = {}): Tool<z.infer<t
       "Default backend is DuckDuckGo (no key). Override with backend='tavily'/'exa'/'firecrawl' if those keys are set.",
     schema: ArgsSchema,
     permission: "confirm",
-    async run(args) {
+    async run(args, ctx) {
       const backend = pickBackend(opts, args.backend);
+      const timeoutMs = 20_000;
+      const watch = createDeadline(ctx.signal, timeoutMs);
       try {
         if (backend === "duckduckgo") {
-          return await duckduckgo(args.query, args.maxResults ?? 5);
+          return await duckduckgo(args.query, args.maxResults ?? 5, watch.signal);
         }
         if (backend === "tavily") {
           if (!opts.tavilyKey) return { ok: false, output: "", error: "TAVILY_API_KEY not set" };
-          return await tavily(args.query, opts.tavilyKey, args.maxResults ?? 5);
+          return await tavily(args.query, opts.tavilyKey, args.maxResults ?? 5, watch.signal);
         }
         if (backend === "exa") {
           if (!opts.exaKey) return { ok: false, output: "", error: "EXA_API_KEY not set" };
-          return await exa(args.query, opts.exaKey, args.maxResults ?? 5);
+          return await exa(args.query, opts.exaKey, args.maxResults ?? 5, watch.signal);
         }
         if (backend === "firecrawl") {
           if (!opts.firecrawlKey) return { ok: false, output: "", error: "FIRECRAWL_API_KEY not set" };
-          return await firecrawl(args.query, opts.firecrawlKey, args.maxResults ?? 5);
+          return await firecrawl(args.query, opts.firecrawlKey, args.maxResults ?? 5, watch.signal);
         }
         return { ok: false, output: "", error: `Unknown backend: ${backend}` };
       } catch (err) {
-        return { ok: false, output: "", error: `WebSearch failed: ${String(err)}` };
+        return { ok: false, output: "", error: watch.timedOut() ? `Search timed out after ${timeoutMs}ms` : `WebSearch failed: ${String(err)}` };
+      } finally {
+        watch.clear();
       }
     },
   };
@@ -64,9 +69,9 @@ type SearchResult = { ok: boolean; output: string; error?: string; metadata?: Re
 
 interface SearchHit { title: string; url: string; snippet: string; }
 
-async function duckduckgo(query: string, max: number): Promise<SearchResult> {
+async function duckduckgo(query: string, max: number, signal: AbortSignal): Promise<SearchResult> {
   const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-  const resp = await fetch(url, { headers: { "user-agent": "freecode/0.1 (+https://example.invalid)" } });
+  const resp = await fetch(url, { headers: { "user-agent": "freecode/0.1 (+https://example.invalid)" }, signal });
   if (!resp.ok) return { ok: false, output: "", error: `DuckDuckGo HTTP ${resp.status}` };
   const html = await resp.text();
   const hits = extractDDG(html).slice(0, max);
@@ -95,11 +100,12 @@ function decodeHtml(s: string): string {
   return stripTags(s);
 }
 
-async function tavily(query: string, key: string, max: number): Promise<SearchResult> {
+async function tavily(query: string, key: string, max: number, signal: AbortSignal): Promise<SearchResult> {
   const resp = await fetch("https://api.tavily.com/search", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ api_key: key, query, max_results: max }),
+    signal,
   });
   if (!resp.ok) return { ok: false, output: "", error: `Tavily HTTP ${resp.status}` };
   const data = await resp.json() as { results?: Array<{ title: string; url: string; content: string }> };
@@ -107,11 +113,12 @@ async function tavily(query: string, key: string, max: number): Promise<SearchRe
   return { ok: true, output: results || "(no results)", metadata: { backend: "tavily" } };
 }
 
-async function exa(query: string, key: string, max: number): Promise<SearchResult> {
+async function exa(query: string, key: string, max: number, signal: AbortSignal): Promise<SearchResult> {
   const resp = await fetch("https://api.exa.ai/search", {
     method: "POST",
     headers: { "content-type": "application/json", "x-api-key": key },
     body: JSON.stringify({ query, numResults: max }),
+    signal,
   });
   if (!resp.ok) return { ok: false, output: "", error: `Exa HTTP ${resp.status}` };
   const data = await resp.json() as { results?: Array<{ title: string; url: string; text?: string }> };
@@ -119,11 +126,12 @@ async function exa(query: string, key: string, max: number): Promise<SearchResul
   return { ok: true, output: results || "(no results)", metadata: { backend: "exa" } };
 }
 
-async function firecrawl(query: string, key: string, max: number): Promise<SearchResult> {
+async function firecrawl(query: string, key: string, max: number, signal: AbortSignal): Promise<SearchResult> {
   const resp = await fetch("https://api.firecrawl.dev/v1/search", {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
     body: JSON.stringify({ query, limit: max }),
+    signal,
   });
   if (!resp.ok) return { ok: false, output: "", error: `Firecrawl HTTP ${resp.status}` };
   const data = await resp.json() as { data?: Array<{ title?: string; url: string; description?: string }> };

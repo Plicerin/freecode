@@ -1,9 +1,9 @@
 // Minimal Honcho v3 client — fetch-based, no SDK dependency (matches the
 // hand-rolled provider HTTP in openai-compat.ts). Honcho is freecode's shared,
-// cross-session memory backend: a single `user` peer accumulates a derived
-// "representation" from EVERY session (Honcho's deriver worker builds it in the
-// background), which freecode reads back at session start so a new session opens
-// with what earlier ones learned instead of from scratch.
+// cross-session memory backend: project-scoped peers accumulate derived
+// representations (Honcho's deriver worker builds them in the background), which
+// freecode reads at session start so a new session opens with what earlier ones
+// learned instead of from scratch.
 //
 // Each method throws on a transport/HTTP error; the MemoryStore layered above
 // swallows those so a slow or absent Honcho can never block or break a coding

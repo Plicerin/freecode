@@ -4,7 +4,8 @@
 // peer — see store.ts). Without it, freecode recalled a single global blob and
 // opened every project believing it was mid-work on whichever project the
 // deriver had built up most: the "why does it think it's a different project?"
-// bug. The USER peer stays global (genuine identity/preferences travel).
+// bug. Both peers are scoped because the user representation can also contain
+// project task details, not just identity/preferences.
 
 import { execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";

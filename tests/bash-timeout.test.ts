@@ -35,7 +35,7 @@ test("runInBackground launches detached and returns a pid + log handle without b
   expect(r.metadata?.pid as number).toBeGreaterThan(0);
   expect(r.metadata?.background).toBe(true);
   expect(String(r.metadata?.logPath)).toMatch(/bg-bash/);
-  expect(elapsed).toBeLessThan(2000); // returned at the startup check, not after 30s
+  expect(elapsed).toBeLessThan(process.platform === "win32" ? 7000 : 2000); // returned at the startup check, not after 30s
   const pid = r.metadata?.pid as number;
   if (pid) { try { process.kill(pid); } catch { /* already gone */ } }
 });
